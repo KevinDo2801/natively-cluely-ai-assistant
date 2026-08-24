@@ -833,7 +833,10 @@ export function initializeIpcHandlers(appState: AppState): void {
   });
 
   safeHandle('toggle-window', async () => {
-    appState.toggleMainWindow();
+    // Ctrl+B (renderer-side keydown fallback when the window has focus):
+    // toggle the overlay chat show/hide — same behavior as the global
+    // shortcut and the pill's Ask/Hide button.
+    appState.toggleOverlayChat();
   });
 
   safeHandle('show-window', async (event, inactive?: boolean) => {

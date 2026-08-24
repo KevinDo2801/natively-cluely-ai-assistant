@@ -1832,7 +1832,9 @@ export class AppState {
       console.log(`[Main] Global shortcut triggered: ${actionId}`);
       try {
         if (actionId === 'general:toggle-visibility') {
-          this.toggleMainWindow();
+          // Ctrl+B now toggles the overlay chat (show/hide), matching the
+          // pill's Ask/Hide button — NOT the launcher window.
+          this.toggleOverlayChat();
         } else if (actionId === 'general:toggle-mouse-passthrough') {
           // Adapted from public PR #113 — verify premium interaction
           this.toggleOverlayMousePassthrough();
@@ -6989,6 +6991,16 @@ export class AppState {
     }
   }
 
+  /**
+   * Ctrl+B / "Toggle Visibility": show or hide the overlay chat, independent
+   * of the launcher and of whether a meeting is running. Mirrors the pill's
+   * Ask/Hide button (toggleOverlayChat on the helper): hidden → show (and
+   * focus), visible → hide (a running meeting keeps recording).
+   */
+  public toggleOverlayChat(): void {
+    this.windowHelper.toggleOverlayChat();
+  }
+
   public setWindowDimensions(width: number, height: number): void {
     this.windowHelper.setWindowDimensions(width, height)
   }
@@ -7288,9 +7300,9 @@ export class AppState {
         }
       },
       {
-        label: `Toggle Window (${displayToggle})`,
+        label: `Toggle Chat (${displayToggle})`,
         click: () => {
-          this.toggleMainWindow()
+          this.toggleOverlayChat()
         }
       },
       {

@@ -2338,6 +2338,25 @@ export class WindowHelper {
   }
 
   /**
+   * Toggle the overlay chat's visibility — the Ctrl+B action and the pill's
+   * Ask/Hide button share this. When the overlay body is visible it is hidden
+   * (a running meeting keeps recording); when hidden it is shown (opening
+   * right under the floating pill when the pill is standalone) and focused so
+   * the user can type. The launcher window is NEVER touched — the no-audio AI
+   * chatbox opens on top of whatever is beneath, exactly like the pill's
+   * Ask/Hide toggle.
+   */
+  public toggleOverlayChat(): void {
+    const overlay = this.overlayWindow;
+    const overlayVisible = !!overlay && !overlay.isDestroyed() && overlay.isVisible();
+    if (overlayVisible) {
+      this.hideOverlay();
+    } else {
+      this.showOverlay();
+    }
+  }
+
+  /**
    * Disengage stealth typing. Called whenever the overlay stops being the
    * visible, active surface (hide, end-meeting → launcher). Safe on every
    * platform and when nothing is engaged: the manager no-ops if inactive, and

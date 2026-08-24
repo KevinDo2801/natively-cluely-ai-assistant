@@ -490,7 +490,10 @@ export class KeybindManager {
                         click: () => {
                             // Require AppState dynamically to avoid circular dependencies
                             const { AppState } = require('../main');
-                            AppState.getInstance().toggleMainWindow();
+                            // Ctrl+B toggles the overlay chat (show/hide) — same
+                            // behavior as the global shortcut and the pill's
+                            // Ask/Hide button, never the launcher window.
+                            AppState.getInstance().toggleOverlayChat();
                         }
                     },
                     { type: 'separator' },
