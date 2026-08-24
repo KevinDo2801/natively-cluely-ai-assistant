@@ -1809,6 +1809,32 @@ export class WindowHelper {
     toggle.setBounds({ x, y, width: S, height: S });
   }
 
+  // Place the overlay body directly below the floating pill, centered on it,
+  // so an Ask click opens the chatbox exactly where the pill is instead of
+  // jumping to the overlay's previous/default bounds ("Ask opens at the top
+  // middle of the screen"). Clamped into the pill's display work area. The
+  // follow-up applyOverlayAuxVisibility(true) → positionOverlayAuxWindows
+  // then seats the pill back above the shell, roughly where it already was.
+  private positionOverlayAtPill(): void {
+    const overlay = this.overlayWindow;
+    const pill = this.pillWindow;
+    if (!overlay || overlay.isDestroyed() || !pill || pill.isDestroyed()) return;
+    const o = overlay.getBounds();
+    const p = pill.getBounds();
+    const workArea = this.getDisplayWorkArea(p);
+    const h = Math.max(o.height, WindowHelper.OVERLAY_MIN_HEIGHT);
+    const x = Math.min(
+      Math.max(Math.round(p.x + (p.width - o.width) / 2), workArea.x),
+      workArea.x + workArea.width - o.width,
+    );
+    const y = Math.min(
+      p.y + p.height + WindowHelper.PILL_GAP,
+      workArea.y + workArea.height - h,
+    );
+    overlay.setBounds({ x, y, width: o.width, height: h });
+    this.overlayBounds = overlay.getBounds();
+  }
+
   // ── Welded-group geometry ────────────────────────────────────────────────
   // The group's true top edge is the PILL's top, not the shell's: the pill
   // sits PILL_GAP above the shell. Both operations below move only the SHELL
@@ -2231,12 +2257,18 @@ export class WindowHelper {
   // Used by IPC handlers to show the overlay independently.
   public showOverlay(): void {
     if (!this.overlayWindow || this.overlayWindow.isDestroyed()) return;
+    // If the pill was floating standalone (Ask click from an always-visible
+    // pill), open the overlay RIGHT where the pill is — centered under it —
+    // instead of at the overlay's previous/default bounds ("Ask jumps to the
+    // middle of the screen"). Capture BEFORE leaving standalone mode.
+    const pillWasStandalone = this.pillStandalone;
     // Leave standalone-pill mode: the shell is coming up, so the pill joins
     // the group (re-welded on macOS) instead of floating detached.
     // keepVisible: the overlay becomes visible in this same synchronous block,
     // so hiding the pill here and re-showing it below is the visible Ask/Hide
     // blink — applyOverlayAuxVisibility(true) repositions it instead.
     this.setPillStandalone(false, true);
+    if (pillWasStandalone) this.positionOverlayAtPill();
 
     // Restore opacity in case it was zeroed by hideMainWindow() before a screenshot.
     this.overlayWindow.setOpacity(1);

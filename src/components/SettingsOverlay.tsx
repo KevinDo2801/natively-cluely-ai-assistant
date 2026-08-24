@@ -9,7 +9,6 @@ import {
     Sparkles, Pencil, Briefcase, Building2, Search, MapPin, CheckCircle, HelpCircle, Zap, SlidersHorizontal, PointerOff, Folder,
     Star, AlertCircle, Gift, Smartphone, Cpu, Shield, Code2, Headphones, MessageSquareReply, Pin
 } from 'lucide-react';
-import { HiCreditCard } from 'react-icons/hi2';
 import { analytics } from '../lib/analytics/analytics.service';
 import { AboutSection } from './AboutSection';
 import { HelpSettings } from './settings/HelpSettings';
@@ -1796,6 +1795,7 @@ const SettingsOverlay: React.FC<SettingsOverlayProps> = ({
                                         {activeTab === 'general' && navActivePill}
                                         <Monitor size={16} /> {t('General')}
                                     </button>
+                                    {/* Hidden on request: "Plans & Billing" tab button disabled.
                                     <button
                                         onClick={() => setActiveTab('plans')}
                                         className={navItemClass(activeTab === 'plans' || activeTab === 'natively-api' || activeTab === 'natively-pro')}
@@ -1804,6 +1804,7 @@ const SettingsOverlay: React.FC<SettingsOverlayProps> = ({
                                         <HiCreditCard size={16} />
                                         <span>{t('Plans & Billing')}</span>
                                     </button>
+                                    */}
                                     <button
                                         onClick={() => setActiveTab('ai-providers')}
                                         className={navItemClass(activeTab === 'ai-providers')}

@@ -394,6 +394,46 @@ test('showOverlay leaves standalone mode so the pill joins the shell', () => {
   );
 });
 
+test('Ask opens the overlay at the pill, not the top-middle of the screen', () => {
+  // Reported: clicking Ask opened the overlay at the top-middle of the screen
+  // instead of where the floating pill is. showOverlay used to show the overlay
+  // at its previous/default bounds; it must place the body right under the
+  // standalone pill (which the follow-up positionOverlayAuxWindows re-seats
+  // above it), clamped into the work area.
+  const show = extractMethodBody(windowHelper, 'showOverlay');
+  assert.match(
+    show,
+    /const pillWasStandalone = this\.pillStandalone;/,
+    'Ask must detect the standalone pill BEFORE leaving standalone mode',
+  );
+  assert.match(
+    show,
+    /if \(pillWasStandalone\) this\.positionOverlayAtPill\(\);/,
+    'Ask must reposition the overlay onto the pill when it was floating',
+  );
+  const place = extractMethodBody(windowHelper, 'positionOverlayAtPill');
+  assert.match(
+    place,
+    /p\.x \+ \(p\.width - o\.width\) \/ 2/,
+    'the overlay must be centered horizontally on the pill',
+  );
+  assert.match(
+    place,
+    /p\.y \+ p\.height \+ WindowHelper\.PILL_GAP/,
+    'the overlay must open directly BELOW the pill (PILL_GAP spacing)',
+  );
+  assert.match(
+    place,
+    /workArea\.x \+ workArea\.width - o\.width/,
+    'the placement must be clamped into the work area',
+  );
+  assert.match(
+    place,
+    /workArea\.y \+ workArea\.height - h/,
+    'the vertical placement must be clamped into the work area',
+  );
+});
+
 test('clicking the pill logo must never strand the pill hidden', () => {
   // Reported bug: click the Natively icon on the floating pill → the launcher
   // appears → the pill disappears. Root cause: switchToLauncher → the explicit
