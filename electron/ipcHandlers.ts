@@ -671,6 +671,53 @@ export function initializeIpcHandlers(appState: AppState): void {
       (pillWin && !pillWin.isDestroyed() && pillWin.webContents.id === event.sender.id) ||
       (toggleWin && !toggleWin.isDestroyed() && toggleWin.webContents.id === event.sender.id);
     if (!fromAux || !action?.type) return;
+
+    // ALWAYS-VISIBLE PILL — pill button semantics. The pill is the always-there
+    // surface: its center button is Ask/Hide (toggle the OVERLAY's visibility —
+    // with no meeting it opens/closes the no-audio AI chatbox; during a meeting
+    // it stealth-hides/re-shows the meeting overlay while recording continues),
+    // and its action button is mic (start a meeting/recording) while idle or
+    // stop (end the meeting) while recording. Meeting-active actions that have
+    // real meaning forward to the overlay renderer unchanged.
+    if (!appState.getIsMeetingActive()) {
+      if (action.type === 'toggle-expand') {
+        const overlayWin = helper.getOverlayWindow();
+        const overlayVisible =
+          !!overlayWin && !overlayWin.isDestroyed() && overlayWin.isVisible();
+        // Open the chatbox (show the overlay without starting a meeting) or
+        // close it back to the launcher — a real toggle, like the hotkey.
+        helper.setWindowMode(overlayVisible ? 'launcher' : 'overlay', true);
+        return;
+      }
+      if (action.type === 'start-meeting') {
+        // Mic button: start a real meeting (recording). Runs through the
+        // lifecycle queue, so a concurrent calendar/shortcut start coalesces.
+        appState.startMeeting().catch((err) => {
+          console.error('[IPC] start-meeting from pill failed:', err);
+        });
+        return;
+      }
+      if (action.type === 'end-meeting') {
+        // Defensive: the mic button only sends start-meeting while idle, but
+        // an old renderer/race must not forward end-meeting with no meeting.
+        helper.setWindowMode('launcher', true);
+        return;
+      }
+    } else if (action.type === 'toggle-expand') {
+      // Meeting active: Ask/Hide toggles the overlay's visibility. Hiding
+      // leaves the meeting recording (stealth); the pill stays up as the
+      // always-visible surface that can bring the overlay back.
+      const overlayWin = helper.getOverlayWindow();
+      const overlayVisible =
+        !!overlayWin && !overlayWin.isDestroyed() && overlayWin.isVisible();
+      if (overlayVisible) {
+        helper.hideOverlay();
+      } else {
+        helper.setWindowMode('overlay', true);
+      }
+      return;
+    }
+
     helper.forwardOverlayUiAction(action);
   });
 
@@ -793,6 +840,10 @@ export function initializeIpcHandlers(appState: AppState): void {
 
   safeHandle('hide-window', async () => {
     appState.hideMainWindow();
+    // ALWAYS-VISIBLE PILL: hiding the UI must leave the pill floating (it is
+    // the always-there surface) — hideMainWindow itself keeps it down because
+    // the same method feeds screenshot capture.
+    appState.getWindowHelper().syncPillAlwaysVisibility();
   });
 
   safeHandle('show-overlay', async () => {
@@ -5800,6 +5851,15 @@ export function initializeIpcHandlers(appState: AppState): void {
 
   safeHandle('set-ambient-chat-enabled', async (_, enabled: boolean) => {
     appState.setAmbientChatEnabled(enabled);
+    return { success: true };
+  });
+
+  safeHandle('get-pill-always-visible', async () => {
+    return appState.getPillAlwaysVisible();
+  });
+
+  safeHandle('set-pill-always-visible', async (_, enabled: boolean) => {
+    appState.setPillAlwaysVisible(Boolean(enabled));
     return { success: true };
   });
 

@@ -152,6 +152,19 @@ export class WindowHelper {
   // Renderer-reported "there are messages" flag — the toggle is only shown
   // once there is content (mirrors the old `messages.length > 0` gate).
   private toggleHasContent = false;
+  // ── Always-visible pill (standalone mode) ────────────────────────────────
+  // When pillAlwaysVisible is on, the TopPill floats on its own while the
+  // launcher is visible — even with no meeting running (the "always appear"
+  // mode). The pill is then NOT an AppKit child of the overlay on macOS:
+  // parent.hide() drags children down with the shell, so the pill is
+  // un-welded for the duration and re-welded the moment a meeting starts.
+  // Windows never welds (owner semantics), so there it is purely a
+  // visibility decision. Suppressed while undetectable mode is on — a
+  // permanently floating pill would defeat the stealth promise.
+  private pillAlwaysVisible = false;
+  // True while the pill floats without the overlay (launcher visible, no
+  // meeting). Drives drag anchoring and re-welding on the next overlay show.
+  private pillStandalone = false;
   // The panel's LIVE right edge, in px from the overlay window's left edge —
   // streamed by the renderer as the width spring runs so the toggle window
   // rides the panel's top-right corner frame-by-frame (the pre-aux-window
@@ -1057,25 +1070,23 @@ export class WindowHelper {
     // On Windows/Linux: intercept close and hide to tray instead of quitting,
     // unless the app is actually quitting (e.g. from tray "Quit" menu).
     //
-    // DEV EXCEPTION (2026-07-10): in dev, hide-to-tray leaves a headless
-    // electron process alive after you close the window. When you then Ctrl+C
-    // the `npm start` terminal, Windows does not reliably deliver SIGINT/SIGTERM
-    // to that GUI process, so it survives as a ZOMBIE holding the single-instance
-    // lock, port 5180, and open natively.db-wal/-shm handles. The NEXT `npm start`
-    // then either self-exits on the lost lock or loads a dead dev server →
-    // "loads once, then stuck at logo/black forever." In dev we therefore let a
-    // window close actually quit the app, so no zombie survives between runs.
+    // DEV NOTE (2026-07-10 → 2026-08-24): dev used to quit here to avoid a
+    // headless electron ZOMBIE surviving Ctrl+C (Windows does not reliably
+    // deliver SIGINT/SIGTERM to GUI children). That tradeoff contradicts the
+    // always-visible-pill feature: closing the window is EXACTLY when the pill
+    // must keep floating (it is the app's always-there surface). The
+    // single-instance lock (main.ts) + the pinned dev port (5180) keep a
+    // re-run from double-launching; the remaining risk is a zombie after
+    // Ctrl+C, avoidable by tray → Quit before stopping the dev terminal.
     if (process.platform !== 'darwin') {
       this.launcherWindow.on('close', (e) => {
-        if (isDev) {
-          // Let the close proceed and quit — no hide-to-tray in dev.
-          this.appState.setQuitting(true);
-          return;
-        }
         if (!this.appState.isQuitting()) {
           e.preventDefault();
           this.launcherWindow?.hide();
           this.isWindowVisible = false;
+          // ALWAYS-VISIBLE PILL: closing the window must leave the pill
+          // floating (no-op when the setting is off).
+          this.syncPillAlwaysVisibility();
         }
       });
 
@@ -1249,6 +1260,9 @@ export class WindowHelper {
     // directly (overlayWindow.hide() below) rather than via hideOverlay(), so it
     // needs its own stop. No-op if not engaged.
     this.stopStealthTyping();
+    // Leave standalone-pill mode: this path hides the whole UI (screenshot
+    // capture, tray-hide), so the floating pill must not survive it.
+    this.setPillStandalone(false);
     // Do NOT call setOpacity(0) before hide() on macOS — it causes WindowServer to
     // re-register the app as a regular window, breaking undetectable/stealth mode
     // (fixed in v2.0.8, regressed when opacity was re-added for screenshot flash).
@@ -1271,6 +1285,10 @@ export class WindowHelper {
     this.overlayWindow?.hide();
     this.lastLauncherShowInactive = null;
     this.isWindowVisible = false;
+    // Refresh the aux windows' overlay/meeting state. The pill stays DOWN here
+    // on purpose (screenshot capture must not capture it); user-facing hides
+    // re-float it explicitly (see toggleMainWindow).
+    this.pushPillState();
   }
 
   // Apply the click-through (mouse passthrough) policy on the overlay window.
@@ -1718,6 +1736,11 @@ export class WindowHelper {
         this.auxSyncing = false;
       }
     });
+
+    // Seed the aux windows' overlay/meeting state so a first paint shows the
+    // correct Ask/Hide label and mic/stop icon (the did-finish-load replay
+    // above delivers this cached state to a late-loading renderer).
+    this.pushPillState();
   }
 
   // Place the pill (centered above the shell) and the toggle (outside the
@@ -1861,51 +1884,85 @@ export class WindowHelper {
   // Clamping continuously costs no reachable end state: endOverlayGroupDrag
   // already snapped the group fully into the work area on release, so this
   // only removes an illegal transient.
+  /**
+   * The window a group drag actually moves: the shell while it is visible,
+   * otherwise the standalone pill (always-visible-pill mode, launcher up with
+   * no meeting — the shell is hidden so dragging must move the pill alone).
+   */
+  private groupDragTarget(): BrowserWindow | null {
+    const overlay = this.overlayWindow;
+    if (overlay && !overlay.isDestroyed() && overlay.isVisible()) return overlay;
+    return this.pillWindow;
+  }
+
+  /** Clamp a standalone pill's origin into the work area (no shell to ride). */
+  private clampedPillOrigin(
+    pill: BrowserWindow,
+    x: number,
+    y: number,
+  ): { x: number; y: number } {
+    const o = pill.getBounds();
+    const workArea = this.getDisplayWorkArea({ ...o, x, y });
+    const minX = workArea.x;
+    const maxX = workArea.x + workArea.width - o.width;
+    const minY = workArea.y;
+    const maxY = workArea.y + workArea.height - o.height;
+    return {
+      x: Math.round(Math.min(Math.max(x, minX), Math.max(minX, maxX))),
+      y: Math.round(Math.min(Math.max(y, minY), Math.max(minY, maxY))),
+    };
+  }
+
   public beginOverlayGroupDrag(): void {
     if (!this.overlayGroupDragManaged) return;
-    const overlay = this.overlayWindow;
-    if (!overlay || overlay.isDestroyed()) return;
-    const o = overlay.getBounds();
+    const target = this.groupDragTarget();
+    if (!target || target.isDestroyed()) return;
+    const o = target.getBounds();
     this.groupDragOrigin = { x: o.x, y: o.y };
     this.overlayGroupDragging = true;
   }
 
   public moveOverlayGroupTo(offsetX: number, offsetY: number): void {
     if (!this.overlayGroupDragManaged) return;
-    const overlay = this.overlayWindow;
-    if (!overlay || overlay.isDestroyed() || !overlay.isVisible()) return;
+    const target = this.groupDragTarget();
+    if (!target || target.isDestroyed()) return;
     if (!Number.isFinite(offsetX) || !Number.isFinite(offsetY)) return;
     // A move without a start (renderer reloaded mid-drag) anchors here.
     if (!this.groupDragOrigin) this.beginOverlayGroupDrag();
     const origin = this.groupDragOrigin;
     if (!origin) return;
-    const target = this.clampedGroupOrigin(origin.x + offsetX, origin.y + offsetY);
-    const o = overlay.getBounds();
-    if (target.x === o.x && target.y === o.y) return;
+    const isOverlay = target === this.overlayWindow;
+    const targetPos = isOverlay
+      ? this.clampedGroupOrigin(origin.x + offsetX, origin.y + offsetY)
+      : this.clampedPillOrigin(target, origin.x + offsetX, origin.y + offsetY);
+    const o = target.getBounds();
+    if (targetPos.x === o.x && targetPos.y === o.y) return;
     this.overlayGroupDragging = true;
     this.auxSyncing = true;
     try {
-      overlay.setPosition(target.x, target.y);
-      const moved = overlay.getBounds();
-      this.overlayBounds = moved;
-      // WELDED (macOS): AppKit already carried the pill in the same
-      // transaction — touching it here would DOUBLE the delta.
-      // NOT WELDED (Windows): nothing carries it, so re-derive its position
-      // from the shell's ACTUAL bounds every frame.
-      //
-      // Re-derive, do NOT accumulate deltas. Applying "the delta the shell just
-      // moved" to the pill's own position looks equivalent and is not: if the
-      // OS constrains either window (macOS pins a window being driven fully
-      // off-screen; the two windows hit that limit at different moments
-      // because they have different widths), a delta offset banks the error
-      // permanently and the group walks apart — measured at 294px over a long
-      // drag. Re-deriving makes every frame self-correcting: one constrained
-      // frame is a transient, not a permanent offset.
-      if (!this.overlayGroupWelded) this.positionOverlayAuxWindows();
-      // The toggle is recomputed from the shell's bounds on both platforms:
-      // its offset tracks the panel's live right edge (the width spring), so a
-      // raw delta would freeze it mid-animation.
-      this.positionToggleWindow();
+      target.setPosition(targetPos.x, targetPos.y);
+      if (isOverlay) {
+        const moved = target.getBounds();
+        this.overlayBounds = moved;
+        // WELDED (macOS): AppKit already carried the pill in the same
+        // transaction — touching it here would DOUBLE the delta.
+        // NOT WELDED (Windows): nothing carries it, so re-derive its position
+        // from the shell's ACTUAL bounds every frame.
+        //
+        // Re-derive, do NOT accumulate deltas. Applying "the delta the shell just
+        // moved" to the pill's own position looks equivalent and is not: if the
+        // OS constrains either window (macOS pins a window being driven fully
+        // off-screen; the two windows hit that limit at different moments
+        // because they have different widths), a delta offset banks the error
+        // permanently and the group walks apart — measured at 294px over a long
+        // drag. Re-deriving makes every frame self-correcting: one constrained
+        // frame is a transient, not a permanent offset.
+        if (!this.overlayGroupWelded) this.positionOverlayAuxWindows();
+        // The toggle is recomputed from the shell's bounds on both platforms:
+        // its offset tracks the panel's live right edge (the width spring), so a
+        // raw delta would freeze it mid-animation.
+        this.positionToggleWindow();
+      }
     } finally {
       this.auxSyncing = false;
     }
@@ -1916,12 +1973,27 @@ export class WindowHelper {
     if (!this.overlayGroupDragManaged) return;
     this.overlayGroupDragging = false;
     this.groupDragOrigin = null;
-    this.clampOverlayGroupIntoWorkArea();
-    // Settle point: re-place the children from the shell's final bounds, so a
-    // drag that ran into a screen-edge constraint cannot leave the offsets
-    // stale (see applyOverlayAuxVisibility for why this is needed and why it
-    // cannot feed back into the parent).
-    this.positionOverlayAuxWindows();
+    const target = this.groupDragTarget();
+    if (target === this.overlayWindow) {
+      this.clampOverlayGroupIntoWorkArea();
+      // Settle point: re-place the children from the shell's final bounds, so a
+      // drag that ran into a screen-edge constraint cannot leave the offsets
+      // stale (see applyOverlayAuxVisibility for why this is needed and why it
+      // cannot feed back into the parent).
+      this.positionOverlayAuxWindows();
+    } else if (target && !target.isDestroyed()) {
+      // Standalone pill: settle it into the work area on its own.
+      const o = target.getBounds();
+      const { x, y } = this.clampedPillOrigin(target, o.x, o.y);
+      if (x !== o.x || y !== o.y) {
+        this.auxSyncing = true;
+        try {
+          target.setPosition(x, y);
+        } finally {
+          this.auxSyncing = false;
+        }
+      }
+    }
     this.repositionOverlayPopovers();
   }
 
@@ -1980,7 +2052,118 @@ export class WindowHelper {
   // overlay's live visibility — safe only when the overlay is not mid-swap).
   private syncOverlayAuxVisibility(): void {
     const overlay = this.overlayWindow;
-    this.applyOverlayAuxVisibility(!!overlay && !overlay.isDestroyed() && overlay.isVisible());
+    const want = !!overlay && !overlay.isDestroyed() && overlay.isVisible();
+    this.applyOverlayAuxVisibility(want);
+    // Standalone-pill backstop: the overlay-mirroring path must never take the
+    // floating pill down (the overlay 'hide' event handler routes here). If the
+    // pill floats without the shell, re-assert it after every derived hide.
+    if (this.pillStandalone && !want) {
+      const pill = this.pillWindow;
+      if (pill && !pill.isDestroyed() && !pill.isVisible()) pill.showInactive();
+    }
+  }
+
+  // ── Always-visible pill (standalone mode) ────────────────────────────────
+  // The pill normally mirrors the overlay (see applyOverlayAuxVisibility).
+  // With pillAlwaysVisible on, the pill additionally survives launcher mode:
+  // it floats on its own while the launcher is visible so it is always there
+  // to summon the AI chatbox — no meeting required. The overlay-mirroring
+  // paths stay untouched when the setting is off (default) so existing
+  // behavior is byte-for-byte preserved.
+
+  /** Seeded from AppState at construction; updated live by the settings IPC. */
+  public setPillAlwaysVisible(enabled: boolean): void {
+    this.pillAlwaysVisible = enabled;
+    this.syncPillAlwaysVisibility();
+  }
+
+  /**
+   * Re-evaluate the standalone pill from the current window state. Called
+   * after the setting changes and after every window swap settles. No-op when
+   * the setting is off (the overlay-mirroring path owns the pill then) or
+   * while undetectable mode is on (stealth wins over a floating pill).
+   *
+   * When the setting is on, the pill floats whenever the overlay is NOT the
+   * visible surface — including when the whole UI is hidden (tray): it is the
+   * always-there surface that can summon the overlay again.
+   */
+  public syncPillAlwaysVisibility(): void {
+    if (!this.pillAlwaysVisible || this.appState.getUndetectable()) {
+      // Setting off (or stealth on): the pill belongs to the overlay-mirroring
+      // path — never leave it floating standalone.
+      this.setPillStandalone(false);
+      return;
+    }
+    const overlayVisible =
+      !!this.overlayWindow && !this.overlayWindow.isDestroyed() && this.overlayWindow.isVisible();
+    if (overlayVisible) {
+      // The shell is up — the group path owns the pill (re-weld if needed).
+      this.setPillStandalone(false);
+    } else {
+      // Launcher visible OR the whole UI hidden — the pill floats on its own.
+      this.setPillStandalone(true);
+    }
+  }
+
+  /**
+   * Push the live overlay/meeting state to the aux windows so the pill can
+   * render its Ask/Hide label and mic/stop icon without a round trip. Called
+   * at every visibility-change settle point. Does NOT touch aux visibility
+   * itself (setOverlayUiState's sync would fight the standalone pill) — it
+   * only refreshes the cached state + relay.
+   */
+  private pushPillState(): void {
+    const overlay = this.overlayWindow;
+    const state: Record<string, unknown> = {
+      ...((this.lastOverlayUiState as Record<string, unknown> | null) ?? {}),
+      overlayVisible: !!overlay && !overlay.isDestroyed() && overlay.isVisible(),
+      meetingActive: this.appState.getIsMeetingActive(),
+    };
+    this.lastOverlayUiState = state;
+    for (const w of [this.pillWindow, this.toggleWindow]) {
+      if (w && !w.isDestroyed()) w.webContents.send('overlay-ui-state', state);
+    }
+  }
+
+  /**
+   * Enter/leave standalone mode for the pill. Entering detaches it from the
+   * overlay (macOS weld) and floats it; leaving re-welds it so the group is
+   * intact before the next overlay show.
+   */
+  private setPillStandalone(want: boolean): void {
+    if (this.pillStandalone === want) return;
+    const pill = this.pillWindow;
+    if (!pill || pill.isDestroyed()) return;
+    if (want) {
+      // Detach from the shell so a hidden overlay cannot take the pill down
+      // with it (macOS parent.hide() hides children; Windows never welds).
+      if (this.overlayGroupWelded) {
+        try {
+          pill.setParentWindow(null);
+        } catch (e) {
+          console.error('[WindowHelper] Failed to un-weld pill for standalone mode:', e);
+        }
+      }
+      // Restore opacity (hideMainWindow may have zeroed it pre-screenshot).
+      pill.setOpacity(1);
+      pill.showInactive();
+      this.pillStandalone = true;
+      console.log('[WindowHelper] Pill is now STANDALONE (launcher mode, no meeting)');
+    } else {
+      if (
+        this.overlayGroupWelded &&
+        this.overlayWindow &&
+        !this.overlayWindow.isDestroyed()
+      ) {
+        try {
+          pill.setParentWindow(this.overlayWindow);
+        } catch (e) {
+          console.error('[WindowHelper] Failed to re-weld pill:', e);
+        }
+      }
+      if (pill.isVisible()) pill.hide();
+      this.pillStandalone = false;
+    }
   }
 
   // Pill renderer reports its w-fit content size (ResizeObserver → IPC).
@@ -2051,6 +2234,9 @@ export class WindowHelper {
     }
     // Explicit, same-block aux show — see switchToOverlay.
     this.applyOverlayAuxVisibility(true);
+    // Refresh the aux windows' overlay/meeting state (Ask/Hide label,
+    // mic/stop icon).
+    this.pushPillState();
   }
 
   // Hide overlay directly without switching to launcher.
@@ -2063,12 +2249,21 @@ export class WindowHelper {
     // on Windows, cannot type into any other app). Stop it here and on every
     // overlay→launcher switch. No-op when not engaged.
     this.stopStealthTyping();
+    // Leave standalone mode first: this hides the whole surface (screenshot
+    // capture / tray-hide), so a floating pill must not survive it.
+    this.setPillStandalone(false);
     // Aux chrome first, in the same block: the pill/toggle are always-on-top,
     // so a body-then-pill sequence leaves them briefly floating alone.
     this.applyOverlayAuxVisibility(false);
     if (this.overlayWindow && !this.overlayWindow.isDestroyed()) {
       this.overlayWindow.hide();
     }
+    // ALWAYS-VISIBLE PILL: hiding the overlay body (stealth, "Hide" button,
+    // overlay close) must leave the pill floating — it is the always-there
+    // surface that can summon the overlay again. No-op when the setting is
+    // off (the pill stays down with the overlay, as before this feature).
+    this.pushPillState();
+    this.syncPillAlwaysVisibility();
   }
 
   /**
@@ -2152,6 +2347,10 @@ export class WindowHelper {
   public toggleMainWindow(): void {
     if (this.isWindowVisible) {
       this.hideMainWindow();
+      // Always-visible pill: user hide (Cmd+B / tray) must leave the pill
+      // floating — hideMainWindow itself keeps it down because the same method
+      // feeds screenshot capture.
+      this.syncPillAlwaysVisibility();
     } else {
       // Always show without stealing focus — Natively is a ghost overlay.
       // The user is in another app; show the window on top but leave OS focus alone.
@@ -2182,6 +2381,10 @@ export class WindowHelper {
 
   public switchToOverlay(inactive?: boolean): void {
     console.log(`[WindowHelper] Switching to OVERLAY (inactive: ${!!inactive})`);
+    // Leave standalone-pill mode: the shell is coming up, so the pill must be
+    // re-welded (macOS) before the group show below — a child of the shell can
+    // never lag or be left behind once the group path takes over.
+    this.setPillStandalone(false);
     this.currentWindowMode = 'overlay';
     KeybindManager.getInstance().setMode('overlay'); // Adapted from public PR #123 — verify premium interaction
 
@@ -2304,6 +2507,10 @@ export class WindowHelper {
       this.launcherWindow.hide();
       this.lastLauncherShowInactive = null;
     }
+
+    // Refresh the aux windows' overlay/meeting state (Ask/Hide label,
+    // mic/stop icon) after the swap settles.
+    this.pushPillState();
   }
 
   public switchToLauncher(inactive?: boolean): void {
@@ -2433,6 +2640,16 @@ export class WindowHelper {
     if (process.platform === 'darwin' && this.appState.getUndetectable()) {
       this.appState.reassertUndetectableStealth();
     }
+
+    // ─── ALWAYS-VISIBLE PILL ────────────────────────────────────────────────
+    // With pillAlwaysVisible on (and stealth off), the overlay is down but the
+    // launcher is up — float the pill standalone so it is always there, even
+    // with no meeting running. No-op when the setting is off (the pill stays
+    // down with the overlay, exactly as before this feature).
+    this.syncPillAlwaysVisibility();
+    // Refresh the aux windows' overlay/meeting state (Ask/Hide label, mic/stop
+    // icon) after the swap settles.
+    this.pushPillState();
   }
 
   // Simplified setWindowMode that just calls switchers

@@ -1109,6 +1109,12 @@ const NativelyInterface: React.FC<NativelyInterfaceProps> = ({
   const [isSettingsOpen, setIsSettingsOpen] = useState(false);
   const [conversationContext, setConversationContext] = useState<string>('');
   const [isManualRecording, setIsManualRecording] = useState(false);
+  // Whether a meeting is currently active. The overlay also serves as a
+  // standalone no-audio AI chatbox (opened from the always-visible TopPill
+  // while idle), where the meeting-only quick actions must not be shown.
+  // Defaults to true so the meeting UI never flickers out during a start;
+  // corrected immediately by the mount-time probe and every broadcast.
+  const [meetingActive, setMeetingActive] = useState(true);
   const isRecordingRef = useRef(false); // Ref to track recording state (avoids stale closure)
   const [manualTranscript, setManualTranscript] = useState('');
   const manualTranscriptRef = useRef<string>('');
@@ -1723,6 +1729,29 @@ const NativelyInterface: React.FC<NativelyInterfaceProps> = ({
       },
     );
     return () => unsub?.();
+  }, []);
+
+  // Meeting-state awareness for the standalone no-audio chatbox mode: the
+  // overlay doubles as an AI chatbox opened from the always-visible TopPill
+  // while idle. Probe the current state on mount (the overlay window persists
+  // across meetings, so this is authoritative) and stay in sync with every
+  // meeting start/stop broadcast. The meeting-only quick actions (voice,
+  // clarify/recap/follow-up) are hidden while no meeting is active.
+  useEffect(() => {
+    let alive = true;
+    window.electronAPI
+      ?.getMeetingActive?.()
+      .then((v) => {
+        if (alive) setMeetingActive(!!v);
+      })
+      .catch(() => {});
+    const unsub = window.electronAPI?.onMeetingStateChanged?.((data: { isActive: boolean }) => {
+      setMeetingActive(!!data?.isActive);
+    });
+    return () => {
+      alive = false;
+      unsub?.();
+    };
   }, []);
 
   useEffect(() => {
@@ -8789,6 +8818,7 @@ Provide only the answer, nothing else.`;
                     </motion.button>
                   )}
                 </AnimatePresence>
+                {meetingActive && (
                 <div
                   className={`flex flex-nowrap justify-center items-center gap-1.5 px-4 pb-3 overflow-x-hidden ${rollingTranscript && showTranscript ? 'pt-1' : 'pt-3'}`}
                 >
@@ -8849,6 +8879,7 @@ Provide only the answer, nothing else.`;
                   )}
                 </button>
                 </div>
+                )}
               </div>
 
               {/* Input Area */}

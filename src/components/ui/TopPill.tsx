@@ -1,21 +1,27 @@
-import { ChevronUp, ChevronDown } from "lucide-react";
+import { ChevronUp, ChevronDown, Mic } from "lucide-react";
 import icon from "../icon.png";
 import type { OverlayAppearance } from "../../lib/overlayAppearance";
 
 interface TopPillProps {
-    expanded: boolean;
     onToggle: () => void;
     onQuit: () => void;
     appearance: OverlayAppearance;
     onLogoClick?: () => void;
+    /** Whether a meeting (recording) is currently active. Drives the action
+     *  button: mic (start) while idle, square/stop while recording. */
+    meetingActive: boolean;
+    /** Whether the overlay body is currently visible. Drives the center
+     *  button label: "Ask" (overlay hidden) / "Hide" (overlay visible). */
+    overlayVisible: boolean;
 }
 
 export default function TopPill({
-    expanded,
     onToggle,
     onQuit,
     appearance,
     onLogoClick,
+    meetingActive,
+    overlayVisible,
 }: TopPillProps) {
     return (
         <div className="flex justify-center select-none z-50">
@@ -57,7 +63,10 @@ export default function TopPill({
                     </button>
                 </div>
 
-                {/* CENTER SEGMENT */}
+                {/* CENTER SEGMENT — Ask (overlay hidden) / Hide (overlay
+                    visible). Clicking toggles the OVERLAY's visibility, not a
+                    panel-body collapse: while a meeting runs, "Hide" hides the
+                    overlay (meeting keeps recording) and "Ask" brings it back. */}
                 <button
                     onClick={onToggle}
                     className={`
@@ -76,18 +85,22 @@ export default function TopPill({
                     style={appearance.chipStyle}
                 >
                     <span className="opacity-70 group-hover:opacity-100 transition-opacity duration-200">
-                        {expanded ? (
+                        {overlayVisible ? (
                             <ChevronUp className="w-3.5 h-3.5" />
                         ) : (
                             <ChevronDown className="w-3.5 h-3.5" />
                         )}
                     </span>
-                    <span className="tracking-wide opacity-80 group-hover:opacity-100">{expanded ? "Hide" : "Show"}</span>
+                    <span className="tracking-wide opacity-80 group-hover:opacity-100">
+                        {overlayVisible ? "Hide" : "Ask"}
+                    </span>
                 </button>
 
-                {/* STOP / QUIT BUTTON */}
+                {/* ACTION BUTTON — mic while idle (start a meeting/recording),
+                    square/stop while a meeting is recording (end it). */}
                 <button
                     onClick={onQuit}
+                    title={meetingActive ? "Stop" : "Start"}
                     className={`
             w-7 h-7
             rounded-full
@@ -99,7 +112,11 @@ export default function TopPill({
           `}
                     style={appearance.iconStyle}
                 >
-                    <div className="w-3.5 h-3.5 rounded-[3px] bg-current opacity-80" />
+                    {meetingActive ? (
+                        <div className="w-3.5 h-3.5 rounded-[3px] bg-current opacity-80" />
+                    ) : (
+                        <Mic className="w-4 h-4" strokeWidth={2} />
+                    )}
                 </button>
             </div>
         </div>

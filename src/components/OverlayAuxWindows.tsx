@@ -26,6 +26,13 @@ export interface OverlayUiState {
   overlayOpacity?: number;
   themeMode?: 'light' | 'dark';
   interfaceTheme?: 'default' | 'liquid-glass' | 'modern';
+  /** Whether the overlay body window is visible right now — drives the pill's
+   *  Ask/Hide center button (stamped by WindowHelper.pushPillState). */
+  overlayVisible?: boolean;
+  /** Whether a meeting (recording) is active — drives the pill's mic/stop
+   *  action button (also broadcast as meeting-state-changed; stamped here as
+   *  a belt-and-suspenders so a late-loading pill still paints correctly). */
+  meetingActive?: boolean;
 }
 
 const DEFAULT_STATE: Required<Omit<OverlayUiState, 'hasContent'>> & OverlayUiState = {
@@ -34,6 +41,8 @@ const DEFAULT_STATE: Required<Omit<OverlayUiState, 'hasContent'>> & OverlayUiSta
   overlayOpacity: 1,
   themeMode: 'dark',
   interfaceTheme: 'default',
+  overlayVisible: false,
+  meetingActive: false,
 };
 
 function useOverlayUiState(): OverlayUiState {
@@ -195,6 +204,17 @@ export function OverlayPillWindow() {
   const dragManaged = useManagedGroupDrag(rootRef);
   useDismissPopoversOnMouseDown();
 
+  // Meeting (recording) state for the mic/stop action button. The main process
+  // broadcasts meeting-state-changed to EVERY window (pill included), so the
+  // icon stays live without a round trip.
+  const [meetingActive, setMeetingActive] = useState(false);
+  useEffect(() => {
+    const unsub = window.electronAPI?.onMeetingStateChanged?.(
+      (data: { isActive: boolean }) => setMeetingActive(!!data?.isActive),
+    );
+    return () => unsub?.();
+  }, []);
+
   // Report the pill's w-fit size so the main process can size + re-center the
   // OS window (same 'update-content-dimensions' channel every window uses;
   // routed to setPillWindowSize by sender id).
@@ -238,11 +258,12 @@ export function OverlayPillWindow() {
         }}
       >
         <TopPill
-          expanded={state.expanded !== false}
           onToggle={() => sendAction('toggle-expand')}
-          onQuit={() => sendAction('end-meeting')}
+          onQuit={() => sendAction(meetingActive ? 'end-meeting' : 'start-meeting')}
           appearance={appearance}
           onLogoClick={() => window.electronAPI?.setWindowMode?.('launcher')}
+          meetingActive={meetingActive}
+          overlayVisible={state.overlayVisible === true}
         />
       </div>
     </div>

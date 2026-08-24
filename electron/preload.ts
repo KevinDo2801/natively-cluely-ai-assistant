@@ -911,6 +911,9 @@ interface ElectronAPI {
   // Ambient AI Chat — when enabled, meetings run without mic/system audio capture
   getAmbientChatEnabled: () => Promise<boolean>;
   setAmbientChatEnabled: (enabled: boolean) => Promise<{ success: boolean }>;
+  // Always-visible TopPill — the overlay pill floats in launcher mode too
+  getPillAlwaysVisible: () => Promise<boolean>;
+  setPillAlwaysVisible: (enabled: boolean) => Promise<{ success: boolean }>;
   getAutoAnswerEnabled: () => Promise<boolean>;
   setAutoAnswerEnabled: (enabled: boolean) => Promise<{ success: boolean; error?: string }>;
   getCodeVerification: () => Promise<boolean>;
@@ -2607,6 +2610,9 @@ contextBridge.exposeInMainWorld('electronAPI', {
   // Ambient AI Chat — when enabled, meetings run without mic/system audio capture
   getAmbientChatEnabled: () => ipcRenderer.invoke('get-ambient-chat-enabled'),
   setAmbientChatEnabled: (enabled: boolean) => ipcRenderer.invoke('set-ambient-chat-enabled', enabled),
+  // Always-visible TopPill — the overlay pill floats in launcher mode too
+  getPillAlwaysVisible: () => ipcRenderer.invoke('get-pill-always-visible'),
+  setPillAlwaysVisible: (enabled: boolean) => ipcRenderer.invoke('set-pill-always-visible', enabled),
   getAutoAnswerEnabled: () => ipcRenderer.invoke('get-auto-answer-enabled'),
   setAutoAnswerEnabled: (enabled: boolean) => ipcRenderer.invoke('set-auto-answer-enabled', enabled),
   getCodeVerification: () => ipcRenderer.invoke('get-code-verification'),

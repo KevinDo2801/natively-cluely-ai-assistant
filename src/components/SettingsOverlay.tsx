@@ -7,7 +7,7 @@ import {
     Camera, RotateCcw, Eye, Layout, MessageSquare, Crop,
     ChevronDown, ChevronUp, Check, BadgeCheck, Power, Palette, Calendar, Ghost, Sun, Moon, RefreshCw, Info, Globe, FlaskConical, Terminal, Settings, Activity, ExternalLink, Trash2,
     Sparkles, Pencil, Briefcase, Building2, Search, MapPin, CheckCircle, HelpCircle, Zap, SlidersHorizontal, PointerOff, Folder,
-    Star, AlertCircle, Gift, Smartphone, Cpu, Shield, Code2, Headphones, MessageSquareReply
+    Star, AlertCircle, Gift, Smartphone, Cpu, Shield, Code2, Headphones, MessageSquareReply, Pin
 } from 'lucide-react';
 import { HiCreditCard } from 'react-icons/hi2';
 import { analytics } from '../lib/analytics/analytics.service';
@@ -555,6 +555,7 @@ const SettingsOverlay: React.FC<SettingsOverlayProps> = ({
 
     const [verboseLogging, setVerboseLogging] = useState(false);
     const [ambientChatEnabled, setAmbientChatEnabled] = useState(false);
+    const [pillAlwaysVisible, setPillAlwaysVisible] = useState(false);
     const [autoAnswerEnabled, setAutoAnswerEnabled] = useState(false);
     const [meetingRetention, setMeetingRetention] = useState<'forever' | '7d' | '30d' | 'never'>('forever');
     const [showVerboseToast, setShowVerboseToast] = useState(false);
@@ -574,6 +575,7 @@ const SettingsOverlay: React.FC<SettingsOverlayProps> = ({
             window.electronAPI?.getDisguise?.().then(setDisguiseMode).catch(() => { });
             window.electronAPI?.getVerboseLogging?.().then(setVerboseLogging).catch(() => { });
             window.electronAPI?.getAmbientChatEnabled?.().then(setAmbientChatEnabled).catch(() => { });
+            window.electronAPI?.getPillAlwaysVisible?.().then(setPillAlwaysVisible).catch(() => { });
             window.electronAPI?.getAutoAnswerEnabled?.().then(setAutoAnswerEnabled).catch(() => { });
             window.electronAPI?.getCodeVerification?.().then((v) => setCodeVerification(v === true)).catch(() => { });
             window.electronAPI?.getMeetingRetention?.().then(setMeetingRetention).catch(() => { });
@@ -2184,6 +2186,29 @@ const SettingsOverlay: React.FC<SettingsOverlayProps> = ({
                                                             </div>
                                                         )}
                                                     </div>
+                                                </div>
+
+                                                {/* Always Show TopPill */}
+                                                <div className="flex items-center justify-between px-4 py-3">
+                                                    <div className="flex items-center gap-4">
+                                                        <div className="w-10 h-10 bg-bg-item-surface rounded-lg border border-border-subtle text-text-primary flex items-center justify-center shrink-0">
+                                                            <Pin size={20} />
+                                                        </div>
+                                                        <div>
+                                                            <h3 className="text-sm font-bold text-text-primary">{t('Always Show TopPill')}</h3>
+                                                            <p className="text-xs text-text-secondary mt-0.5">{t('TopPill stays on screen even when no meeting is active')}</p>
+                                                        </div>
+                                                    </div>
+                                                    <SettingsToggle
+                                                        checked={pillAlwaysVisible}
+                                                        label={t('Always Show TopPill')}
+                                                        onChange={() => {
+                                                            const newState = !pillAlwaysVisible;
+                                                            setPillAlwaysVisible(newState);
+                                                            window.electronAPI?.setPillAlwaysVisible?.(newState);
+                                                        }}
+                                                        className={pillAlwaysVisible ? 'bg-accent-primary border border-transparent' : 'bg-bg-toggle-switch border border-border-muted'}
+                                                    />
                                                 </div>
 
                                                 {/* Language */}

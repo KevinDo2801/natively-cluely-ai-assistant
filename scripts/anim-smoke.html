@@ -1,0 +1,54 @@
+<!doctype html>
+<html>
+<head>
+<meta charset="utf-8" />
+<style>html, body { margin: 0; height: 100%; overflow: hidden; background: transparent; }</style>
+</head>
+<body>
+<div id="shell" style="position:fixed;inset:0;background:#203040;color:#fff;font:24px sans-serif;display:flex;align-items:center;justify-content:center;will-change:transform,opacity">launcher anim smoke</div>
+<script>
+// Mirror of LauncherAnimShell's contract (src/components/LauncherAnimShell.tsx).
+const el = document.getElementById('shell');
+const DURATION_MS = 280;
+const SCALE = 0.25; // fallback
+const EASE = 'cubic-bezier(0.16, 1, 0.3, 1)';
+let animating = false;
+
+function applyClosed(p) {
+  el.style.transition = 'none';
+  el.style.transformOrigin = p.originX + ' ' + p.originY;
+  el.style.transform = 'translate(' + p.dx + 'px, ' + p.dy + 'px) scale(' + SCALE + ')';
+  el.style.opacity = '0';
+}
+
+window.electronAPI.onLauncherAnimOpen((p) => {
+  if (animating) return;
+  animating = true;
+  applyClosed(p);
+  requestAnimationFrame(() => requestAnimationFrame(() => {
+    window.electronAPI.launcherAnimOpenReady();
+    el.style.transition = 'transform ' + DURATION_MS + 'ms ' + EASE + ', opacity ' + DURATION_MS + 'ms ' + EASE;
+    el.style.transform = 'translate(0, 0) scale(1)';
+    el.style.opacity = '1';
+    setTimeout(() => { animating = false; }, DURATION_MS + 80);
+  }));
+});
+
+window.electronAPI.onLauncherAnimClose((p) => {
+  if (animating) return;
+  animating = true;
+  el.style.transition = 'none';
+  el.style.transformOrigin = p.originX + ' ' + p.originY;
+  el.style.transform = 'translate(0, 0) scale(1)';
+  el.style.opacity = '1';
+  requestAnimationFrame(() => {
+    el.style.transition = 'transform ' + DURATION_MS + 'ms ' + EASE + ', opacity ' + DURATION_MS + 'ms ' + EASE;
+    el.style.transform = 'translate(' + p.dx + 'px, ' + p.dy + 'px) scale(' + SCALE + ')';
+    el.style.opacity = '0';
+    setTimeout(() => { animating = false; window.electronAPI.launcherAnimCloseDone(); }, DURATION_MS + 80);
+  });
+});
+</script>
+</body>
+</html>
+

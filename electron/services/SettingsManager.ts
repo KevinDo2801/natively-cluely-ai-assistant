@@ -19,6 +19,12 @@ export interface AppSettings {
     // while idle. Off by default — the hotkey's existing behavior is unchanged
     // until the user opts in from Settings > General.
     ambientChatEnabled?: boolean;
+    // Keeps the overlay TopPill floating on screen whenever the app UI is
+    // visible (launcher OR overlay), even when no meeting is active. Off by
+    // default — the pill only appears during meetings until the user opts in
+    // from Settings > Overlay. Ignored while undetectable mode is on (a
+    // permanently floating pill would defeat the stealth promise).
+    pillAlwaysVisible?: boolean;
     // Automatic answers after the interviewer finishes a question. Off by
     // default: until the user opts in from Settings > General, an answer is
     // produced only by the What-to-Answer hotkey, exactly as before. The

@@ -1437,6 +1437,9 @@ export class AppState {
   private _isQuitting: boolean = false;
   private _verboseLogging: boolean = false;
   private _ambientChatEnabled: boolean = false;
+  // Keeps the overlay TopPill floating while the launcher is visible (no
+  // meeting). Read by WindowHelper for standalone-pill visibility decisions.
+  private _pillAlwaysVisible: boolean = false;
   private _autoAnswerEnabled: boolean = false;
   // Tracks whether STT sample-rate has been applied for the current capture
   // session. Reset on every reconfigureAudio / new pipeline build so the next
@@ -1494,7 +1497,8 @@ export class AppState {
     setVerboseLoggingFlag(this._verboseLogging);
     this._ambientChatEnabled = settingsManager.get('ambientChatEnabled') ?? false;
     this._autoAnswerEnabled = settingsManager.get('autoAnswerEnabled') ?? false;
-    console.log(`[AppState] Initialized with isUndetectable=${this.isUndetectable}, disguiseMode=${this.disguiseMode}, verboseLogging=${this._verboseLogging}, ambientChatEnabled=${this._ambientChatEnabled}, autoAnswerEnabled=${this._autoAnswerEnabled}`);
+    this._pillAlwaysVisible = settingsManager.get('pillAlwaysVisible') ?? false;
+    console.log(`[AppState] Initialized with isUndetectable=${this.isUndetectable}, disguiseMode=${this.disguiseMode}, verboseLogging=${this._verboseLogging}, ambientChatEnabled=${this._ambientChatEnabled}, autoAnswerEnabled=${this._autoAnswerEnabled}, pillAlwaysVisible=${this._pillAlwaysVisible}`);
 
     // Context Intelligence debug logging (Developer settings). Bind the level
     // reader + log directory once; precedence (env > setting) and the
@@ -1551,6 +1555,9 @@ export class AppState {
     this.processingHelper = new ProcessingHelper(this)
 
     this.windowHelper.setContentProtection(this.isUndetectable);
+    // Seed the standalone-pill preference so WindowHelper can keep the pill up
+    // in launcher mode without a round trip.
+    this.windowHelper.setPillAlwaysVisible(this._pillAlwaysVisible);
     this.settingsWindowHelper.setContentProtection(this.isUndetectable);
     this.modelSelectorWindowHelper.setContentProtection(this.isUndetectable);
     this.cropperWindowHelper.setContentProtection(this.isUndetectable);
@@ -7074,6 +7081,11 @@ export class AppState {
         this.modelSelectorWindowHelper.showWindow(x, y, { activate });
       }
     }
+
+    // ALWAYS-VISIBLE PILL: the screenshot hide took the pill down (capture
+    // must not capture it); bring it back regardless of whether a main window
+    // was restored — it floats even while the app UI is hidden.
+    this.windowHelper.syncPillAlwaysVisibility();
   }
 
   private async withScreenshotCaptureSession<T>(
@@ -7656,6 +7668,22 @@ export class AppState {
     this._ambientChatEnabled = enabled;
     SettingsManager.getInstance().set('ambientChatEnabled', enabled);
     console.log(`[AppState] ambientChatEnabled set to ${enabled}`);
+  }
+
+  public getPillAlwaysVisible(): boolean {
+    return this._pillAlwaysVisible;
+  }
+
+  public setPillAlwaysVisible(enabled: boolean): void {
+    this._pillAlwaysVisible = enabled;
+    SettingsManager.getInstance().set('pillAlwaysVisible', enabled);
+    console.log(`[AppState] pillAlwaysVisible set to ${enabled}`);
+    // Apply immediately — show/hide the standalone pill without waiting for
+    // the next window swap. MUST go through WindowHelper.setPillAlwaysVisible:
+    // it sets WindowHelper's own flag (which syncPillAlwaysVisibility reads);
+    // calling syncPillAlwaysVisibility directly here would consult the stale
+    // flag and silently no-op ("toggle does nothing until restart").
+    this.windowHelper?.setPillAlwaysVisible(enabled);
   }
 
   public getAutoAnswerEnabled(): boolean {
