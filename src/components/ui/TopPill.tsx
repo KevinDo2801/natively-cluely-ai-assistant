@@ -66,7 +66,10 @@ export default function TopPill({
                 {/* CENTER SEGMENT — Ask (overlay hidden) / Hide (overlay
                     visible). Clicking toggles the OVERLAY's visibility, not a
                     panel-body collapse: while a meeting runs, "Hide" hides the
-                    overlay (meeting keeps recording) and "Ask" brings it back. */}
+                    overlay (meeting keeps recording) and "Ask" brings it back.
+                    While showing "Ask", the chip is highlighted brand-blue
+                    (#1592EA) with white glyphs; "Hide" restores the default
+                    chip surface. */}
                 <button
                     onClick={onToggle}
                     className={`
@@ -75,23 +78,40 @@ export default function TopPill({
             px-3 py-1
             rounded-full
             backdrop-blur-md
-            overlay-chip-surface
-            overlay-text-interactive
+            ${overlayVisible
+                ? "overlay-chip-surface overlay-text-interactive"
+                : "overlay-chip-ask text-white"}
             text-[12px]
             font-medium
             border
             interaction-base interaction-hover interaction-press
           `}
-                    style={appearance.chipStyle}
+                    style={
+                        overlayVisible
+                            ? appearance.chipStyle
+                            : { backgroundColor: "#1592EA", borderColor: "transparent", color: "#ffffff" }
+                    }
                 >
-                    <span className="opacity-70 group-hover:opacity-100 transition-opacity duration-200">
+                    <span
+                        className={`transition-opacity duration-200 ${
+                            overlayVisible
+                                ? "opacity-70 group-hover:opacity-100"
+                                : "opacity-100"
+                        }`}
+                    >
                         {overlayVisible ? (
                             <ChevronUp className="w-3.5 h-3.5" />
                         ) : (
                             <ChevronDown className="w-3.5 h-3.5" />
                         )}
                     </span>
-                    <span className="tracking-wide opacity-80 group-hover:opacity-100">
+                    <span
+                        className={`tracking-wide ${
+                            overlayVisible
+                                ? "opacity-80 group-hover:opacity-100"
+                                : "opacity-100"
+                        }`}
+                    >
                         {overlayVisible ? "Hide" : "Ask"}
                     </span>
                 </button>

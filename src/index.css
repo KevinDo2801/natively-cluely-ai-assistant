@@ -2482,6 +2482,15 @@ body {
   border-color: transparent;
 }
 
+/* TopPill "Ask" chip — brand-blue highlight with white glyphs. Used while
+   the overlay is hidden (label reads "Ask"); the pill's own inline style
+   carries the authoritative colors so this also documents the intent. */
+.overlay-chip-ask {
+  background: #1592ea;
+  border-color: transparent;
+  color: #ffffff;
+}
+
 .overlay-chip-surface:hover {
   background: var(--overlay-chip-hover-bg);
   border-color: var(--overlay-border-soft);

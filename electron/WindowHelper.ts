@@ -2208,6 +2208,9 @@ export class WindowHelper {
   // Used by IPC handlers to show the overlay independently.
   public showOverlay(): void {
     if (!this.overlayWindow || this.overlayWindow.isDestroyed()) return;
+    // Leave standalone-pill mode: the shell is coming up, so the pill joins
+    // the group (re-welded on macOS) instead of floating detached.
+    this.setPillStandalone(false);
 
     // Restore opacity in case it was zeroed by hideMainWindow() before a screenshot.
     this.overlayWindow.setOpacity(1);

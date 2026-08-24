@@ -673,20 +673,24 @@ export function initializeIpcHandlers(appState: AppState): void {
     if (!fromAux || !action?.type) return;
 
     // ALWAYS-VISIBLE PILL — pill button semantics. The pill is the always-there
-    // surface: its center button is Ask/Hide (toggle the OVERLAY's visibility —
-    // with no meeting it opens/closes the no-audio AI chatbox; during a meeting
-    // it stealth-hides/re-shows the meeting overlay while recording continues),
-    // and its action button is mic (start a meeting/recording) while idle or
-    // stop (end the meeting) while recording. Meeting-active actions that have
-    // real meaning forward to the overlay renderer unchanged.
+    // surface: its center button is Ask/Hide (toggle ONLY the overlay's
+    // visibility — the launcher window is NEVER touched by it; it appears only
+    // via the pill's logo / tray icon), and its action button is mic (start a
+    // meeting/recording) while idle or stop (end the meeting) while recording.
+    // Meeting-active actions that have real meaning forward to the overlay
+    // renderer unchanged.
     if (!appState.getIsMeetingActive()) {
       if (action.type === 'toggle-expand') {
         const overlayWin = helper.getOverlayWindow();
         const overlayVisible =
           !!overlayWin && !overlayWin.isDestroyed() && overlayWin.isVisible();
-        // Open the chatbox (show the overlay without starting a meeting) or
-        // close it back to the launcher — a real toggle, like the hotkey.
-        helper.setWindowMode(overlayVisible ? 'launcher' : 'overlay', true);
+        // Open the no-audio AI chatbox (show the overlay on top — the launcher
+        // stays exactly as it is) or close it. Independent of the launcher.
+        if (overlayVisible) {
+          helper.hideOverlay();
+        } else {
+          helper.showOverlay();
+        }
         return;
       }
       if (action.type === 'start-meeting') {
@@ -700,7 +704,6 @@ export function initializeIpcHandlers(appState: AppState): void {
       if (action.type === 'end-meeting') {
         // Defensive: the mic button only sends start-meeting while idle, but
         // an old renderer/race must not forward end-meeting with no meeting.
-        helper.setWindowMode('launcher', true);
         return;
       }
     } else if (action.type === 'toggle-expand') {
@@ -713,7 +716,7 @@ export function initializeIpcHandlers(appState: AppState): void {
       if (overlayVisible) {
         helper.hideOverlay();
       } else {
-        helper.setWindowMode('overlay', true);
+        helper.showOverlay();
       }
       return;
     }

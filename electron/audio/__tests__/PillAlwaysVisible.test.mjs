@@ -336,8 +336,8 @@ test('overlay-ui-action intercepts pill actions by meeting state', () => {
     /if \(!appState\.getIsMeetingActive\(\)\) \{/,
     'the idle branch must be gated on meeting state',
   );
-  // Idle toggle-expand: opens the no-audio AI chatbox (overlay without a
-  // meeting) or closes it back to the launcher — a real toggle.
+  // Idle toggle-expand: opens the no-audio AI chatbox (show the overlay on
+  // top) or closes it — the LAUNCHER window is never touched by Ask/Hide.
   assert.match(
     body,
     /action\.type === 'toggle-expand'/,
@@ -345,8 +345,14 @@ test('overlay-ui-action intercepts pill actions by meeting state', () => {
   );
   assert.match(
     body,
-    /helper\.setWindowMode\(overlayVisible \? 'launcher' : 'overlay', true\);/,
-    'idle Ask/Hide must open/close the overlay without starting a meeting',
+    /if \(overlayVisible\) \{\s*\n\s*helper\.hideOverlay\(\);\s*\n\s*\} else \{\s*\n\s*helper\.showOverlay\(\);/,
+    'idle Ask/Hide must show/hide ONLY the overlay — never the launcher',
+  );
+  assert.doesNotMatch(
+    body,
+    /helper\.setWindowMode\(/,
+    'Ask/Hide must be fully independent of the launcher window — the launcher ' +
+      'appears only via the pill logo / tray icon',
   );
   // Idle start-meeting: the mic button starts a REAL meeting (recording).
   assert.match(
@@ -363,13 +369,27 @@ test('overlay-ui-action intercepts pill actions by meeting state', () => {
   );
   assert.match(
     body,
-    /\} else \{\s*\n\s*helper\.setWindowMode\('overlay', true\);/,
-    'during a meeting, Ask must re-show the overlay',
+    /\} else \{\s*\n\s*helper\.showOverlay\(\);/,
+    'during a meeting, Ask must re-show the overlay without touching the launcher',
   );
   assert.match(
     body,
     /helper\.forwardOverlayUiAction\(action\);/,
     'unhandled actions must still reach the overlay renderer unchanged',
+  );
+});
+
+test('showOverlay leaves standalone mode so the pill joins the shell', () => {
+  const show = extractMethodBody(windowHelper, 'showOverlay');
+  assert.match(
+    show,
+    /this\.setPillStandalone\(false\);/,
+    'showing the overlay must re-weld the pill (macOS) / join the group path',
+  );
+  assert.match(
+    show,
+    /this\.applyOverlayAuxVisibility\(true\);/,
+    'showOverlay must still bring the aux chrome up with the body (pinned)',
   );
 });
 
@@ -389,6 +409,21 @@ test('TopPill renders mic (idle) / stop (recording) and Ask/Hide labels', () => 
     pill,
     /\{overlayVisible \? "Hide" : "Ask"\}/,
     'center label: Hide while the overlay is visible, Ask while hidden',
+  );
+  assert.match(
+    pill,
+    /#1592EA/,
+    'Ask (overlay hidden) must render on the brand-blue chip background',
+  );
+  assert.match(
+    pill,
+    /"#ffffff"/,
+    'Ask glyphs (label + chevron) must be white on the blue chip',
+  );
+  assert.match(
+    pill,
+    /overlayVisible\s*\?\s*appearance\.chipStyle/,
+    'Hide (overlay visible) must restore the default chip style',
   );
   assert.match(
     pill,
