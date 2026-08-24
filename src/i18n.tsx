@@ -62,6 +62,9 @@ const RU: Record<string, string> = {
     'Search or ask anything...': 'Найти или спросить что угодно...',
     'Link your calendar': 'Подключите календарь',
     'to get notifications for upcoming meetings.': 'чтобы получать уведомления о предстоящих встречах.',
+    'Link your calendar to': 'Подключите календарь, чтобы',
+    'see upcoming events': 'видеть предстоящие события',
+    'Connect calendar': 'Подключить календарь',
 
     // ── AI Providers ──
     'Pick a default model and connect the cloud, local, or custom providers you want available.':

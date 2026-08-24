@@ -19,7 +19,12 @@ import { analytics } from '../../lib/analytics/analytics.service';
  *   the Launcher is already open, the line stays until the next launch
  *   (same mount-only behavior as the old ConnectCalendarButton).
  */
-const LinkCalendarPrompt: React.FC = () => {
+interface LinkCalendarPromptProps {
+    /** Invoked once the Google connect flow succeeds (parent swaps in the Upcoming Calendar card). */
+    onConnected?: () => void;
+}
+
+const LinkCalendarPrompt: React.FC<LinkCalendarPromptProps> = ({ onConnected }) => {
     const t = useT();
     const isLight = useResolvedTheme() === 'light';
     const [visible, setVisible] = useState(false);
@@ -43,6 +48,7 @@ const LinkCalendarPrompt: React.FC = () => {
             if (res.success) {
                 analytics.trackCalendarConnected();
                 setVisible(false);
+                onConnected?.();
             } else if (res.error) {
                 console.error('[LinkCalendarPrompt] Calendar connect failed:', res.error);
             }
