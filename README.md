@@ -628,6 +628,16 @@ DEFAULT_MODEL=gemini-3.1-flash-lite-preview
 npm start
 ```
 
+`npm start` runs a hot-reload dev loop (`app:dev` → Vite dev server + `dev:electron`):
+
+- **Renderer (React `src/`) changes** are applied instantly via Vite HMR — no restart.
+- **Main-process (`electron/`) changes** are rebuilt by esbuild and Electron
+  restarts automatically, so you never have to close and relaunch the app
+  manually. Type-check separately with `npm run typecheck:electron`.
+
+For a one-off full build + launch (slower: includes the production renderer
+build via `tsc` + `vite build`), keep using `npm run electron:dev`.
+
 ### Build (Production)
 
 ```bash

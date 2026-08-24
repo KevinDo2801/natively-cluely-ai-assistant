@@ -27,7 +27,7 @@ const {
   isLauncherResizeComplete,
 } = require(path.join(repoRoot, 'dist-electron/electron/utils/launcherResizeAnimation.js'));
 
-const FROM = { x: 100, y: 100, width: 1200, height: 800 };
+const FROM = { x: 100, y: 100, width: 800, height: 600 };
 const TO = { x: 0, y: 0, width: 1536, height: 864 };
 
 test('the curve is the Material 3 "emphasized" token', () => {

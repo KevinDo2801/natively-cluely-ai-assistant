@@ -1,6 +1,6 @@
 // Launcher window aspect-ratio contract.
 //
-// The launcher is FREELY RESIZABLE but its shape is LOCKED to 3:2. The lock
+// The launcher is FREELY RESIZABLE but its shape is LOCKED to 4:3. The lock
 // itself is enforced natively by BrowserWindow.setAspectRatio() (see
 // WindowHelper.createWindow), which is documented for BOTH darwin and win32 —
 // electron.d.ts tags platform-limited APIs with `@platform`, and
@@ -15,15 +15,15 @@
 // Pure math only — no electron import — so both platform branches are testable
 // on either OS (electron/utils/__tests__/launcherAspect.test.mjs).
 
-export const LAUNCHER_ASPECT_RATIO = 3 / 2;
+export const LAUNCHER_ASPECT_RATIO = 4 / 3;
 
-/** Default launcher size: 1200x800, i.e. exactly 3:2. */
-export const LAUNCHER_DEFAULT_WIDTH = 1200;
+/** Default launcher size: 800x600, i.e. exactly 4:3. */
+export const LAUNCHER_DEFAULT_WIDTH = 800;
 export const LAUNCHER_DEFAULT_HEIGHT = LAUNCHER_DEFAULT_WIDTH / LAUNCHER_ASPECT_RATIO;
 
-// 1200x800 is also the FLOOR: the launcher only scales UP from its default.
+// 800x600 is also the FLOOR: the launcher only scales UP from its default.
 // Deriving the height from the ratio keeps the minimum on-ratio — a min-size
-// that is not 3:2 fights the aspect lock at the corner, because the OS clamps
+// that is not 4:3 fights the aspect lock at the corner, because the OS clamps
 // to the min box and that clamp then violates the ratio.
 export const LAUNCHER_MIN_WIDTH = LAUNCHER_DEFAULT_WIDTH;
 export const LAUNCHER_MIN_HEIGHT = LAUNCHER_MIN_WIDTH / LAUNCHER_ASPECT_RATIO;
@@ -72,7 +72,7 @@ export function clampSizeToAspectRatio(
 }
 
 /**
- * The launcher's "maximize" target: the largest 3:2 box that fits the work area,
+ * The launcher's "maximize" target: the largest 4:3 box that fits the work area,
  * centered in it. Native maximize is deliberately NOT used — it fills the work
  * area exactly and would break the ratio lock on both platforms.
  */

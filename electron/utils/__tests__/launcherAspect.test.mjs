@@ -1,10 +1,10 @@
-// Launcher 3:2 aspect-ratio contract.
+// Launcher 4:3 aspect-ratio contract.
 //
 // The lock has two halves:
-//   1. Native: BrowserWindow.setAspectRatio(3/2) constrains USER drags.
+//   1. Native: BrowserWindow.setAspectRatio(4/3) constrains USER drags.
 //   2. Pure math (this file): every size THIS process picks — default size,
 //      min size, the "maximize" zoom box, and any programmatic resize — must
-//      already be 3:2, because Electron does not apply setAspectRatio to
+//      already be 4:3, because Electron does not apply setAspectRatio to
 //      programmatic setBounds/setSize.
 //
 // Platform-independent by construction: no process.platform, no electron
@@ -33,35 +33,35 @@ const {
 } = require(path.join(repoRoot, 'dist-electron/electron/utils/launcherAspect.js'));
 
 const ratioOf = (w, h) => w / h;
-const isThreeTwo = (w, h, tol = 0.01) =>
+const isFourThree = (w, h, tol = 0.01) =>
   Math.abs(ratioOf(w, h) - LAUNCHER_ASPECT_RATIO) <= tol;
 
-test('the locked ratio is 3:2', () => {
-  assert.equal(LAUNCHER_ASPECT_RATIO, 1.5);
+test('the locked ratio is 4:3', () => {
+  assert.equal(LAUNCHER_ASPECT_RATIO, 4 / 3);
 });
 
-test('1200x800 is both the default AND the minimum — the launcher only scales up', () => {
-  assert.equal(LAUNCHER_DEFAULT_WIDTH, 1200);
-  assert.equal(LAUNCHER_DEFAULT_HEIGHT, 800);
-  assert.equal(LAUNCHER_MIN_WIDTH, 1200);
-  assert.equal(LAUNCHER_MIN_HEIGHT, 800);
-  assert.ok(isThreeTwo(LAUNCHER_DEFAULT_WIDTH, LAUNCHER_DEFAULT_HEIGHT));
-  // A non-3:2 minimum would fight the native lock at the smallest corner drag.
-  assert.ok(isThreeTwo(LAUNCHER_MIN_WIDTH, LAUNCHER_MIN_HEIGHT));
+test('800x600 is both the default AND the minimum — the launcher only scales up', () => {
+  assert.equal(LAUNCHER_DEFAULT_WIDTH, 800);
+  assert.equal(LAUNCHER_DEFAULT_HEIGHT, 600);
+  assert.equal(LAUNCHER_MIN_WIDTH, 800);
+  assert.equal(LAUNCHER_MIN_HEIGHT, 600);
+  assert.ok(isFourThree(LAUNCHER_DEFAULT_WIDTH, LAUNCHER_DEFAULT_HEIGHT));
+  // A non-4:3 minimum would fight the native lock at the smallest corner drag.
+  assert.ok(isFourThree(LAUNCHER_MIN_WIDTH, LAUNCHER_MIN_HEIGHT));
 });
 
 test('fitToAspectRatio is height-limited on a wide box', () => {
-  // 1920x1032 work area (typical 1080p minus taskbar): 1032*1.5 = 1548 <= 1920.
+  // 1920x1032 work area (typical 1080p minus taskbar): 1032*4/3 = 1376 <= 1920.
   const box = fitToAspectRatio(1920, 1032);
-  assert.deepEqual(box, { width: 1548, height: 1032 });
-  assert.ok(isThreeTwo(box.width, box.height));
+  assert.deepEqual(box, { width: 1376, height: 1032 });
+  assert.ok(isFourThree(box.width, box.height));
 });
 
 test('fitToAspectRatio is width-limited on a tall box', () => {
   // Portrait / rotated display: width is the binding constraint.
   const box = fitToAspectRatio(1080, 1800);
-  assert.deepEqual(box, { width: 1080, height: 720 });
-  assert.ok(isThreeTwo(box.width, box.height));
+  assert.deepEqual(box, { width: 1080, height: 810 });
+  assert.ok(isFourThree(box.width, box.height));
 });
 
 test('fitToAspectRatio never exceeds the available box', () => {
@@ -77,26 +77,26 @@ test('fitToAspectRatio never exceeds the available box', () => {
     const box = fitToAspectRatio(w, h);
     assert.ok(box.width <= w, `width ${box.width} > available ${w}`);
     assert.ok(box.height <= h, `height ${box.height} > available ${h}`);
-    assert.ok(isThreeTwo(box.width, box.height), `${box.width}x${box.height} is not 3:2`);
+    assert.ok(isFourThree(box.width, box.height), `${box.width}x${box.height} is not 4:3`);
   }
 });
 
-test('clampSizeToAspectRatio pulls an off-ratio programmatic request back onto 3:2', () => {
+test('clampSizeToAspectRatio pulls an off-ratio programmatic request back onto 4:3', () => {
   // A 16:9-ish request must not produce a 16:9 window.
   const locked = clampSizeToAspectRatio(1600, 900);
-  assert.ok(isThreeTwo(locked.width, locked.height));
+  assert.ok(isFourThree(locked.width, locked.height));
   assert.ok(locked.width <= 1600 && locked.height <= 900);
-  // Already-3:2 requests pass through untouched.
-  assert.deepEqual(clampSizeToAspectRatio(1200, 800), { width: 1200, height: 800 });
+  // Already-4:3 requests pass through untouched.
+  assert.deepEqual(clampSizeToAspectRatio(800, 600), { width: 800, height: 600 });
 });
 
-test('zoomedLauncherBounds fills the work area with the largest centered 3:2 box', () => {
+test('zoomedLauncherBounds fills the work area with the largest centered 4:3 box', () => {
   const workArea = { x: 0, y: 0, width: 1920, height: 1032 };
   const bounds = zoomedLauncherBounds(workArea);
-  assert.ok(isThreeTwo(bounds.width, bounds.height));
+  assert.ok(isFourThree(bounds.width, bounds.height));
   assert.equal(bounds.height, 1032); // height-limited: touches top and bottom
-  assert.equal(bounds.width, 1548);
-  assert.equal(bounds.x, Math.round((1920 - 1548) / 2));
+  assert.equal(bounds.width, 1376);
+  assert.equal(bounds.x, Math.round((1920 - 1376) / 2));
   assert.equal(bounds.y, 0);
 });
 
@@ -104,21 +104,21 @@ test('zoomedLauncherBounds honours a non-zero work area origin (secondary displa
   // Second monitor to the right, with a top menu bar / taskbar offset.
   const workArea = { x: 1920, y: 25, width: 2560, height: 1415 };
   const bounds = zoomedLauncherBounds(workArea);
-  assert.ok(isThreeTwo(bounds.width, bounds.height));
+  assert.ok(isFourThree(bounds.width, bounds.height));
   assert.ok(bounds.x >= workArea.x, 'zoom box must start inside the work area');
   assert.ok(bounds.y >= workArea.y, 'zoom box must not overlap the menu bar/taskbar');
   assert.ok(bounds.x + bounds.width <= workArea.x + workArea.width);
   assert.ok(bounds.y + bounds.height <= workArea.y + workArea.height);
 });
 
-test('zoomedLauncherBounds never returns a box below the 1200x800 minimum', () => {
+test('zoomedLauncherBounds never returns a box below the 800x600 minimum', () => {
   // Work area smaller than the minimum (small laptop / scaled display): the
   // floor wins, so the window can be larger than the work area rather than
   // shrinking below the product minimum.
-  const bounds = zoomedLauncherBounds({ x: 0, y: 0, width: 1024, height: 640 });
+  const bounds = zoomedLauncherBounds({ x: 0, y: 0, width: 700, height: 500 });
   assert.equal(bounds.width, LAUNCHER_MIN_WIDTH);
   assert.equal(bounds.height, LAUNCHER_MIN_HEIGHT);
-  assert.ok(isThreeTwo(bounds.width, bounds.height));
+  assert.ok(isFourThree(bounds.width, bounds.height));
 });
 
 // ── Source assertions: the native half of the lock ──────────────────────────
@@ -135,7 +135,7 @@ test('createWindow applies the native aspect lock via the shared constant', () =
     windowHelperSource,
     /this\.setLauncherAspectLock\(true\)/,
     'BUG: createWindow must arm the aspect lock — without it, user drags are unconstrained and ' +
-      'the 3:2 lock only exists on paper.',
+      'the 4:3 lock only exists on paper.',
   );
   assert.match(
     windowHelperSource,
@@ -145,12 +145,12 @@ test('createWindow applies the native aspect lock via the shared constant', () =
   assert.match(
     windowHelperSource,
     /minWidth:\s*LAUNCHER_MIN_WIDTH[\s\S]{0,160}minHeight:\s*LAUNCHER_MIN_HEIGHT/,
-    'BUG: min size must come from the 3:2-derived constants; a hand-typed non-3:2 minimum ' +
+    'BUG: min size must come from the 4:3-derived constants; a hand-typed non-4:3 minimum ' +
       'fights the aspect lock at the smallest corner drag.',
   );
 });
 
-test('the in-app maximize button is the ONE sanctioned exemption from 3:2', () => {
+test('the in-app maximize button is the ONE sanctioned exemption from 4:3', () => {
   const maximizeBody = windowHelperSource.slice(
     windowHelperSource.indexOf('public maximizeWindow('),
     windowHelperSource.indexOf('  // Smoothly expands/contracts the launcher'),
@@ -160,7 +160,7 @@ test('the in-app maximize button is the ONE sanctioned exemption from 3:2', () =
     maximizeBody,
     /animateLauncherBounds\([\s\S]{0,40}this\.getDisplayWorkArea\(/,
     "BUG: the maximize button must fill the work area at the display's own shape — that is the " +
-      'one deliberate exception to the 3:2 lock.',
+      'one deliberate exception to the 4:3 lock.',
   );
   assert.match(
     maximizeBody,
@@ -215,12 +215,12 @@ test('the ratio enforcement stands down while the fill is in effect', () => {
   assert.match(
     enforceBody,
     /if \(this\.launcherFilled\) return;/,
-    'BUG: without this the enforcement immediately claws the filled window back to 3:2 and the ' +
+    'BUG: without this the enforcement immediately claws the filled window back to 4:3 and the ' +
       'maximize button appears to do nothing.',
   );
 });
 
-test('programmatic launcher resizes are normalized to 3:2', () => {
+test('programmatic launcher resizes are normalized to 4:3', () => {
   const setDims = windowHelperSource.slice(
     windowHelperSource.indexOf('public setWindowDimensions('),
     windowHelperSource.indexOf('public setOverlayDimensions('),
@@ -229,6 +229,6 @@ test('programmatic launcher resizes are normalized to 3:2', () => {
     setDims,
     /clampSizeToAspectRatio\(/,
     'BUG: setWindowDimensions() can target the launcher, and setAspectRatio does not apply to ' +
-      'programmatic setBounds — the size must be clamped onto 3:2 here.',
+      'programmatic setBounds — the size must be clamped onto 4:3 here.',
   );
 });

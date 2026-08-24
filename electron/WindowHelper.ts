@@ -56,9 +56,9 @@ export class WindowHelper {
   // Position/Size tracking for Launcher
   private launcherPosition: { x: number; y: number } | null = null;
   private launcherSize: { width: number; height: number } | null = null;
-  // "Maximize" for the launcher is a ratio-preserving ZOOM (largest 3:2 box in
+  // "Maximize" for the launcher is a ratio-preserving ZOOM (largest 4:3 box in
   // the work area), not a native maximize — native maximize fills the work area
-  // exactly and would break the 3:2 lock. These two fields are the zoom state
+  // exactly and would break the 4:3 lock. These two fields are the zoom state
   // that native isMaximized() used to provide.
   private launcherZoomed = false;
   // Last bounds the launcher had while NEITHER zoomed nor OS-maximized — the
@@ -71,13 +71,13 @@ export class WindowHelper {
   // unmaximize()/setBounds(), which re-fire 'resize'/'unmaximize' on the very
   // window being corrected.
   private launcherRatioCorrecting = false;
-  // THE ONE SANCTIONED EXCEPTION to the 3:2 lock: the user pressed the in-app
+  // THE ONE SANCTIONED EXCEPTION to the 4:3 lock: the user pressed the in-app
   // maximize button, which fills the work area at whatever shape the display is.
   // Set only by maximizeWindow(). Because that fill is a setBounds and not a
   // native maximize (see maximizeWindow for why), the OS knows nothing about it
   // and this flag is the only record of the state.
   private launcherFilled = false;
-  // Whether the native 3:2 constraint is currently armed.
+  // Whether the native 4:3 constraint is currently armed.
   private launcherAspectLockArmed = false;
   // Main-process-driven maximize/restore animation (animateLauncherBounds).
   private launcherResizeTimer: NodeJS.Timeout | null = null;
@@ -335,7 +335,7 @@ export class WindowHelper {
 
     // setAspectRatio constrains USER drags only — Electron explicitly does not
     // apply it to programmatic setBounds/setSize. So any programmatic launcher
-    // resize has to land on-ratio itself, or the 3:2 lock would hold for the
+    // resize has to land on-ratio itself, or the 4:3 lock would hold for the
     // mouse and silently break here.
     if (activeWindow === this.launcherWindow) {
       const locked = clampSizeToAspectRatio(newWidth, newHeight);
@@ -471,8 +471,8 @@ export class WindowHelper {
     const primaryDisplay = screen.getPrimaryDisplay();
     const workArea = primaryDisplay.workArea;
 
-    // The launcher is freely resizable but SHAPE-LOCKED to 3:2 (see
-    // electron/utils/launcherAspect.ts). 1200x800 is that ratio.
+    // The launcher is freely resizable but SHAPE-LOCKED to 4:3 (see
+    // electron/utils/launcherAspect.ts). 800x600 is that ratio.
     const width = LAUNCHER_DEFAULT_WIDTH;
     const height = LAUNCHER_DEFAULT_HEIGHT;
 
@@ -490,7 +490,7 @@ export class WindowHelper {
       height: height,
       x: x,
       y: y,
-      // Min size is 3:2 as well (600x400). A non-3:2 minimum would fight the
+      // Min size is 4:3 as well (800x600). A non-4:3 minimum would fight the
       // aspect lock at the smallest corner drag.
       minWidth: LAUNCHER_MIN_WIDTH,
       minHeight: LAUNCHER_MIN_HEIGHT,
@@ -599,8 +599,8 @@ export class WindowHelper {
     // a taskbar button until the user toggled the setting off and on again.
     this.syncLauncherTaskbarForStealth();
 
-    // 3:2 SHAPE LOCK. The user can scale the launcher freely upward from the
-    // 1200x800 minimum, but every user drag stays 3:2 — the OS constrains the
+    // 4:3 SHAPE LOCK. The user can scale the launcher freely upward from the
+    // 800x600 minimum, but every user drag stays 4:3 — the OS constrains the
     // live resize itself (NSWindow.aspectRatio on macOS, WM_SIZING on Windows;
     // electron.d.ts tags platform-limited APIs with `@platform` and
     // setAspectRatio carries none, i.e. both platforms).
@@ -1080,12 +1080,12 @@ export class WindowHelper {
       });
 
       // Sync maximize state to renderer so WindowControls stays in sync (Windows/Linux only).
-      // These fire both for the in-app maximize button (allowed to be non-3:2)
+      // These fire both for the in-app maximize button (allowed to be non-4:3)
       // and for OS-initiated maximizes such as Win+Up or edge snap (corrected
-      // back to 3:2 by enforceLauncherAspectRatio).
+      // back to 4:3 by enforceLauncherAspectRatio).
       this.launcherWindow.on('maximize', () => {
         const launcher = this.launcherWindow;
-        // enforceLauncherAspectRatio() converts an OS maximize into the 3:2
+        // enforceLauncherAspectRatio() converts an OS maximize into the 4:3
         // zoom box; while that correction runs it owns the zoom state.
         if (this.launcherRatioCorrecting) return;
         this.launcherZoomed = false;
@@ -1096,7 +1096,7 @@ export class WindowHelper {
       });
       this.launcherWindow.on('unmaximize', () => {
         const launcher = this.launcherWindow;
-        // Our own correction calls unmaximize() on the way to the 3:2 zoom box;
+        // Our own correction calls unmaximize() on the way to the 4:3 zoom box;
         // that is not the user leaving the zoomed state.
         if (this.launcherRatioCorrecting) return;
         this.launcherZoomed = false;
@@ -1115,8 +1115,8 @@ export class WindowHelper {
       // Reset so a later launcher recreation doesn't inherit a stale "preview
       // active" flag with no corresponding transparent/vibrancy-off window.
       this.launcherOpacityPreviewActive = false;
-      // Same for the 3:2 zoom state — a recreated launcher starts at the
-      // default 3:2 size, not zoomed, with no restore bounds to return to.
+      // Same for the 4:3 zoom state — a recreated launcher starts at the
+      // default 4:3 size, not zoomed, with no restore bounds to return to.
       this.launcherZoomed = false;
       this.launcherNormalBounds = null;
       this.launcherFilled = false;
@@ -1237,7 +1237,7 @@ export class WindowHelper {
     const win = this.launcherWindow;
     if (!win || win.isDestroyed()) return false;
     // Three ways to be "big": the button's setBounds fill (the OS knows nothing
-    // about it, so it must be tracked), our 3:2 zoom, or a real OS maximize.
+    // about it, so it must be tracked), our 4:3 zoom, or a real OS maximize.
     return this.launcherFilled || this.launcherZoomed || win.isMaximized();
   }
 
@@ -2493,9 +2493,9 @@ export class WindowHelper {
     win.minimize();
   }
 
-  // The in-app maximize button — and ONLY it — is exempt from the 3:2 lock: it
+  // The in-app maximize button — and ONLY it — is exempt from the 4:3 lock: it
   // fills the work area at the display's own shape. Every other route to a big
-  // window (Win+Up, title-bar double-click, snap, drag) stays 3:2 via
+  // window (Win+Up, title-bar double-click, snap, drag) stays 4:3 via
   // enforceLauncherAspectRatio().
   //
   // IMPLEMENTED WITH setBounds, NOT native maximize(). The launcher is a
@@ -2526,7 +2526,7 @@ export class WindowHelper {
       if (win.isMaximized()) win.unmaximize();
 
       if (this.launcherZoomed) {
-        // Entering fill from a 3:2 zoom: the current bounds are the zoom box, so
+        // Entering fill from a 4:3 zoom: the current bounds are the zoom box, so
         // fall back to the tracked pre-zoom bounds instead.
         this.launcherNormalBounds = this.launcherNormalBounds ?? this.defaultLauncherBounds(win);
         this.launcherZoomed = false;
@@ -2633,7 +2633,7 @@ export class WindowHelper {
     this.launcherAnimating = false;
   }
 
-  // Arms/clears the native 3:2 constraint (0 is Electron's documented "clear").
+  // Arms/clears the native 4:3 constraint (0 is Electron's documented "clear").
   // Deduped: the fill path deliberately leaves the constraint ARMED, because
   // Electron does not apply it to programmatic setBounds — so filling needs no
   // toggling, and every avoided toggle is one less native frame change that
@@ -2664,7 +2664,7 @@ export class WindowHelper {
     this.launcherNormalBounds = win.getBounds();
   }
 
-  // Default 3:2 launcher box, centered on the window's current display. Used as
+  // Default 4:3 launcher box, centered on the window's current display. Used as
   // the un-zoom target when no normal bounds were ever recorded.
   private defaultLauncherBounds(win: BrowserWindow): Electron.Rectangle {
     const workArea = this.getDisplayWorkArea(win.getBounds());
@@ -2676,7 +2676,7 @@ export class WindowHelper {
     };
   }
 
-  // Last line of defence for the 3:2 lock.
+  // Last line of defence for the 4:3 lock.
   //
   // setAspectRatio only constrains sizes that go through the OS resize-drag
   // path (WM_SIZING on Windows, NSWindow.aspectRatio on macOS). Anything that
@@ -2686,11 +2686,11 @@ export class WindowHelper {
   //
   // So whenever the launcher ends up off-ratio, put it back:
   //   • maximized → unmaximize and use the ratio-preserving zoom box instead
-  //     (the largest 3:2 box in the work area).
-  //   • otherwise → shrink onto 3:2 in place, keeping the origin.
+  //     (the largest 4:3 box in the work area).
+  //   • otherwise → shrink onto 4:3 in place, keeping the origin.
   //
   // EXCEPT while the in-app maximize button's fill is in effect (see
-  // maximizeWindow) — that one state is allowed to be non-3:2.
+  // maximizeWindow) — that one state is allowed to be non-4:3.
   private enforceLauncherAspectRatio(): void {
     const win = this.launcherWindow;
     if (!win || win.isDestroyed()) return;
@@ -2701,7 +2701,7 @@ export class WindowHelper {
     if (bounds.width <= 0 || bounds.height <= 0) return;
     const ratio = bounds.width / bounds.height;
     // Tolerance covers integer rounding at small sizes; a real violation
-    // (16:9 vs 3:2) is ~0.28 off, far outside this.
+    // (16:9 vs 4:3) is ~0.44 off, far outside this.
     if (Math.abs(ratio - LAUNCHER_ASPECT_RATIO) <= 0.01) return;
 
     this.launcherRatioCorrecting = true;

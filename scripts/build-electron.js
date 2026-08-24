@@ -162,8 +162,38 @@ const copyAssets = () => {
   }
 };
 
+/**
+ * Create an esbuild watch context for the Electron main process.
+ *
+ * When `onBuildEnd` is provided, it is called with the result of EVERY build —
+ * the initial one and each watch rebuild — so a caller (scripts/dev-electron.js)
+ * can react exactly when a build lands instead of polling the filesystem
+ * (fs.watch on Windows delivers write storms from large bundles as delayed,
+ * duplicate events, which caused spurious restarts).
+ */
+function createWatchContext(onBuildEnd) {
+  const plugins = [...buildOptions.plugins];
+  if (typeof onBuildEnd === 'function') {
+    plugins.push({
+      name: 'dev-electron-on-build-end',
+      setup(build) {
+        build.onEnd((result) => {
+          try {
+            onBuildEnd(result);
+          } catch (err) {
+            console.error('[build-electron] onBuildEnd hook threw:', err);
+          }
+        });
+      },
+    });
+  }
+  return context({ ...buildOptions, plugins });
+}
+
+module.exports = { createWatchContext, copyAssets };
+
 if (WATCH) {
-  context(buildOptions).then(async (ctx) => {
+  createWatchContext().then(async (ctx) => {
     await ctx.watch();
     copyAssets();
     // Deliberately no timing here: ctx.watch() returns once the watcher is armed,
