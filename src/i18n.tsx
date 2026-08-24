@@ -60,10 +60,8 @@ const RU: Record<string, string> = {
     'Undetectable': 'Скрыт от захвата',
     'Today': 'Сегодня',
     'Search or ask anything...': 'Найти или спросить что угодно...',
-    'Upcoming features': 'Скоро в приложении',
-    'Link your calendar to': 'Подключите календарь, чтобы',
-    'see upcoming events': 'видеть предстоящие события',
-    'Connect calendar': 'Подключить календарь',
+    'Link your calendar': 'Подключите календарь',
+    'to get notifications for upcoming meetings.': 'чтобы получать уведомления о предстоящих встречах.',
 
     // ── AI Providers ──
     'Pick a default model and connect the cloud, local, or custom providers you want available.':

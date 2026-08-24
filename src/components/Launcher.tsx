@@ -3,14 +3,12 @@ import { useT } from '../i18n';
 import { ToggleLeft, ToggleRight, Search, Calendar, ArrowRight, ArrowLeft, MoreHorizontal, Globe, Clock, ChevronRight, Settings, LayoutGrid, RefreshCw, Eye, EyeOff, Ghost, Plus, Mail, Link as LinkIcon, ChevronDown, Trash2, Bell, Download, DownloadCloud, CheckCircle, AlertCircle, User, UserSearch, Sparkles, ArrowUpRight } from 'lucide-react';
 import { generateMeetingPDF } from '../utils/pdfGenerator';
 import icon from "./icon.png";
-import mainui from "../UI_comp/mainui.png";
-import UpcomingCalendarCard from './ui/UpcomingCalendarCard';
+import LinkCalendarPrompt from './ui/LinkCalendarPrompt';
 import { useToggleInit } from './settings/useToggleInit';
 import MeetingDetails from './MeetingDetails';
 import TopSearchPill from './TopSearchPill';
 import GlobalChatOverlay from './GlobalChatOverlay';
 import { motion, AnimatePresence } from 'framer-motion';
-import { FeatureSpotlight } from './FeatureSpotlight';
 import { analytics } from '../lib/analytics/analytics.service'; // Added analytics import
 import { useShortcuts } from '../hooks/useShortcuts';
 import { useResolvedTheme } from '../hooks/useResolvedTheme';
@@ -86,8 +84,6 @@ const Launcher: React.FC<LauncherProps> = ({ onStartMeeting, onOpenSettings, onO
     const [isDetectable, setIsDetectable] = useState(false);
     const [isMeetingActive, setIsMeetingActive] = useState(false);
     const [selectedMeeting, setSelectedMeeting] = useState<Meeting | null>(null);
-    const [upcomingEvents, setUpcomingEvents] = useState<any[]>([]);
-    const [isCalendarConnected, setIsCalendarConnected] = useState(false);
     const [isRefreshing, setIsRefreshing] = useState(false);
     const [showNotification, setShowNotification] = useState(false);
 
@@ -108,12 +104,6 @@ const Launcher: React.FC<LauncherProps> = ({ onStartMeeting, onOpenSettings, onO
         }
     };
 
-    const fetchEvents = () => {
-        if (window.electronAPI && window.electronAPI.getUpcomingEvents) {
-            window.electronAPI.getUpcomingEvents().then(setUpcomingEvents).catch(err => console.error("Failed to fetch events:", err));
-        }
-    }
-
     const handleRefresh = async () => {
         setIsRefreshing(true);
         analytics.trackCommandExecuted('refresh_calendar');
@@ -121,7 +111,6 @@ const Launcher: React.FC<LauncherProps> = ({ onStartMeeting, onOpenSettings, onO
             if (window.electronAPI && window.electronAPI.calendarRefresh) {
                 setShowNotification(true);
                 await window.electronAPI.calendarRefresh();
-                fetchEvents();
                 fetchMeetings();
                 setTimeout(() => {
                     setShowNotification(false);
@@ -191,7 +180,6 @@ const Launcher: React.FC<LauncherProps> = ({ onStartMeeting, onOpenSettings, onO
         }
 
         fetchMeetings();
-        fetchEvents();
 
         // Sync initial meeting active state — guarded so unmounted component isn't written to
         if (window.electronAPI?.getMeetingActive) {
@@ -215,9 +203,6 @@ const Launcher: React.FC<LauncherProps> = ({ onStartMeeting, onOpenSettings, onO
             fetchMeetings();
         });
 
-        // Simple polling for events every minute
-        const interval = setInterval(fetchEvents, 60000);
-
         // Orchestrator: foreground/background tracking via window blur/focus.
         // On macOS Cmd+H and Cmd+Tab the BrowserWindow fires 'blur'/'focus'
         // (mapped to window blur/focus in renderer).
@@ -239,7 +224,6 @@ const Launcher: React.FC<LauncherProps> = ({ onStartMeeting, onOpenSettings, onO
             if (removeMeetingsListener) removeMeetingsListener();
             if (removeUndetectableListener) removeUndetectableListener();
             if (removeMeetingStateListener) removeMeetingStateListener();
-            clearInterval(interval);
             window.removeEventListener('focus', onFocus);
             window.removeEventListener('blur', onBlur);
             clearInterval(usageTimer);
@@ -276,15 +260,6 @@ const Launcher: React.FC<LauncherProps> = ({ onStartMeeting, onOpenSettings, onO
     // Declared above the `!window.electronAPI` early return below — a hook after
     // that guard would break the rules of hooks on the error path.
     const detectableToggleInit = useToggleInit();
-
-    // Upcoming meetings (in-progress up to 5 min ago, or any future event in the API's 7-day
-    // window), sorted soonest-first. Cap at 3 for the right-side calendar card peek stack.
-    const upcomingMeetings = upcomingEvents
-        .filter(e => new Date(e.startTime).getTime() - Date.now() > -5 * 60000)
-        .sort((a, b) => new Date(a.startTime).getTime() - new Date(b.startTime).getTime());
-    const visibleMeetings = upcomingMeetings.slice(0, 3);
-    const nextMeeting = visibleMeetings[0];
-    const moreMeetingsCount = Math.max(0, upcomingMeetings.length - visibleMeetings.length);
 
     if (!window.electronAPI) {
         return <div className="text-white p-10">Error: Electron API not initialized. Check preload script.</div>;
@@ -954,25 +929,9 @@ const Launcher: React.FC<LauncherProps> = ({ onStartMeeting, onOpenSettings, onO
                                         </button>
                                     </div>
 
-                                    {/* 2. Hero Section Cards */}
-                                    <div className="grid grid-cols-1 md:grid-cols-3 gap-3 h-[198px]">
-                                        {/* Default Intro — natively support & upcoming features.
-                                            Calendar "Up Next" lives in Settings → Calendar, not here. */}
-                                        <div className="md:col-span-2 h-full">
-                                            <FeatureSpotlight />
-                                        </div>
-
-
-
-                                        {/* Right Secondary Card — violet-tinted, "Calendar Connected" + peeking next meeting */}
-                                        <UpcomingCalendarCard
-                                            className="md:col-span-1"
-                                            isConnected={isCalendarConnected}
-                                            onConnect={() => setIsCalendarConnected(true)}
-                                            meetings={visibleMeetings}
-                                            totalCount={upcomingMeetings.length}
-                                        />
-                                    </div>
+                                    {/* 2. Calendar link prompt — single line, hidden once a calendar is
+                                        connected. Calendar "Up Next" lives in Settings → Calendar. */}
+                                    <LinkCalendarPrompt />
                                 </div>
                             </section>
 
