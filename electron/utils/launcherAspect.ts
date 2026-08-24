@@ -17,11 +17,11 @@
 
 export const LAUNCHER_ASPECT_RATIO = 4 / 3;
 
-/** Default launcher size: 800x600, i.e. exactly 4:3. */
-export const LAUNCHER_DEFAULT_WIDTH = 800;
+/** Default launcher size: 960x720, i.e. exactly 4:3. */
+export const LAUNCHER_DEFAULT_WIDTH = 960;
 export const LAUNCHER_DEFAULT_HEIGHT = LAUNCHER_DEFAULT_WIDTH / LAUNCHER_ASPECT_RATIO;
 
-// 800x600 is also the FLOOR: the launcher only scales UP from its default.
+// 960x720 is also the FLOOR: the launcher only scales UP from its default.
 // Deriving the height from the ratio keeps the minimum on-ratio — a min-size
 // that is not 4:3 fights the aspect lock at the corner, because the OS clamps
 // to the min box and that clamp then violates the ratio.

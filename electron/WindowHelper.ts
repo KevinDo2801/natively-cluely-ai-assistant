@@ -503,7 +503,7 @@ export class WindowHelper {
       height: height,
       x: x,
       y: y,
-      // Min size is 4:3 as well (800x600). A non-4:3 minimum would fight the
+      // Min size is 4:3 as well (960x720). A non-4:3 minimum would fight the
       // aspect lock at the smallest corner drag.
       minWidth: LAUNCHER_MIN_WIDTH,
       minHeight: LAUNCHER_MIN_HEIGHT,
@@ -613,7 +613,7 @@ export class WindowHelper {
     this.syncLauncherTaskbarForStealth();
 
     // 4:3 SHAPE LOCK. The user can scale the launcher freely upward from the
-    // 800x600 minimum, but every user drag stays 4:3 — the OS constrains the
+    // 960x720 minimum, but every user drag stays 4:3 — the OS constrains the
     // live resize itself (NSWindow.aspectRatio on macOS, WM_SIZING on Windows;
     // electron.d.ts tags platform-limited APIs with `@platform` and
     // setAspectRatio carries none, i.e. both platforms).
@@ -2026,7 +2026,16 @@ export class WindowHelper {
     const apply = (win: BrowserWindow | null, show: boolean) => {
       if (!win || win.isDestroyed()) return;
       if (show && !win.isVisible()) win.showInactive();
-      else if (!show && win.isVisible()) win.hide();
+      else if (!show && win.isVisible()) {
+        // The standalone pill floats on its own — the mirroring path must
+        // never take it down. Hiding it here would strand it: the flag stays
+        // `pillStandalone === true`, so the later syncPillAlwaysVisibility →
+        // setPillStandalone(true) early-returns and the pill is never shown
+        // again ("click the pill logo, the launcher appears, the pill
+        // disappears"). Only the toggle follows the body down.
+        if (win === this.pillWindow && this.pillStandalone) return;
+        win.hide();
+      }
     };
     apply(this.pillWindow, want);
     apply(this.toggleWindow, want && this.toggleHasContent);
@@ -2053,6 +2062,15 @@ export class WindowHelper {
   private syncOverlayAuxVisibility(): void {
     const overlay = this.overlayWindow;
     const want = !!overlay && !overlay.isDestroyed() && overlay.isVisible();
+    // Standalone pill: never take it down with a derived hide (the overlay's
+    // 'hide' event routes here). Hiding it and re-showing it in the same
+    // click is the Ask/Hide blink — the floating pill is owned by
+    // setPillStandalone, not by this mirror. Only the toggle follows the body.
+    if (this.pillStandalone && !want) {
+      const toggle = this.toggleWindow;
+      if (toggle && !toggle.isDestroyed() && toggle.isVisible()) toggle.hide();
+      return;
+    }
     this.applyOverlayAuxVisibility(want);
     // Standalone-pill backstop: the overlay-mirroring path must never take the
     // floating pill down (the overlay 'hide' event handler routes here). If the
@@ -2129,8 +2147,13 @@ export class WindowHelper {
    * Enter/leave standalone mode for the pill. Entering detaches it from the
    * overlay (macOS weld) and floats it; leaving re-welds it so the group is
    * intact before the next overlay show.
+   *
+   * `keepVisible` (leaving only): re-weld WITHOUT hiding the pill window.
+   * Used by the Ask/Hide toggle — the overlay becomes visible in the same
+   * synchronous block, so a hide→re-show here is the visible pill blink
+   * (the window is an OS surface; hiding and re-showing it flashes).
    */
-  private setPillStandalone(want: boolean): void {
+  private setPillStandalone(want: boolean, keepVisible = false): void {
     if (this.pillStandalone === want) return;
     const pill = this.pillWindow;
     if (!pill || pill.isDestroyed()) return;
@@ -2161,7 +2184,7 @@ export class WindowHelper {
           console.error('[WindowHelper] Failed to re-weld pill:', e);
         }
       }
-      if (pill.isVisible()) pill.hide();
+      if (!keepVisible && pill.isVisible()) pill.hide();
       this.pillStandalone = false;
     }
   }
@@ -2210,7 +2233,10 @@ export class WindowHelper {
     if (!this.overlayWindow || this.overlayWindow.isDestroyed()) return;
     // Leave standalone-pill mode: the shell is coming up, so the pill joins
     // the group (re-welded on macOS) instead of floating detached.
-    this.setPillStandalone(false);
+    // keepVisible: the overlay becomes visible in this same synchronous block,
+    // so hiding the pill here and re-showing it below is the visible Ask/Hide
+    // blink — applyOverlayAuxVisibility(true) repositions it instead.
+    this.setPillStandalone(false, true);
 
     // Restore opacity in case it was zeroed by hideMainWindow() before a screenshot.
     this.overlayWindow.setOpacity(1);
@@ -2252,12 +2278,22 @@ export class WindowHelper {
     // on Windows, cannot type into any other app). Stop it here and on every
     // overlay→launcher switch. No-op when not engaged.
     this.stopStealthTyping();
-    // Leave standalone mode first: this hides the whole surface (screenshot
-    // capture / tray-hide), so a floating pill must not survive it.
-    this.setPillStandalone(false);
-    // Aux chrome first, in the same block: the pill/toggle are always-on-top,
-    // so a body-then-pill sequence leaves them briefly floating alone.
-    this.applyOverlayAuxVisibility(false);
+    // ALWAYS-VISIBLE PILL: the pill must SURVIVE this hide AND stay visible the
+    // whole time — hiding it and re-showing it in the same click is the
+    // Ask/Hide blink users see (the pill is its own OS window; a hide→show
+    // flashes). Promote it to standalone FIRST so the overlay's parent.hide()
+    // (macOS weld) cannot take it down, and hide only the toggle — the pill's
+    // OS visibility never changes here, only its label does (pushPillState).
+    if (this.pillAlwaysVisible && !this.appState.getUndetectable()) {
+      this.setPillStandalone(true);
+      const toggle = this.toggleWindow;
+      if (toggle && !toggle.isDestroyed() && toggle.isVisible()) toggle.hide();
+    } else {
+      // Setting off (or stealth on): the pill belongs to the overlay-mirroring
+      // path and goes down with the body, exactly as before this feature.
+      this.setPillStandalone(false);
+      this.applyOverlayAuxVisibility(false);
+    }
     if (this.overlayWindow && !this.overlayWindow.isDestroyed()) {
       this.overlayWindow.hide();
     }
@@ -2387,7 +2423,9 @@ export class WindowHelper {
     // Leave standalone-pill mode: the shell is coming up, so the pill must be
     // re-welded (macOS) before the group show below — a child of the shell can
     // never lag or be left behind once the group path takes over.
-    this.setPillStandalone(false);
+    // keepVisible: the group show lands in this same synchronous block, so a
+    // hide→re-show here would be the same pill blink the Ask/Hide toggle had.
+    this.setPillStandalone(false, true);
     this.currentWindowMode = 'overlay';
     KeybindManager.getInstance().setMode('overlay'); // Adapted from public PR #123 — verify premium interaction
 

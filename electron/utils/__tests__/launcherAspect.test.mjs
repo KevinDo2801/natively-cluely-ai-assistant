@@ -40,11 +40,11 @@ test('the locked ratio is 4:3', () => {
   assert.equal(LAUNCHER_ASPECT_RATIO, 4 / 3);
 });
 
-test('800x600 is both the default AND the minimum — the launcher only scales up', () => {
-  assert.equal(LAUNCHER_DEFAULT_WIDTH, 800);
-  assert.equal(LAUNCHER_DEFAULT_HEIGHT, 600);
-  assert.equal(LAUNCHER_MIN_WIDTH, 800);
-  assert.equal(LAUNCHER_MIN_HEIGHT, 600);
+test('960x720 is both the default AND the minimum — the launcher only scales up', () => {
+  assert.equal(LAUNCHER_DEFAULT_WIDTH, 960);
+  assert.equal(LAUNCHER_DEFAULT_HEIGHT, 720);
+  assert.equal(LAUNCHER_MIN_WIDTH, 960);
+  assert.equal(LAUNCHER_MIN_HEIGHT, 720);
   assert.ok(isFourThree(LAUNCHER_DEFAULT_WIDTH, LAUNCHER_DEFAULT_HEIGHT));
   // A non-4:3 minimum would fight the native lock at the smallest corner drag.
   assert.ok(isFourThree(LAUNCHER_MIN_WIDTH, LAUNCHER_MIN_HEIGHT));
@@ -72,6 +72,7 @@ test('fitToAspectRatio never exceeds the available box', () => {
     [1366, 728],
     [3840, 2160],
     [800, 600],
+    [960, 720],
   ];
   for (const [w, h] of cases) {
     const box = fitToAspectRatio(w, h);
@@ -87,7 +88,7 @@ test('clampSizeToAspectRatio pulls an off-ratio programmatic request back onto 4
   assert.ok(isFourThree(locked.width, locked.height));
   assert.ok(locked.width <= 1600 && locked.height <= 900);
   // Already-4:3 requests pass through untouched.
-  assert.deepEqual(clampSizeToAspectRatio(800, 600), { width: 800, height: 600 });
+  assert.deepEqual(clampSizeToAspectRatio(960, 720), { width: 960, height: 720 });
 });
 
 test('zoomedLauncherBounds fills the work area with the largest centered 4:3 box', () => {
@@ -111,7 +112,7 @@ test('zoomedLauncherBounds honours a non-zero work area origin (secondary displa
   assert.ok(bounds.y + bounds.height <= workArea.y + workArea.height);
 });
 
-test('zoomedLauncherBounds never returns a box below the 800x600 minimum', () => {
+test('zoomedLauncherBounds never returns a box below the 960x720 minimum', () => {
   // Work area smaller than the minimum (small laptop / scaled display): the
   // floor wins, so the window can be larger than the work area rather than
   // shrinking below the product minimum.

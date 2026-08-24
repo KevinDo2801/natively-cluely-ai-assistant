@@ -177,7 +177,7 @@ test('setPillStandalone un-welds on macOS and re-welds when the shell returns', 
 
 test('switchToOverlay leaves standalone mode before the group show', () => {
   const overlay = extractMethodBody(windowHelper, 'switchToOverlay');
-  const leave = overlay.indexOf('this.setPillStandalone(false)');
+  const leave = overlay.indexOf('this.setPillStandalone(false');
   assert.notEqual(leave, -1, 'switchToOverlay must leave standalone mode');
   const groupShow = overlay.indexOf('this.applyOverlayAuxVisibility(true)');
   assert.ok(
@@ -383,13 +383,83 @@ test('showOverlay leaves standalone mode so the pill joins the shell', () => {
   const show = extractMethodBody(windowHelper, 'showOverlay');
   assert.match(
     show,
-    /this\.setPillStandalone\(false\);/,
-    'showing the overlay must re-weld the pill (macOS) / join the group path',
+    /this\.setPillStandalone\(false, true\);/,
+    'showing the overlay must re-weld the pill (macOS) / join the group path ' +
+      'WITHOUT hiding it — a hide→re-show in the same click is the Ask/Hide blink',
   );
   assert.match(
     show,
     /this\.applyOverlayAuxVisibility\(true\);/,
     'showOverlay must still bring the aux chrome up with the body (pinned)',
+  );
+});
+
+test('clicking the pill logo must never strand the pill hidden', () => {
+  // Reported bug: click the Natively icon on the floating pill → the launcher
+  // appears → the pill disappears. Root cause: switchToLauncher → the explicit
+  // applyOverlayAuxVisibility(false) hid the pill while `pillStandalone` was
+  // still true, then syncPillAlwaysVisibility → setPillStandalone(true)
+  // early-returned (flag unchanged) — so nothing ever re-showed the pill.
+  // The mirroring primitive must skip a standalone pill entirely.
+  const apply = extractMethodBody(windowHelper, 'applyOverlayAuxVisibility');
+  assert.match(
+    apply,
+    /win === this\.pillWindow && this\.pillStandalone\) return;/,
+    'a derived/explicit hide must never take a floating standalone pill down — ' +
+      'the stale-flag early-return would strand it hidden',
+  );
+  // The launcher swap must still re-evaluate the pill AFTER the overlay hides
+  // (the re-float settle point) — unchanged invariant, re-pinned.
+  const launcher = extractMethodBody(windowHelper, 'switchToLauncher');
+  assert.match(
+    launcher,
+    /this\.syncPillAlwaysVisibility\(\);/,
+    'switchToLauncher must still re-evaluate the pill after the swap settles',
+  );
+});
+
+test('Ask/Hide toggles never hide the pill window (no blink)', () => {
+  // The reported "pill blinks when I click Ask/Hide": the toggle paths were
+  // hiding the pill OS window and re-showing it in the same synchronous block.
+  // The pill is its own window; a hide→show flashes (DWM/WindowServer round
+  // trip). The fix: keep the pill VISIBLE the whole time — only the label
+  // changes (pushPillState). Assert the no-hide contract on every toggle path.
+  const show = extractMethodBody(windowHelper, 'showOverlay');
+  assert.match(
+    show,
+    /this\.setPillStandalone\(false, true\);/,
+    'Ask (showOverlay) must re-weld WITHOUT hiding the floating pill',
+  );
+  assert.doesNotMatch(
+    show,
+    /this\.setPillStandalone\(false\);/,
+    'Ask must not use the hiding leave-standalone form',
+  );
+
+  // Hide (hideOverlay): the always-visible pill must STAY visible — promote it
+  // to standalone FIRST (so the overlay hide cannot take it down on macOS) and
+  // hide only the toggle. The setting-off / stealth branch may still hide it
+  // with the body (unchanged, pinned elsewhere).
+  const hide = extractMethodBody(windowHelper, 'hideOverlay');
+  const promoteBeforeBodyHide = hide.indexOf('this.setPillStandalone(true)');
+  const bodyHide = hide.indexOf('this.overlayWindow.hide()');
+  assert.ok(
+    promoteBeforeBodyHide !== -1 && bodyHide !== -1 && promoteBeforeBodyHide < bodyHide,
+    'Hide must promote the pill to standalone BEFORE hiding the body, so the ' +
+      'pill is never taken down and re-shown',
+  );
+  assert.match(
+    hide,
+    /const toggle = this\.toggleWindow;[\s\S]{0,160}toggle\.hide\(\);/,
+    'Hide must hide only the toggle when the pill stays floating',
+  );
+  // The overlay 'hide' event → syncOverlayAuxVisibility must also never hide a
+  // standalone pill (the derived-hide path would re-trigger the blink).
+  const sync = extractMethodBody(windowHelper, 'syncOverlayAuxVisibility');
+  assert.match(
+    sync,
+    /if \(this\.pillStandalone && !want\) \{[\s\S]{0,120}toggle\.hide\(\);[\s\S]{0,40}return;/,
+    'a derived hide must skip the pill entirely when it floats standalone',
   );
 });
 
