@@ -1083,8 +1083,40 @@ const MeetingDetails: React.FC<MeetingDetailsProps> = ({ meeting: initialMeeting
             void reloadMeeting();
         });
 
+        // LIVE NOTE (v31): the 5s poll must NOT blindly replace the in-memory
+        // transcript with the DB snapshot. The DB flush lags the IPC stream by
+        // up to LIVE_NOTE_FLUSH_MS and the two 5s clocks are unsynchronized, so
+        // a full replace would revert the newest IPC finals every poll until the
+        // DB catches up — reading as a laggy/jumpy transcript (finals pop in,
+        // vanish, then reappear). Merge instead: union the DB lines with the
+        // already-appended IPC finals (dedupe speaker+text+time proximity, sort
+        // by timestamp). Only leave live mode (or a stop finalize) takes the
+        // authoritative DB snapshot whole, via reloadMeeting.
         pollTimer = setInterval(() => {
-            void reloadMeeting();
+            void (async () => {
+                try {
+                    const fresh = await window.electronAPI?.getMeetingDetails?.(meeting.id);
+                    if (!fresh) return;
+                    setMeeting(prev => {
+                        if (prev.isLive !== true) {
+                            // Meeting ended (or no longer live): authoritative
+                            // final snapshot, no merge.
+                            return fresh as Meeting;
+                        }
+                        const dbList = (fresh.transcript || []) as Array<{ speaker: string; text: string; timestamp: number }>;
+                        const localList = prev.transcript || [];
+                        const merged = [...localList];
+                        for (const seg of dbList) {
+                            const dup = merged.some(s =>
+                                s.speaker === seg.speaker && s.text === seg.text && isNear(s.timestamp || 0, seg.timestamp),
+                            );
+                            if (!dup) merged.push(seg);
+                        }
+                        merged.sort((a, b) => (a.timestamp || 0) - (b.timestamp || 0));
+                        return { ...(fresh as Meeting), transcript: merged };
+                    });
+                } catch { /* swallow */ }
+            })();
         }, 5000);
 
         return () => {

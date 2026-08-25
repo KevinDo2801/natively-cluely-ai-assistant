@@ -65,9 +65,22 @@ describe('MeetingDetails live mode (v31)', () => {
       'IPC and DB timestamps come from separate Date.now() calls — exact-key dedupe would double rows');
   });
 
-  test('resyncs from the DB every 5 seconds (main-process flush cadence)', () => {
-    assert.match(source, /setInterval\(\(\) => \{[\s\S]*?void reloadMeeting\(\);[\s\S]*?\}, 5000\)/,
+  test('resyncs from the DB every 5 seconds by MERGING, not replacing, the live transcript', () => {
+    // The 5s poll is on the same cadence as the main-process flush, but the DB
+    // snapshot lags the IPC stream by up to a flush period and the two clocks
+    // are unsynchronized — a blind setMeeting(fresh) would revert the newest
+    // IPC finals every poll (laggy/jumpy transcript). The poll must UNION the
+    // DB lines with the already-appended IPC finals instead of replacing them.
+    assert.match(source, /setInterval\(\(\) => \{[\s\S]*?getMeetingDetails\?\.\(meeting\.id\)[\s\S]*?\}, 5000\)/,
       'the note must poll the authoritative DB snapshot on the same cadence as the flush');
+    assert.match(source, /if \(prev\.isLive !== true\) \{[\s\S]*?return fresh as Meeting;/,
+      'only leaving live mode takes the DB snapshot whole (no merge)');
+    assert.match(source, /const merged = \[\.\.\.localList\];/,
+      'the poll must start from the already-appended IPC finals so they are never reverted');
+    assert.match(source, /if \(!dup\) merged\.push\(seg\);/,
+      'DB-only lines must be appended when the local list does not already carry them');
+    assert.match(source, /merged\.sort\(\(a, b\) => \(a\.timestamp \|\| 0\) - \(b\.timestamp \|\| 0\)\);/,
+      'the merged list must be re-sorted by timestamp');
   });
 
   test('leaves live mode when the meeting ends and reloads the finalized note', () => {
