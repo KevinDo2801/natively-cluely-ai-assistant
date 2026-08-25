@@ -2,7 +2,7 @@
 //
 // Phase 6 Slice 4 (context-rebuild): behavioral tests for
 // electron/intelligence/knowledgeOrchestratorGate.ts — the additive type
-// barrier at the premium submodule boundary (item 3). Uses the same
+// barrier at the knowledge-orchestrator boundary (item 3). Uses the same
 // mock-KnowledgeDatabaseManager pattern established this session
 // (InterviewerPerspectiveGrounding.test.mjs /
 // LeadershipGroundingFixBehavioral2026_07_25.test.mjs) for a real
@@ -17,7 +17,18 @@ import { fileURLToPath } from 'node:url';
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const repoRoot = path.resolve(__dirname, '../../..');
 const require = createRequire(import.meta.url);
-const { KnowledgeOrchestrator } = require('../../../dist-electron/premium/electron/knowledge/KnowledgeOrchestrator.js');
+// The premium submodule was removed from this repo, so the compiled
+// KnowledgeOrchestrator is absent: skip the premium-dependent suites
+// gracefully instead of failing at require() time.
+let PREMIUM_AVAILABLE = true;
+let KnowledgeOrchestrator;
+try {
+  ({ KnowledgeOrchestrator } = require('../../../dist-electron/premium/electron/knowledge/KnowledgeOrchestrator.js'));
+} catch (err) {
+  PREMIUM_AVAILABLE = false;
+  console.warn(`[premium-absent] ${err?.code ?? err?.message ?? err} — skipping premium-dependent suites in ${import.meta.url}`);
+}
+const describeIfPremium = PREMIUM_AVAILABLE ? describe : describe.skip;
 const { resolveCanonicalTurn } = require(path.resolve(repoRoot, 'dist-electron/electron/llm/resolveCanonicalTurn.js'));
 const { processQuestionGated, projectAllowedSources } = require(path.resolve(repoRoot, 'dist-electron/electron/intelligence/knowledgeOrchestratorGate.js'));
 
@@ -59,7 +70,7 @@ function turnFor(question) {
   });
 }
 
-describe('processQuestionGated', () => {
+describeIfPremium('processQuestionGated', () => {
   test('bypasses (never calls the real orchestrator) for a coding question — resume forbidden', async () => {
     const o = makeOrchestrator();
     let realCallMade = false;

@@ -2480,7 +2480,7 @@ export class WindowHelper {
     // hide→re-show here would be the same pill blink the Ask/Hide toggle had.
     this.setPillStandalone(false, true);
     this.currentWindowMode = 'overlay';
-    KeybindManager.getInstance().setMode('overlay'); // Adapted from public PR #123 — verify premium interaction
+    KeybindManager.getInstance().setMode('overlay'); // Adapted from public PR #123
 
     // Show Overlay FIRST
     if (this.overlayWindow && !this.overlayWindow.isDestroyed()) {
@@ -2616,7 +2616,7 @@ export class WindowHelper {
     this.stopStealthTyping();
     const wasLauncher = this.currentWindowMode === 'launcher';
     this.currentWindowMode = 'launcher';
-    KeybindManager.getInstance().setMode('launcher'); // Adapted from public PR #123 — verify premium interaction
+    KeybindManager.getInstance().setMode('launcher'); // Adapted from public PR #123
 
     const launcherAlreadyVisible =
       !!this.launcherWindow &&

@@ -34,9 +34,22 @@ import Database from 'better-sqlite3';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const dist = path.resolve(__dirname, '../../../dist-electron/premium/electron/knowledge');
-const { KnowledgeOrchestrator } = await import(pathToFileURL(path.join(dist, 'KnowledgeOrchestrator.js')).href);
-const { KnowledgeDatabaseManager } = await import(pathToFileURL(path.join(dist, 'KnowledgeDatabaseManager.js')).href);
-const { DocType } = await import(pathToFileURL(path.join(dist, 'types.js')).href);
+// The premium submodule was removed from this repo, so the compiled
+// knowledge modules are absent: skip the premium-dependent suite
+// gracefully instead of failing at load time.
+let PREMIUM_AVAILABLE = true;
+let KnowledgeOrchestrator;
+let KnowledgeDatabaseManager;
+let DocType;
+try {
+  ({ KnowledgeOrchestrator } = await import(pathToFileURL(path.join(dist, 'KnowledgeOrchestrator.js')).href));
+  ({ KnowledgeDatabaseManager } = await import(pathToFileURL(path.join(dist, 'KnowledgeDatabaseManager.js')).href));
+  ({ DocType } = await import(pathToFileURL(path.join(dist, 'types.js')).href));
+} catch (err) {
+  PREMIUM_AVAILABLE = false;
+  console.warn(`[premium-absent] ${err?.code ?? err?.message ?? err} — skipping premium-dependent suites in ${import.meta.url}`);
+}
+const describeIfPremium = PREMIUM_AVAILABLE ? describe : describe.skip;
 
 const tmpFiles = [];
 afterEach(() => { for (const f of tmpFiles.splice(0)) { try { fs.rmSync(f, { force: true }); } catch {} } });
@@ -146,7 +159,7 @@ function firstWriteAfterDelete(ops) {
   return null;
 }
 
-describe('concurrent same-type ingests must not destroy each other (2026-08-02)', () => {
+describeIfPremium('concurrent same-type ingests must not destroy each other (2026-08-02)', () => {
   test('a re-upload during STAR generation does not orphan the first ingest\'s nodes', async () => {
     const db = new Database(':memory:');
     try {

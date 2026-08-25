@@ -25,9 +25,20 @@ const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const root = path.resolve(__dirname, '../../..');
 const read = (p) => fs.readFileSync(path.join(root, p), 'utf8');
 
-const { CompanyResearchEngine } = require(
+// The premium submodule was removed from this repo, so the compiled
+// CompanyResearchEngine is absent: skip the premium-dependent behavioral
+// suites gracefully instead of failing at require() time.
+let PREMIUM_AVAILABLE = true;
+let CompanyResearchEngine;
+try {
+  ({ CompanyResearchEngine } = require(
     path.join(root, 'dist-electron/premium/electron/knowledge/CompanyResearchEngine.js')
-);
+  ));
+} catch (err) {
+  PREMIUM_AVAILABLE = false;
+  console.warn(`[premium-absent] ${err?.code ?? err?.message ?? err} — skipping premium-dependent suites in ${import.meta.url}`);
+}
+const testIfPremium = PREMIUM_AVAILABLE ? test : test.skip;
 
 const VALID_DOSSIER_JSON = JSON.stringify({
     company: 'Acme',
@@ -50,7 +61,7 @@ function makeFakeDb({ cachedDossier = null, stale = false } = {}) {
     };
 }
 
-test('no search provider → LLM-only dossier is marked degraded and cached as such', async () => {
+testIfPremium('no search provider → LLM-only dossier is marked degraded and cached as such', async () => {
     const db = makeFakeDb();
     const engine = new CompanyResearchEngine(db);
     engine.setGenerateContentFn(async () => VALID_DOSSIER_JSON);
@@ -62,7 +73,7 @@ test('no search provider → LLM-only dossier is marked degraded and cached as s
     assert.equal(db.saved[0].dossier.degraded, true, 'cached copy carries the flag');
 });
 
-test('fresh cached DEGRADED dossier + provider now available → cache bypassed, search attempted', async () => {
+testIfPremium('fresh cached DEGRADED dossier + provider now available → cache bypassed, search attempted', async () => {
     const db = makeFakeDb({ cachedDossier: { company: 'Acme', degraded: true }, stale: false });
     const engine = new CompanyResearchEngine(db);
     engine.setGenerateContentFn(async () => VALID_DOSSIER_JSON);
@@ -79,7 +90,7 @@ test('fresh cached DEGRADED dossier + provider now available → cache bypassed,
     assert.equal(dossier.degraded, true);
 });
 
-test('fresh cached degraded dossier + still NO provider → served from cache, no LLM call', async () => {
+testIfPremium('fresh cached degraded dossier + still NO provider → served from cache, no LLM call', async () => {
     const cached = { company: 'Acme', degraded: true };
     const db = makeFakeDb({ cachedDossier: cached, stale: false });
     const engine = new CompanyResearchEngine(db);
@@ -91,7 +102,7 @@ test('fresh cached degraded dossier + still NO provider → served from cache, n
     assert.equal(llmCalls, 0, 'no regeneration while nothing has improved');
 });
 
-test('fresh cached NON-degraded dossier is served even when a provider exists', async () => {
+testIfPremium('fresh cached NON-degraded dossier is served even when a provider exists', async () => {
     const cached = { company: 'Acme', sources: ['https://x'] };
     const db = makeFakeDb({ cachedDossier: cached, stale: false });
     const engine = new CompanyResearchEngine(db);
@@ -103,7 +114,7 @@ test('fresh cached NON-degraded dossier is served even when a provider exists', 
     assert.equal(searchCalls, 0, 'search-backed cache honors its TTL');
 });
 
-test('setSearchProvider accepts null (clears a stale provider)', () => {
+testIfPremium('setSearchProvider accepts null (clears a stale provider)', () => {
     const engine = new CompanyResearchEngine(makeFakeDb());
     engine.setSearchProvider({ search: async () => [] });
     engine.setSearchProvider(null);
@@ -112,7 +123,7 @@ test('setSearchProvider accepts null (clears a stale provider)', () => {
 
 // ---------- source-inspection wiring guards ----------
 
-test('KnowledgeOrchestrator resolves the search provider per AOT run, before runForJD', () => {
+testIfPremium('KnowledgeOrchestrator resolves the search provider per AOT run, before runForJD', () => {
     const src = read('premium/electron/knowledge/KnowledgeOrchestrator.ts');
     assert.ok(src.includes('setSearchProviderResolver('), 'resolver setter must exist');
     const jdBranch = src.indexOf('this.aotPipeline.reset()');
@@ -123,12 +134,14 @@ test('KnowledgeOrchestrator resolves the search provider per AOT run, before run
     assert.ok(runAt > resolveAt, 'provider must be wired BEFORE runForJD fires');
 });
 
-test('main.ts injects the shared resolver into the orchestrator', () => {
+test('main.ts no longer wires the removed premium orchestrator search-provider resolver', () => {
+    // The premium knowledge subsystem (KnowledgeOrchestrator +
+    // CompanyResearchEngine) was REMOVED, so main.ts no longer injects
+    // setSearchProviderResolver into an orchestrator — the resolver itself is
+    // now a stub (see resolveCompanySearchProvider.ts). This pins the stub
+    // reality so the guard cannot silently regress back to a live wiring.
     const src = read('electron/main.ts');
-    assert.ok(
-        src.includes('setSearchProviderResolver(resolveCompanySearchProvider)'),
-        'main.ts must inject resolveCompanySearchProvider at orchestrator init'
-    );
+    assert.doesNotMatch(src, /setSearchProviderResolver\(/, 'main.ts must not wire the removed premium resolver');
 });
 
 test('manual research-company handler uses the SAME shared resolver (no drift)', () => {
@@ -147,13 +160,12 @@ test('manual research-company handler uses the SAME shared resolver (no drift)',
     );
 });
 
-test('shared resolver: Tavily first, Natively fallback, trial-sentinel handled', () => {
+test('shared resolver is now a stub returning null (premium providers removed)', () => {
     const src = read('electron/services/resolveCompanySearchProvider.ts');
-    const tavily = src.indexOf('getTavilyApiKey()');
-    const natively = src.indexOf('getNativelyApiKey()');
-    assert.ok(tavily >= 0 && natively > tavily, 'Tavily (user key) must be checked before Natively fallback');
-    assert.ok(
-        src.includes('TRIAL_SENTINEL_KEY') && src.includes('getTrialToken()'),
-        'trial-sentinel → x-trial-token handling must come along with the cascade'
-    );
+    assert.match(src, /export function resolveCompanySearchProvider\(\): null/, 'resolver must be the premium-removed stub');
+    assert.match(src, /return null;/, 'stub must return null (LLM-only dossiers)');
+    // The function body must not reference the removed premium provider APIs
+    // (the header comment may mention them in prose, so scope to the code).
+    const fnBody = src.slice(src.indexOf('export function'));
+    assert.doesNotMatch(fnBody, /getTavilyApiKey|getNativelyApiKey|TRIAL_SENTINEL_KEY/, 'the premium search providers must not be referenced in code');
 });

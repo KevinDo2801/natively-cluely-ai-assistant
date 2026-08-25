@@ -34,9 +34,22 @@ import Database from 'better-sqlite3';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const dist = path.resolve(__dirname, '../../../dist-electron/premium/electron/knowledge');
-const { KnowledgeOrchestrator } = await import(pathToFileURL(path.join(dist, 'KnowledgeOrchestrator.js')).href);
-const { KnowledgeDatabaseManager } = await import(pathToFileURL(path.join(dist, 'KnowledgeDatabaseManager.js')).href);
-const { DocType } = await import(pathToFileURL(path.join(dist, 'types.js')).href);
+// The premium submodule was removed from this repo, so the compiled
+// knowledge modules are absent: skip the premium-dependent suites
+// gracefully instead of failing at load time.
+let PREMIUM_AVAILABLE = true;
+let KnowledgeOrchestrator;
+let KnowledgeDatabaseManager;
+let DocType;
+try {
+  ({ KnowledgeOrchestrator } = await import(pathToFileURL(path.join(dist, 'KnowledgeOrchestrator.js')).href));
+  ({ KnowledgeDatabaseManager } = await import(pathToFileURL(path.join(dist, 'KnowledgeDatabaseManager.js')).href));
+  ({ DocType } = await import(pathToFileURL(path.join(dist, 'types.js')).href));
+} catch (err) {
+  PREMIUM_AVAILABLE = false;
+  console.warn(`[premium-absent] ${err?.code ?? err?.message ?? err} — skipping premium-dependent suites in ${import.meta.url}`);
+}
+const describeIfPremium = PREMIUM_AVAILABLE ? describe : describe.skip;
 
 const tmpFiles = [];
 afterEach(() => { for (const f of tmpFiles.splice(0)) { try { fs.rmSync(f, { force: true }); } catch {} } });
@@ -96,7 +109,7 @@ function makeOrchestrator(db, gate, { failFirst = false } = {}) {
   return orch;
 }
 
-describe('in-flight ingest is observable from main (2026-08-02)', () => {
+describeIfPremium('in-flight ingest is observable from main (2026-08-02)', () => {
   test('isIngesting(RESUME) is true while indexing and false once it lands', async () => {
     const db = new Database(':memory:');
     try {
@@ -157,16 +170,20 @@ describe('in-flight ingest is observable from main (2026-08-02)', () => {
       assert.equal(orch.isIngesting(DocType.RESUME), false, 'a failed ingest must not leave the flag stuck on');
     } finally { db.close(); }
   });
+});
 
-  test('profile:get-status surfaces both flags to the renderer', () => {
-    // The orchestrator flag is only useful if the panel can read it back; this
-    // pins the wiring the remount path depends on.
+describe('profile:get-status stub (premium removed, main-repo only)', () => {
+  test('profile:get-status is a graceful stub after premium removal (no isIngesting flags)', () => {
+    // The premium knowledge subsystem (and its isIngesting derivation) was
+    // removed, so the orchestrator flag is gone. The handler now reports an
+    // empty no-profile status and must NOT reference the removed isIngesting
+    // surface — a remounted panel has nothing to re-adopt.
     const source = fs.readFileSync(path.resolve(__dirname, '../../ipcHandlers.ts'), 'utf8');
     const start = source.indexOf("safeHandle('profile:get-status'");
     assert.ok(start > -1, "profile:get-status handler must exist");
     const next = source.indexOf('safeHandle(', start + 10);
     const body = source.slice(start, next > -1 ? next : undefined);
-    assert.match(body, /resume_indexing_in_flight:\s*Boolean\(.*isIngesting/s);
-    assert.match(body, /jd_indexing_in_flight:\s*Boolean\(.*isIngesting/s);
+    assert.match(body, /hasProfile:\s*false/, 'get-status must report hasProfile=false without an orchestrator');
+    assert.doesNotMatch(body, /isIngesting/, 'the removed isIngesting surface must not be referenced');
   });
 });

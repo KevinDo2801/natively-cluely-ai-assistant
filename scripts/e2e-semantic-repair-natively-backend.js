@@ -7,14 +7,11 @@
 //
 //   M1  sanity: one prod call streams (records serverModel)
 //   M2  doc-grounded custom mode, 4 critical questions × {defaults ON, kill
-//       switches OFF} — the semantic gate must NOT affect mode-file retrieval
-//       (it lives on the premium profile path), so BOTH states must answer
-//       grounded; this pins the absence of unintended coupling on the real
-//       backend.
-//   M3  jd_fit × {ON: retrieval skipped, grounding-only / OFF: retrieval
-//       runs} — both contexts answered by the real backend; both must produce
-//       a grounded fit answer; the embed-skip must differ exactly with the
-//       flag.
+//       switches OFF} — the semantic gate must NOT affect mode-file retrieval,
+//       so BOTH states must answer grounded; this pins the absence of
+//       unintended coupling on the real backend.
+//   (Former M3 jd_fit ON/OFF section removed: it required the premium
+//   knowledge module, which no longer exists.)
 //
 // BOUNDED BY DESIGN: ~13 prod calls total. Every /v1/chat call authenticates
 // against production Supabase and WRITES A USAGE ROW on the key's account
@@ -34,7 +31,6 @@ const { app } = require('electron');
 
 const repoRoot = path.resolve(__dirname, '..');
 const distRoot = path.join(repoRoot, 'dist-electron', 'electron');
-const distPremium = path.join(repoRoot, 'dist-electron', 'premium', 'electron', 'knowledge');
 
 for (const line of fs.readFileSync(path.join(repoRoot, '.env'), 'utf8').split('\n')) {
   const m = /^([A-Z0-9_]+)=(.*)$/.exec(line.trim());
@@ -150,75 +146,6 @@ async function main() {
       clearTimeout(t); noteModel();
       judge(`M2-docgrounded-${stateLabel}`, c.q, answer, c.must, c.mustNot || []);
     }
-  }
-  DEFAULTS_ON();
-
-  // ── M3: jd_fit ON vs OFF, answered by the real backend ───────────────────
-  const { KnowledgeOrchestrator } = require(path.join(distPremium, 'KnowledgeOrchestrator.js'));
-  const RESUME = {
-    id: 1, type: 'resume',
-    structured_data: {
-      identity: { name: 'Jordan Rivera', email: '', location: 'Austin, TX', phone: '', links: [] },
-      summary: 'Backend engineer focused on distributed systems.',
-      skills: ['Go', 'Kafka', 'PostgreSQL', 'Kubernetes'],
-      experience: [{ company: 'Drift Systems', role: 'Senior Backend Engineer', start_date: '2021-03', end_date: null, bullets: ['Built a billing pipeline processing 40k events/sec in Go and Kafka'] }],
-      projects: [{ name: 'LedgerFlow', description: 'Event-sourced multi-currency ledger', technologies: ['Go', 'Kafka'] }],
-      education: [{ institution: 'State University', degree: 'BS', field: 'CS', start_date: '2014', end_date: '2018' }],
-      achievements: [], certifications: [], leadership: [],
-    },
-  };
-  const JD = {
-    id: 2, type: 'job_description',
-    structured_data: {
-      title: 'Senior Backend Engineer', company: 'Acme', location: 'Remote', description_summary: '',
-      level: 'senior', employment_type: 'full_time', min_years_experience: 5, compensation_hint: '',
-      requirements: ['Expert Go', 'Kafka event streaming', 'PostgreSQL'], nice_to_haves: [], responsibilities: [],
-      technologies: ['Go', 'Kafka', 'PostgreSQL'], keywords: [],
-    },
-  };
-  const NODES = [{
-    id: 'n1', source_type: 'resume', category: 'experience', title: 'Senior Backend Engineer',
-    organization: 'Drift Systems', text_content: '[Senior Backend Engineer @ Drift Systems] Built a billing pipeline processing 40k events/sec in Go and Kafka',
-    tags: ['billing'], duration_months: 24, start_date: '2021-03', end_date: null, embedding: [1, 0], embedding_space: null,
-  }];
-  const makeOrch = () => {
-    const db = {
-      initializeSchema() {}, getDocumentByType(t) { return t === 'resume' ? RESUME : t === 'job_description' ? JD : null; },
-      getAllNodes() { return NODES; }, getNodeCount() { return 1; }, getIntro() { return null; },
-      getGapAnalysis() { return null; }, getNegotiationScript() { return null; }, getMockQuestions() { return null; },
-      getCultureMappings() { return null; }, updateDocumentStructuredData() {}, getNodesNeedingReembed() { return []; },
-      updateNodeEmbedding() {},
-    };
-    const o = new KnowledgeOrchestrator(db);
-    o.setKnowledgeMode(true);
-    return o;
-  };
-  const FIT_Q = 'am I qualified for this position?';
-  for (const [stateLabel, setState, expectSkip] of [['ON', DEFAULTS_ON, true], ['OFF', KILL_ALL, false]]) {
-    setState();
-    const orch = makeOrch();
-    let embedCalls = 0;
-    orch.setEmbedFn(async () => { embedCalls += 1; return [1, 0]; });
-    const logs = [];
-    const origLog = console.log;
-    console.log = (...a) => { logs.push(a.join(' ')); origLog(...a); };
-    let r = null;
-    try { r = await orch.processQuestion(FIT_Q); } finally { console.log = origLog; }
-    const skipped = logs.some((l) => l.includes('skipping redundant vector retrieval embed'));
-    record(`M3-jdfit-${stateLabel}`, `retrieval ${expectSkip ? 'skipped' : 'runs'} as the flag dictates`,
-      skipped === expectSkip && (expectSkip ? embedCalls === 0 : embedCalls >= 1),
-      `skipped=${skipped} embedCalls=${embedCalls}`);
-    const ctx = r ? `${r.systemPromptInjection || ''}\n${r.contextBlock || ''}` : '';
-    const ctrl = new AbortController(); const t = setTimeout(() => ctrl.abort(), 60000);
-    let a = '';
-    try {
-      a = await collectStream(llmHelper.streamChat(
-        FIT_Q, undefined, ctx, 'You are helping the candidate answer questions about their own fit for a job, grounded ONLY in the provided profile context.', false, false, [], ctrl.signal));
-    } catch (e) { console.error(`[e2e-nat][M3-${stateLabel}] error:`, e && e.message); }
-    clearTimeout(t); noteModel();
-    judge(`M3-jdfit-${stateLabel}`, FIT_Q, a,
-      [/yes|qualified|fit|match|strong/i],
-      [/don.t have (?:access|enough information|your (?:resume|profile))|cannot (?:answer|assess|evaluate)|no (?:resume|profile|information) (?:available|found|provided)/i]);
   }
   DEFAULTS_ON();
 

@@ -9,17 +9,11 @@
 //       runHybridModeRetrieval) — 10 critical seminar questions.
 //   S3  Same mode through chatWithGemini — the Phase 2 site-1 path whose
 //       doc-grounded hybrid branch fires for the first time.
-//   S4  semanticAdmissionGate on REAL embeddings: embed resume-like nodes +
-//       queries with the live embedding provider, compare the kill-switch
-//       (legacy) run against the DEFAULT-ON run with the calibrated 0.69
-//       gemini floor, capturing [SemanticAdmission] telemetry.
-//   S5  jd_fit coverage flag live: retrieval skipped under the flag, then the
-//       grounding-block-only context is answered by DeepSeek — proving the
-//       grounding block alone carries the facts the skip removes.
+//   (Former S4 semanticAdmissionGate and S5 jd_fit-coverage sections removed:
+//   they required the premium knowledge module, which no longer exists.)
 //
 // Keys come from .env (DEEPSEEK_API_KEY required; GEMINI_API_KEY optional —
-// without it S4/S5 use the bundled local MiniLM embedder with an env floor
-// override for its space). Key VALUES are never logged.
+// it is passed to the provider). Key VALUES are never logged.
 //
 // Run:
 //   npm run build:electron
@@ -34,7 +28,6 @@ const { app } = require('electron');
 
 const repoRoot = path.resolve(__dirname, '..');
 const distRoot = path.join(repoRoot, 'dist-electron', 'electron');
-const distPremium = path.join(repoRoot, 'dist-electron', 'premium', 'electron', 'knowledge');
 
 // ── .env loading (values are secrets — never log them) ─────────────────────
 for (const line of fs.readFileSync(path.join(repoRoot, '.env'), 'utf8').split('\n')) {
@@ -44,7 +37,7 @@ for (const line of fs.readFileSync(path.join(repoRoot, '.env'), 'utf8').split('\
 const DEEPSEEK_KEY = process.env.DEEPSEEK_API_KEY || '';
 const GEMINI_KEY = process.env.GEMINI_API_KEY || '';
 if (!DEEPSEEK_KEY) { console.error('[e2e] FATAL: DEEPSEEK_API_KEY missing from .env'); process.exit(1); }
-console.log(`[e2e] keys: deepseek=present gemini=${GEMINI_KEY ? 'present' : 'ABSENT (local embedder fallback)'}`);
+console.log(`[e2e] keys: deepseek=present gemini=${GEMINI_KEY ? 'present' : 'absent'}`);
 
 const tmpUserData = fs.mkdtempSync(path.join(os.tmpdir(), 'natively-e2e-semrepair-'));
 app.setPath('userData', tmpUserData);
@@ -178,154 +171,6 @@ async function main() {
     try { answer = await llmHelper.chatWithGemini(c.q, undefined, undefined, false); }
     catch (e) { console.error(`[e2e][S3] error for "${c.q}":`, e && e.message); }
     checkAnswer('S3-site1-chat', c.q, answer, c.must);
-  }
-
-  // ── S4: semanticAdmissionGate on REAL embeddings ─────────────────────────
-  const { getRelevantNodes } = require(path.join(distPremium, 'HybridSearchEngine.js'));
-  let provider = null, spaceKey = null;
-  if (GEMINI_KEY) {
-    try {
-      const { GeminiEmbeddingProvider } = require(path.join(distRoot, 'rag/providers/GeminiEmbeddingProvider.js'));
-      provider = new GeminiEmbeddingProvider([GEMINI_KEY]);
-      spaceKey = provider.space;
-      await provider.embed('probe'); // fail fast if the key is dead
-    } catch (e) {
-      console.warn('[e2e][S4] gemini embedder unusable → local fallback:', e && e.message && e.message.slice(0, 120));
-      provider = null;
-    }
-  }
-  if (!provider) {
-    const { LocalEmbeddingProvider } = require(path.join(distRoot, 'rag/providers/LocalEmbeddingProvider.js'));
-    provider = new LocalEmbeddingProvider();
-    spaceKey = provider.space;
-    // local-384 deliberately has NO floor (calibration 2026-08-14 measured
-    // overlapping distributions) — the default-ON gate must behave legacy here.
-    console.log('[e2e][S4] using local MiniLM embedder (no floor by design)');
-  }
-  console.log(`[e2e][S4] embedding space: ${spaceKey}`);
-
-  const NODE_TEXTS = {
-    relevantProject: 'Built a distributed billing reconciliation pipeline in Go and Kafka processing 40k events per second with exactly-once semantics',
-    relevantSkill: 'Deep PostgreSQL schema design and query optimization experience across multi-tenant SaaS databases',
-    oldRelevant: 'Designed the event-sourced ledger service handling multi-currency transaction reconciliation across regions',
-    recentIrrelevant: 'Organized the annual company holiday party and managed catering vendor relationships for office events',
-  };
-  const nodeEmbeds = {};
-  for (const [k, txt] of Object.entries(NODE_TEXTS)) nodeEmbeds[k] = await provider.embed(txt);
-  const mkNode = (id, text, emb, extra = {}) => ({
-    id, source_type: 'resume', category: 'experience', title: 'Role Entry', organization: 'Acme',
-    text_content: text, tags: [], duration_months: null, end_date: '2019-01', embedding: emb, ...extra,
-  });
-  const NODES = [
-    mkNode('relevant-project', NODE_TEXTS.relevantProject, nodeEmbeds.relevantProject),
-    mkNode('relevant-skill', NODE_TEXTS.relevantSkill, nodeEmbeds.relevantSkill),
-    mkNode('old-relevant', NODE_TEXTS.oldRelevant, nodeEmbeds.oldRelevant),
-    // The P0 shape: query-independent boosts only (recent + long tenure).
-    mkNode('recent-irrelevant', NODE_TEXTS.recentIrrelevant, nodeEmbeds.recentIrrelevant, { duration_months: 30, end_date: null }),
-  ];
-  const QUERY = 'tell me about my event streaming and database work';
-  const qEmb = await provider.embedQuery(QUERY);
-  const embedFn = async () => qEmb;
-
-  const telemetry = [];
-  const origLog = console.log;
-  console.log = (...args) => { const s = args.join(' '); if (s.startsWith('[SemanticAdmission] ')) telemetry.push(JSON.parse(s.slice('[SemanticAdmission] '.length))); origLog(...args); };
-  let legacyOut, defaultOut;
-  try {
-    // Kill switch — the ONLY way to observe legacy admission now that the
-    // gate defaults ON (2026-08-14).
-    process.env.NATIVELY_SEMANTIC_ADMISSION_GATE = 'off';
-    legacyOut = await getRelevantNodes(QUERY, NODES, embedFn, { embeddingSpaceKey: spaceKey });
-    // DEFAULT posture: env unset → gate ON with the calibrated floor
-    // (gemini-768: 0.69; local-384: no floor → this run behaves legacy).
-    delete process.env.NATIVELY_SEMANTIC_ADMISSION_GATE;
-    defaultOut = await getRelevantNodes(QUERY, NODES, embedFn, { embeddingSpaceKey: spaceKey });
-  } finally {
-    console.log = origLog;
-    delete process.env.NATIVELY_SEMANTIC_ADMISSION_GATE;
-  }
-  record('S4-admission-gate', 'telemetry emitted for both runs', telemetry.length === 2, `${telemetry.length} lines`);
-  const [obs, enf] = telemetry;
-  if (obs && enf) {
-    record('S4-admission-gate', 'kill-switch run not enforced / default run enforced',
-      obs.enforced === false && enf.enforced === (spaceKey.startsWith('gemini') ? true : false));
-    console.log('[e2e][S4] real cosine distribution:', enf.candidates.map((c, i) => `${NODES[i].id}=${c.cosine}`).join(' '));
-    // THE P0, LIVE: under the legacy blended threshold the ONLY retrieved node
-    // should be the boost-carrying irrelevant one (its +0.2 query-independent
-    // boosts clear 0.55 while the relevant nodes' 0.6·cosine does not).
-    record('S4-admission-gate', 'LIVE P0 confirmation: legacy admits ONLY the boost-carrying irrelevant node',
-      legacyOut.length === 1 && legacyOut[0].node.id === 'recent-irrelevant',
-      `legacy=[${legacyOut.map((s) => s.node.id).join(',')}]`);
-    if (spaceKey.startsWith('gemini')) {
-      record('S4-admission-gate', 'DEFAULT posture (calibrated 0.69): P0 node excluded, relevant nodes kept',
-        !defaultOut.some((s) => s.node.id === 'recent-irrelevant')
-          && defaultOut.some((s) => s.node.id === 'relevant-project'),
-        `default=[${defaultOut.map((s) => s.node.id).join(',')}]`);
-    } else {
-      record('S4-admission-gate', 'DEFAULT posture (local space, no calibrated floor): legacy admission preserved',
-        JSON.stringify(defaultOut.map((s) => s.node.id)) === JSON.stringify(legacyOut.map((s) => s.node.id)),
-        `default=[${defaultOut.map((s) => s.node.id).join(',')}]`);
-    }
-  }
-
-  // ── S5: jd_fit coverage flag live (skip retrieval → DeepSeek answers from grounding) ──
-  const { KnowledgeOrchestrator } = require(path.join(distPremium, 'KnowledgeOrchestrator.js'));
-  const RESUME = {
-    id: 1, type: 'resume',
-    structured_data: {
-      identity: { name: 'Jordan Rivera', email: '', location: 'Austin, TX', phone: '', links: [] },
-      summary: 'Backend engineer focused on distributed systems.',
-      skills: ['Go', 'Kafka', 'PostgreSQL', 'Kubernetes'],
-      experience: [{ company: 'Drift Systems', role: 'Senior Backend Engineer', start_date: '2021-03', end_date: null, bullets: ['Built a billing pipeline processing 40k events/sec in Go and Kafka'] }],
-      projects: [{ name: 'LedgerFlow', description: 'Event-sourced multi-currency ledger', technologies: ['Go', 'Kafka'] }],
-      education: [{ institution: 'State University', degree: 'BS', field: 'CS', start_date: '2014', end_date: '2018' }],
-      achievements: [], certifications: [], leadership: [],
-    },
-  };
-  const JD = {
-    id: 2, type: 'job_description',
-    structured_data: {
-      title: 'Senior Backend Engineer', company: 'Acme', location: 'Remote', description_summary: '',
-      level: 'senior', employment_type: 'full_time', min_years_experience: 5, compensation_hint: '',
-      requirements: ['Expert Go', 'Kafka event streaming', 'PostgreSQL'], nice_to_haves: [], responsibilities: [],
-      technologies: ['Go', 'Kafka', 'PostgreSQL'], keywords: [],
-    },
-  };
-  const db = {
-    initializeSchema() {}, getDocumentByType(t) { return t === 'resume' ? RESUME : t === 'job_description' ? JD : null; },
-    getAllNodes() { return NODES; }, getNodeCount() { return NODES.length; }, getIntro() { return null; },
-    getGapAnalysis() { return null; }, getNegotiationScript() { return null; }, getMockQuestions() { return null; },
-    getCultureMappings() { return null; }, updateDocumentStructuredData() {}, getNodesNeedingReembed() { return []; },
-    updateNodeEmbedding() {},
-  };
-  const orchestrator = new KnowledgeOrchestrator(db);
-  orchestrator.setKnowledgeMode(true);
-  let embedCalls = 0;
-  orchestrator.setEmbedFn(async (text) => { embedCalls += 1; return provider.embedQuery(text); });
-
-  const FIT_Q = 'am I qualified for this position?';
-  process.env.PROFILE_GROUNDING_V2_JDFIT_COVERAGE = 'on';
-  let fitResult = null;
-  try { fitResult = await orchestrator.processQuestion(FIT_Q); } finally { delete process.env.PROFILE_GROUNDING_V2_JDFIT_COVERAGE; }
-  record('S5-jdfit-live', 'flag ON skips the retrieval embed', embedCalls === 0, `${embedCalls} embed calls`);
-  const groundingBlock = fitResult ? `${fitResult.systemPromptInjection || ''}\n${fitResult.contextBlock || ''}` : '';
-  record('S5-jdfit-live', 'grounding context assembled without retrieval', groundingBlock.includes('Jordan Rivera') || groundingBlock.includes('Drift Systems'), `${groundingBlock.length} chars`);
-  {
-    const controller = new AbortController();
-    const t = setTimeout(() => controller.abort(), 45000);
-    let a = '';
-    try {
-      a = await collectStream(llmHelper.streamChat(
-        FIT_Q, undefined, groundingBlock, 'You are helping the candidate answer questions about their own fit for a job, grounded ONLY in the provided profile context.', false, false, [], controller.signal));
-    } catch (e) { console.error('[e2e][S5] stream error:', e && e.message); }
-    clearTimeout(t);
-    // Decidable properties, not vocabulary: a fit answer must (a) take a
-    // stance and (b) never claim the profile is missing — the grounding block
-    // is provably in context (asserted above). Which facts the model chooses
-    // to cite varies run to run and is not asserted.
-    checkAnswer('S5-jdfit-live', FIT_Q, a,
-      [/yes|qualified|fit|match|strong/i],
-      [/don.t have (?:access|enough information|your (?:resume|profile))|cannot (?:answer|assess|evaluate)|no (?:resume|profile|information) (?:available|found|provided)/i]);
   }
 
   // ── Summary ──────────────────────────────────────────────────────────────

@@ -10,7 +10,7 @@
 //
 // references/resume.md + references/job-description.md are POINTER concepts:
 // metadata + a resource URI only. They deliberately do NOT copy the full resume
-// / JD text into the bundle (privacy — the raw document stays in the premium
+// / JD text into the bundle (privacy — the raw document stays in the knowledge
 // store; the bundle is the curated, card-level view).
 
 import { yamlEscapeScalar, yamlList, okfTypeFor } from './OkfMarkdownExporter';

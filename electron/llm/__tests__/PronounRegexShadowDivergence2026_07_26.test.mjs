@@ -37,9 +37,21 @@ import path from 'node:path';
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const repoRoot = path.resolve(__dirname, '../../..');
 const require = createRequire(import.meta.url);
-const { KnowledgeOrchestrator } = require(
-  path.resolve(repoRoot, 'dist-electron/premium/electron/knowledge/KnowledgeOrchestrator.js'),
-);
+// The premium submodule was removed from this repo, so the compiled
+// KnowledgeOrchestrator is absent: skip the premium-dependent suite
+// gracefully instead of failing at require() time. The flag-registration
+// suite (main-repo intelligenceFlags) keeps running either way.
+let PREMIUM_AVAILABLE = true;
+let KnowledgeOrchestrator;
+try {
+  ({ KnowledgeOrchestrator } = require(
+    path.resolve(repoRoot, 'dist-electron/premium/electron/knowledge/KnowledgeOrchestrator.js'),
+  ));
+} catch (err) {
+  PREMIUM_AVAILABLE = false;
+  console.warn(`[premium-absent] ${err?.code ?? err?.message ?? err} — skipping premium-dependent suites in ${import.meta.url}`);
+}
+const describeIfPremium = PREMIUM_AVAILABLE ? describe : describe.skip;
 const { __resetIntelligenceFlagsCache } = require(
   path.resolve(repoRoot, 'dist-electron/electron/intelligence/intelligenceFlags.js'),
 );
@@ -106,7 +118,7 @@ describe('pronounRegexShadowObservation flag registration', () => {
   });
 });
 
-describe('processQuestion shadow-logs a divergence without changing its return value', () => {
+describeIfPremium('processQuestion shadow-logs a divergence without changing its return value', () => {
   test('flag OFF: no shadow log call, behavior identical to before this change', async () => {
     __resetIntelligenceFlagsCache();
     delete process.env.NATIVELY_PRONOUN_REGEX_SHADOW_OBSERVATION;

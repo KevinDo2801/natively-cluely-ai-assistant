@@ -17,7 +17,6 @@ import { getOrchestrator, type OrchestratorEvent, type UserState } from '../../l
 import type { ToasterId } from '../../lib/onboarding/orchestrator.ts';
 import { PermissionsToaster } from './PermissionsToaster';
 import { BrowserExtensionToaster } from './BrowserExtensionToaster';
-import { TrialPromoToaster } from '../trial/TrialPromoToaster';
 import { SupportToaster } from '../SupportToaster';
 import ReviewPromptHost from '../ReviewPromptHost';
 
@@ -126,29 +125,6 @@ export const OrchestratedToasterHost: React.FC = () => {
       // Same as profile — modes onboarding popover gone.
       return null;
 
-    case 'trial_promo':
-      // TrialPromoToaster needs additional props for start/manual setup,
-      // which it reads from window.electronAPI at runtime. The orchestrator
-      // hands it `isOpen` and onDismiss only.
-      return (
-        <TrialPromoToaster
-          isOpen={true}
-          hasNativelyKey={orch.getUserState().hasNativelyKey}
-          hasTrialToken={orch.getUserState().hasTrialToken}
-          onDismiss={onDismiss('trial_promo')}
-          onStartTrial={async () => {
-            const res = await window.electronAPI?.startTrial?.();
-            if (!res?.ok) throw new Error(res?.error || 'Could not start trial');
-            orch.setUserState({ hasTrialToken: true });
-            onDismiss('trial_promo')();
-          }}
-          onManualSetup={() => {
-            window.electronAPI?.openSettingsTab?.('api');
-            onDismiss('trial_promo')();
-          }}
-        />
-      );
-
     case 'quiet_window':
       // Internal gate — never renders a visible component.
       return null;
@@ -169,11 +145,8 @@ export const OrchestratedToasterHost: React.FC = () => {
       );
 
     case 'ads':
-      // The 5 ad toasters are driven by useAdCampaigns.ts which still runs in
-      // App.tsx and consults natively_ads_shown_history. The orchestrator's
-      // role for `ads` is purely as a gate — when eligible, it just allows
-      // useAdCampaigns to proceed (the activeAd state already controls which
-      // component renders).
+      // The ad toasters were removed with the premium module; the orchestrator
+      // keeps the `ads` stage purely as a sequencing gate for review_prompt.
       return null;
 
     case 'review_prompt':

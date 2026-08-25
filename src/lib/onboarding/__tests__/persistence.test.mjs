@@ -40,7 +40,6 @@ const LEGACY = {
   seenProfileOnboarding:'natively_seen_profile_onboarding_v1',
   launchCount:          'natively_launch_count_v2.7',
   appOpensCount:        'natively_app_opens_count',
-  trialPromoTs:         'natively_trial_promo_ts',
   adsHistory:           'natively_ads_shown_history',
 };
 
@@ -111,14 +110,6 @@ test('hydrates completed.profile_intelligence from natively_seen_profile_onboard
   assert.ok(state.completed['profile_intelligence']);
 });
 
-test('migrates dead natively_trial_promo_ts to completed.trial_promo', () => {
-  clearAll();
-  const legacyTs = 1_700_000_000_000;
-  localStorage.setItem(LEGACY.trialPromoTs, legacyTs.toString());
-  const state = loadState();
-  assert.equal(state.completed['trial_promo'], legacyTs);
-});
-
 test('hydrates startupCount as max of legacy launch + app opens counters', () => {
   clearAll();
   localStorage.setItem(LEGACY.launchCount, '12');
@@ -170,13 +161,11 @@ test('multiple legacy keys hydrate together', () => {
   localStorage.setItem(LEGACY.seenModesOnboarding, 'true');
   localStorage.setItem(LEGACY.seenProfileOnboarding, 'true');
   localStorage.setItem(LEGACY.launchCount, '4');
-  localStorage.setItem(LEGACY.trialPromoTs, '1700000000000');
 
   const state = loadState();
   assert.ok(state.completed['permissions']);
   assert.ok(state.completed['modes_manager']);
   assert.ok(state.completed['profile_intelligence']);
-  assert.ok(state.completed['trial_promo']);
   assert.equal(state.startupCount, 4);
 });
 
@@ -200,12 +189,12 @@ test('crash recovery: queue + other completed entries preserved', () => {
   const prior = buildDefaultState();
   prior.activeToasterId = 'browser_extension';
   prior.completed['permissions'] = 1_700_000_000_000;
-  prior.queue = ['profile_intelligence', 'modes_manager', 'trial_promo'];
+  prior.queue = ['profile_intelligence', 'modes_manager', 'support'];
   saveState(prior);
 
   const recovered = loadState();
   assert.equal(recovered.activeToasterId, null);
   assert.ok(recovered.completed['permissions']);
   assert.ok(recovered.completed['browser_extension']);
-  assert.deepEqual(recovered.queue, ['profile_intelligence', 'modes_manager', 'trial_promo']);
+  assert.deepEqual(recovered.queue, ['profile_intelligence', 'modes_manager', 'support']);
 });

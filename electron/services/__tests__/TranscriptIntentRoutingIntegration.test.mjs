@@ -52,9 +52,22 @@ function makeTempFile(content, ext = '.txt') {
 }
 
 const base = '../../../dist-electron/premium/electron/knowledge';
-const { KnowledgeDatabaseManager } = await import(pathToFileURL(path.resolve(__dirname, `${base}/KnowledgeDatabaseManager.js`)).href);
-const { KnowledgeOrchestrator } = await import(pathToFileURL(path.resolve(__dirname, `${base}/KnowledgeOrchestrator.js`)).href);
-const { DocType } = await import(pathToFileURL(path.resolve(__dirname, `${base}/types.js`)).href);
+// The premium submodule was removed from this repo, so the compiled
+// knowledge modules are absent: skip the premium-dependent suite
+// gracefully instead of failing at load time.
+let PREMIUM_AVAILABLE = true;
+let KnowledgeDatabaseManager;
+let KnowledgeOrchestrator;
+let DocType;
+try {
+  ({ KnowledgeDatabaseManager } = await import(pathToFileURL(path.resolve(__dirname, `${base}/KnowledgeDatabaseManager.js`)).href));
+  ({ KnowledgeOrchestrator } = await import(pathToFileURL(path.resolve(__dirname, `${base}/KnowledgeOrchestrator.js`)).href));
+  ({ DocType } = await import(pathToFileURL(path.resolve(__dirname, `${base}/types.js`)).href));
+} catch (err) {
+  PREMIUM_AVAILABLE = false;
+  console.warn(`[premium-absent] ${err?.code ?? err?.message ?? err} — skipping premium-dependent suites in ${import.meta.url}`);
+}
+const describeIfPremium = PREMIUM_AVAILABLE ? describe : describe.skip;
 
 const MOCK_GENERATE_CONTENT = async () => JSON.stringify({
   identity: { name: 'Jordan Lee', email: 'jordan.lee@example.com', phone: '', location: 'Seattle, WA', linkedin: '', github: '', website: '', summary: '' },
@@ -82,7 +95,7 @@ async function captureIntent(fn) {
   return intent;
 }
 
-describe('Integration: transcript-aware intent routing through processQuestion', () => {
+describeIfPremium('Integration: transcript-aware intent routing through processQuestion', () => {
   let db, orchestrator, tmpResume;
   let hint; // mutable provider state the test controls
 

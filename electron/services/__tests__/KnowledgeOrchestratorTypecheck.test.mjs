@@ -15,12 +15,21 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { execFileSync } from 'node:child_process';
+import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../../..');
 
-test('KnowledgeOrchestrator.ts has no TS2339 "property does not exist" errors', () => {
+// The premium submodule was removed from this repo, so both the premium
+// tsconfig (electron/tsconfig.premium-check.json) and the file it type-checks
+// are absent. There is nothing to check without premium — skip gracefully
+// instead of reporting a vacuous pass/fail.
+const PREMIUM_AVAILABLE = fs.existsSync(
+  path.resolve(repoRoot, 'premium/electron/knowledge/KnowledgeOrchestrator.ts')
+) && fs.existsSync(path.resolve(repoRoot, 'electron/tsconfig.premium-check.json'));
+
+test('KnowledgeOrchestrator.ts has no TS2339 "property does not exist" errors', { skip: !PREMIUM_AVAILABLE }, () => {
   let out = '';
   try {
     // execFileSync with an arg array — no shell, no injection surface. The

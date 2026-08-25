@@ -64,7 +64,7 @@ const electronAPI = (window as any).electronAPI;
    at these durations; this is the curve the rest of the panel already uses. */
 const EASE_OUT = [0.23, 1, 0.32, 1] as const;
 
-function PremiumSelect({ label, value, options, onChange, placeholder }: any) {
+function StyledSelect({ label, value, options, onChange, placeholder }: any) {
     const t = useT();
     const [isOpen, setIsOpen] = useState(false);
     const containerRef = useRef<HTMLDivElement>(null);
@@ -606,7 +606,7 @@ export function LocalWhisperModelPanel({ onModelConfigChanged }: LocalWhisperMod
                     both driven by one interpolation, so there is no reflow step. */}
                 <div className="flex relative z-10 items-stretch">
                     <div className="flex-1 min-w-0">
-                        <PremiumSelect
+                        <StyledSelect
                             label={config.enabled ? t('Mic Audio Model') : t('Global Model')}
                             value={config.enabled ? config.micModelId : config.globalModelId}
                             onChange={config.enabled ? setMicModel : setGlobalModel}
@@ -675,7 +675,7 @@ export function LocalWhisperModelPanel({ onModelConfigChanged }: LocalWhisperMod
                                         },
                                     }}
                             >
-                                <PremiumSelect
+                                <StyledSelect
                                     label={t('System Audio Model')}
                                     value={config.systemModelId}
                                     onChange={setSystemModel}

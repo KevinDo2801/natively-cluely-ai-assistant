@@ -8,7 +8,7 @@
 //
 // REALITY (from the Phase 0 audit): routing today is CORRECT but SCATTERED across
 // planAnswer (AnswerPlanner), decideProfileIntelligence (ProfileIntelligenceRouter),
-// streamContextPolicy, and premium KnowledgeOrchestrator. This module does NOT
+// streamContextPolicy, and the KnowledgeOrchestrator. This module does NOT
 // replace any of them. It COMPOSES the two deterministic, already-live deciders
 // (planAnswer + decideProfileIntelligence) into the spec's output shape, so a caller
 // has one consultable, testable decision object. Existing paths can adopt it

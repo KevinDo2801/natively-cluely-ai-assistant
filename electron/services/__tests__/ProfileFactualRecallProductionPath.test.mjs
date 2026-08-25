@@ -7,7 +7,7 @@
 //   Bug A — "what are my projects?" / "my experience" returned a base-assistant
 //           third-person refusal ("I don't have access to your resume") because
 //           the result lacked the factualRecall flag and was dropped by the
-//           premium-intercept mode gate.
+//           knowledge-intercept mode gate.
 //   Bug B — project/experience recall depended on vector retrieval >= 0.55
 //           cosine, so a terse listing query could return an EMPTY context block
 //           even though the structured resume clearly contains the data.
@@ -24,7 +24,18 @@ import assert from 'node:assert/strict';
 import { createRequire } from 'node:module';
 
 const require = createRequire(import.meta.url);
-const { KnowledgeOrchestrator } = require('../../../dist-electron/premium/electron/knowledge/KnowledgeOrchestrator.js');
+// The premium submodule was removed from this repo, so the compiled
+// KnowledgeOrchestrator is absent: skip the premium-dependent suites
+// gracefully instead of failing at require() time.
+let PREMIUM_AVAILABLE = true;
+let KnowledgeOrchestrator;
+try {
+  ({ KnowledgeOrchestrator } = require('../../../dist-electron/premium/electron/knowledge/KnowledgeOrchestrator.js'));
+} catch (err) {
+  PREMIUM_AVAILABLE = false;
+  console.warn(`[premium-absent] ${err?.code ?? err?.message ?? err} — skipping premium-dependent suites in ${import.meta.url}`);
+}
+const describeIfPremium = PREMIUM_AVAILABLE ? describe : describe.skip;
 const { isProfileGroundingV2Enabled } = require('../../../dist-electron/electron/llm/profileGroundingV2.js');
 // These tests pin the LEGACY (flag-OFF) grounding contract. Profile Grounding
 // V2 deliberately changes some of it (generic questions keep the full profile in
@@ -93,7 +104,7 @@ function makeOrchestrator(resume = SYNTHETIC_RESUME) {
   return orch;
 }
 
-describe('Profile factual recall — production path', () => {
+describeIfPremium('Profile factual recall — production path', () => {
   test('"what are my projects?" returns ALL structured projects (no embedder, no LLM)', async () => {
     const orch = makeOrchestrator();
     const result = await orch.processQuestion('what are my projects?');
@@ -262,7 +273,7 @@ describe('LLMHelper factual-recall mode-gate bypass', () => {
     assert.equal(decide(false, result), true, 'projects/experience must survive an incompatible mode');
   });
 
-  test('non-factual premium result is still suppressed by the mode gate', () => {
+  test('non-factual knowledge result is still suppressed by the mode gate', () => {
     const result = { systemPromptInjection: 'X', contextBlock: 'Y' /* no factualRecall */ };
     assert.equal(decide(false, result), false, 'coaching/persona stays gated');
   });

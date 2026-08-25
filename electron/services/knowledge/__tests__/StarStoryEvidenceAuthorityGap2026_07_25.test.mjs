@@ -39,16 +39,27 @@ import { fileURLToPath } from 'node:url';
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const repoRoot = path.resolve(__dirname, '../../../..');
 
-const starStoryGeneratorSrc = readFileSync(
-  path.resolve(repoRoot, 'premium/electron/knowledge/StarStoryGenerator.ts'),
-  'utf8',
-);
-const hybridSearchEngineSrc = readFileSync(
-  path.resolve(repoRoot, 'premium/electron/knowledge/HybridSearchEngine.ts'),
-  'utf8',
-);
+// The premium submodule was removed from this repo, so its sources are absent:
+// skip the premium-dependent suites gracefully instead of failing at load time.
+let PREMIUM_AVAILABLE = true;
+let starStoryGeneratorSrc = '';
+let hybridSearchEngineSrc = '';
+try {
+  starStoryGeneratorSrc = readFileSync(
+    path.resolve(repoRoot, 'premium/electron/knowledge/StarStoryGenerator.ts'),
+    'utf8',
+  );
+  hybridSearchEngineSrc = readFileSync(
+    path.resolve(repoRoot, 'premium/electron/knowledge/HybridSearchEngine.ts'),
+    'utf8',
+  );
+} catch (err) {
+  PREMIUM_AVAILABLE = false;
+  console.warn(`[premium-absent] ${err?.code ?? err?.message ?? err} — skipping premium-dependent suites in ${import.meta.url}`);
+}
+const describeIfPremium = PREMIUM_AVAILABLE ? describe : describe.skip;
 
-describe('D16d gap, part 1: starStoriesToNodes() carries generation_mode only as free text, never a structured field', () => {
+describeIfPremium('D16d gap, part 1: starStoriesToNodes() carries generation_mode only as free text, never a structured field', () => {
   test('the returned ContextNode-shaped object has no confidence/generatedFrom/authority field', () => {
     const fnStart = starStoryGeneratorSrc.indexOf('export function starStoriesToNodes(');
     assert.ok(fnStart >= 0);
@@ -65,7 +76,7 @@ describe('D16d gap, part 1: starStoriesToNodes() carries generation_mode only as
   });
 });
 
-describe('D16d gap, part 2: formatContextBlock renders star_story under the SAME tag as verbatim résumé experience', () => {
+describeIfPremium('D16d gap, part 2: formatContextBlock renders star_story under the SAME tag as verbatim résumé experience', () => {
   test('the categoryConfig table maps star_story and experience to the identical XML tag (candidate_experience)', () => {
     const tableStart = hybridSearchEngineSrc.indexOf('const categoryConfig');
     assert.ok(tableStart >= 0);
@@ -84,7 +95,7 @@ describe('D16d gap, part 2: formatContextBlock renders star_story under the SAME
   });
 });
 
-describe('D16d gap, part 3: no Tier 2 KnowledgeCard or UnifiedRetriever consumes star_story content at all', () => {
+describeIfPremium('D16d gap, part 3: no Tier 2 KnowledgeCard or UnifiedRetriever consumes star_story content at all', () => {
   test('KnowledgeOrchestrator only ever persists STAR nodes to the Tier 1 db, never converts them to a KnowledgeCard', () => {
     const orchestratorSrc = readFileSync(
       path.resolve(repoRoot, 'premium/electron/knowledge/KnowledgeOrchestrator.ts'),

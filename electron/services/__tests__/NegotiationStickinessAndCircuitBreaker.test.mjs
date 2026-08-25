@@ -15,10 +15,23 @@ import { test, describe } from 'node:test';
 import assert from 'node:assert/strict';
 import { createRequire } from 'node:module';
 const require = createRequire(import.meta.url);
-const { classifyIntent, classifyIntentWithContext } =
-  require('../../../dist-electron/premium/electron/knowledge/IntentClassifier.js');
+// The premium submodule was removed from this repo, so the compiled
+// IntentClassifier is absent: skip the premium-dependent negotiation suites
+// gracefully instead of failing at require() time. The circuit-breaker suite
+// below only needs the main-repo LLMHelper and keeps running either way.
+let PREMIUM_AVAILABLE = true;
+let classifyIntent;
+let classifyIntentWithContext;
+try {
+  ({ classifyIntent, classifyIntentWithContext } =
+    require('../../../dist-electron/premium/electron/knowledge/IntentClassifier.js'));
+} catch (err) {
+  PREMIUM_AVAILABLE = false;
+  console.warn(`[premium-absent] ${err?.code ?? err?.message ?? err} — skipping premium-dependent suites in ${import.meta.url}`);
+}
+const describeIfPremium = PREMIUM_AVAILABLE ? describe : describe.skip;
 
-describe('negotiation: SPECIFIC keywords classify per-utterance (no context needed)', () => {
+describeIfPremium('negotiation: SPECIFIC keywords classify per-utterance (no context needed)', () => {
   // These are unambiguous comp asks → negotiation on their own.
   const negotiation = [
     'tell me your last salary', 'what is your current ctc',
@@ -32,7 +45,7 @@ describe('negotiation: SPECIFIC keywords classify per-utterance (no context need
   }
 });
 
-describe('negotiation: AMBIGUOUS comp phrases are context-gated (not base negotiation)', () => {
+describeIfPremium('negotiation: AMBIGUOUS comp phrases are context-gated (not base negotiation)', () => {
   // These deliberately do NOT classify negotiation standalone (they collide with
   // non-comp questions); they only become negotiation when a comp thread is
   // active (covered in the stickiness suite below).
@@ -44,7 +57,7 @@ describe('negotiation: AMBIGUOUS comp phrases are context-gated (not base negoti
   }
 });
 
-describe('negotiation: conversational stickiness', () => {
+describeIfPremium('negotiation: conversational stickiness', () => {
   const ctx = { recentIntentWasNegotiation: true };
 
   test('ambiguous follow-ups stay negotiation while thread active', () => {

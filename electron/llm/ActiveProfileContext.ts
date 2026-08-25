@@ -12,7 +12,8 @@
 //
 // Design rules:
 //   - No I/O, no LLM, no DB writes. Duck-typed orchestrator (same shape the
-//     profileAnswerBackend already consumes) so this file has no premium import.
+//     profileAnswerBackend already consumes) so this file has no orchestrator
+//     import at all.
 //   - documentHash is a stable content hash of structured_data — for
 //     staleness/telemetry only, never a security boundary.
 //   - "JD present" is defined here ONCE: an activeJD entry exists. Whether its

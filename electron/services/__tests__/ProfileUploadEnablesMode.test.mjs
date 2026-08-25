@@ -62,15 +62,29 @@ function makeTempFile(content, ext = '.txt') {
     return tmp;
 }
 
-const { KnowledgeDatabaseManager } = await import(
+// The premium submodule was removed from this repo, so the compiled
+// knowledge modules are absent: skip the premium-dependent suite
+// gracefully instead of failing at load time. (The IPC source-pin suite
+// below uses only ipcHandlers.ts and always runs.)
+let PREMIUM_AVAILABLE = true;
+let KnowledgeDatabaseManager;
+let KnowledgeOrchestrator;
+let DocType;
+try {
+  ({ KnowledgeDatabaseManager } = await import(
     pathToFileURL(path.resolve(__dirname, '../../../dist-electron/premium/electron/knowledge/KnowledgeDatabaseManager.js')).href
-);
-const { KnowledgeOrchestrator } = await import(
+  ));
+  ({ KnowledgeOrchestrator } = await import(
     pathToFileURL(path.resolve(__dirname, '../../../dist-electron/premium/electron/knowledge/KnowledgeOrchestrator.js')).href
-);
-const { DocType } = await import(
+  ));
+  ({ DocType } = await import(
     pathToFileURL(path.resolve(__dirname, '../../../dist-electron/premium/electron/knowledge/types.js')).href
-);
+  ));
+} catch (err) {
+  PREMIUM_AVAILABLE = false;
+  console.warn(`[premium-absent] ${err?.code ?? err?.message ?? err} — skipping premium-dependent suites in ${import.meta.url}`);
+}
+const describeIfPremium = PREMIUM_AVAILABLE ? describe : describe.skip;
 
 const MOCK_GENERATE_CONTENT = async (contents) => {
     const prompt = contents[0]?.text || '';
@@ -94,7 +108,7 @@ const MOCK_GENERATE_CONTENT = async (contents) => {
 
 const MOCK_EMBED_FN = async () => Array(128).fill(0).map((_, i) => (i % 7) * 0.01);
 
-describe('RC-8: upload enables mode + JD-only visibility', () => {
+describeIfPremium('RC-8: upload enables mode + JD-only visibility', () => {
     let db;
     let orchestrator;
     let tmpResume;
@@ -153,29 +167,24 @@ describe('RC-8: upload enables mode + JD-only visibility', () => {
 });
 
 // ---------------------------------------------------------------------------
-// Source-level: the IPC upload handlers must auto-enable knowledge mode.
-// (The handlers require an Electron runtime to execute, so we assert on source
-//  the same way ProfileIntelligenceGate.test.mjs does.)
+// Source-level: the IPC upload handlers are graceful no-op stubs after the
+// premium knowledge subsystem was removed (they no longer auto-enable
+// knowledge mode — there is no orchestrator to enable).
 // ---------------------------------------------------------------------------
-describe('RC-8: IPC upload handlers auto-enable knowledge mode', () => {
+describe('RC-8: IPC upload handlers are graceful no-op stubs (premium removed)', () => {
     const SOURCE = path.resolve(__dirname, '../../ipcHandlers.ts');
     const source = fs.readFileSync(SOURCE, 'utf8');
 
     for (const handler of ['profile:upload-resume', 'profile:upload-jd']) {
-        test(`handler "${handler}" calls setKnowledgeMode(true) on success`, () => {
+        test(`handler "${handler}" is a graceful no-op stub (feature unavailable without premium)`, () => {
             const start = source.indexOf(`safeHandle('${handler}'`);
             assert.ok(start >= 0, `${handler} not found`);
             // Bound the slice to this handler's body (until the next safeHandle).
             const next = source.indexOf('safeHandle(', start + 10);
             const body = source.slice(start, next > 0 ? next : start + 2500);
-            assert.ok(
-                body.includes('setKnowledgeMode(true)'),
-                `${handler} must call setKnowledgeMode(true) so the upload is immediately usable`
-            );
-            assert.ok(
-                body.includes("set('knowledgeMode', true)"),
-                `${handler} must persist knowledgeMode=true so it survives restart`
-            );
+            assert.match(body, /success:\s*false/, `${handler} must return success:false`);
+            assert.match(body, /Feature not available/, `${handler} must report the feature is unavailable without premium`);
+            assert.doesNotMatch(body, /setKnowledgeMode\(true\)/, `${handler} must not call setKnowledgeMode — the premium orchestrator is gone`);
         });
     }
 });

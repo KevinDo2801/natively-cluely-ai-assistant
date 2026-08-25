@@ -22,7 +22,18 @@ import Database from 'better-sqlite3';
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const kdbPath = path.resolve(__dirname, '../../../dist-electron/premium/electron/knowledge/KnowledgeDatabaseManager.js');
 const esPath = path.resolve(__dirname, '../../../dist-electron/electron/rag/embeddingSpace.js');
-const { KnowledgeDatabaseManager } = await import(pathToFileURL(kdbPath).href);
+// The premium submodule was removed from this repo, so the compiled
+// KnowledgeDatabaseManager is absent: skip the premium-dependent suite
+// gracefully instead of failing at load time.
+let PREMIUM_AVAILABLE = true;
+let KnowledgeDatabaseManager;
+try {
+  ({ KnowledgeDatabaseManager } = await import(pathToFileURL(kdbPath).href));
+} catch (err) {
+  PREMIUM_AVAILABLE = false;
+  console.warn(`[premium-absent] ${err?.code ?? err?.message ?? err} — skipping premium-dependent suites in ${import.meta.url}`);
+}
+const describeIfPremium = PREMIUM_AVAILABLE ? describe : describe.skip;
 const { embeddingSpaceKey } = await import(pathToFileURL(esPath).href);
 
 const SPACE_V1 = embeddingSpaceKey({ name: 'gemini', model: 'gemini-embedding-001', dimensions: 768 });
@@ -30,7 +41,7 @@ const SPACE_V2 = embeddingSpaceKey({ name: 'gemini', model: 'gemini-embedding-2'
 
 function vec(fill) { return new Array(768).fill(fill); }
 
-describe('Knowledge base embedding-space (real KnowledgeDatabaseManager)', () => {
+describeIfPremium('Knowledge base embedding-space (real KnowledgeDatabaseManager)', () => {
   let db, kdb;
 
   beforeEach(() => {

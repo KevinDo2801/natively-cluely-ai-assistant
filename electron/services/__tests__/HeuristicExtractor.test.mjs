@@ -20,7 +20,19 @@ const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const loadCompiled = (rel) =>
   import(pathToFileURL(path.resolve(__dirname, '../../../dist-electron/premium/electron/knowledge/' + rel)).href);
 
-const { heuristicResumeExtract, heuristicJDExtract } = await loadCompiled('HeuristicExtractor.js');
+// The premium submodule was removed from this repo, so the compiled
+// HeuristicExtractor is absent: skip the premium-dependent suites
+// gracefully instead of failing at load time.
+let PREMIUM_AVAILABLE = true;
+let heuristicResumeExtract;
+let heuristicJDExtract;
+try {
+  ({ heuristicResumeExtract, heuristicJDExtract } = await loadCompiled('HeuristicExtractor.js'));
+} catch (err) {
+  PREMIUM_AVAILABLE = false;
+  console.warn(`[premium-absent] ${err?.code ?? err?.message ?? err} — skipping premium-dependent suites in ${import.meta.url}`);
+}
+const describeIfPremium = PREMIUM_AVAILABLE ? describe : describe.skip;
 // Reuse the production readiness predicate so the test proves real readiness.
 const { profileFactsReady } = await import(
   pathToFileURL(path.resolve(__dirname, '../../../dist-electron/electron/llm/manualProfileIntelligence.js')).href
@@ -56,7 +68,7 @@ EDUCATION
 B.Tech in Computer Science, Cochin University (2021-08 - 2025-05)
 `;
 
-describe('heuristicResumeExtract', () => {
+describeIfPremium('heuristicResumeExtract', () => {
   const r = heuristicResumeExtract(RESUME);
 
   test('extracts the candidate name from the first line', () => {
@@ -158,7 +170,7 @@ Responsibilities
 - Partner with product on experiment design
 `;
 
-describe('heuristicJDExtract', () => {
+describeIfPremium('heuristicJDExtract', () => {
   const jd = heuristicJDExtract(JD);
 
   test('extracts a title', () => {
@@ -186,7 +198,7 @@ describe('heuristicJDExtract', () => {
 // degree="University of Washington" and "B.S. in CS, with honors" became
 // institution="with". The parser now GROUPS the institution/degree/GPA/thesis
 // lines of one entry together.
-describe('heuristicResumeExtract — multi-line education grouping', () => {
+describeIfPremium('heuristicResumeExtract — multi-line education grouping', () => {
   test('groups institution + degree + GPA + thesis lines into ONE clean entry', () => {
     const resume = `Marissa Chen\n\nEDUCATION\nUniversity of Washington, Seattle\nB.S. in Computer Science, with honors                              2011 - 2015\nGPA: 3.78/4.0\nSenior thesis: "Adaptive Sampling Strategies for High-Volume Time-Series Data"\n`;
     const r = heuristicResumeExtract(resume);
@@ -216,7 +228,7 @@ describe('heuristicResumeExtract — multi-line education grouping', () => {
 
 // E2E MiniMax campaign (autopilot pass): name + non-tech-experience parsing bugs
 // found by a deterministic 10-profile extraction sweep.
-describe('heuristicResumeExtract — name + non-tech section robustness', () => {
+describeIfPremium('heuristicResumeExtract — name + non-tech section robustness', () => {
   test('section header is NOT captured as the name ("PROFESSIONAL SUMMARY")', () => {
     const r = heuristicResumeExtract('PROFESSIONAL SUMMARY\nSeasoned engineer with 10 years...\n\nEXPERIENCE\nEngineer at Acme (2020 - 2023)\n');
     assert.doesNotMatch(r.identity.name, /professional|summary/i, 'header must not be the name');
@@ -238,7 +250,7 @@ describe('heuristicResumeExtract — name + non-tech section robustness', () => 
 });
 
 // E2E autopilot pass — education edge cases from the 10-profile sweep.
-describe('heuristicResumeExtract — education institution edge cases', () => {
+describeIfPremium('heuristicResumeExtract — education institution edge cases', () => {
   test('a graduation date after the degree is NOT the institution; the next line is', () => {
     const r = heuristicResumeExtract('Meg Donovan\n\nEDUCATION\nBachelor of Science in Mathematics Education, May 2017\nUniversity of Georgia, Athens, GA\n');
     assert.equal(r.education.length, 1);
@@ -254,7 +266,7 @@ describe('heuristicResumeExtract — education institution edge cases', () => {
 });
 
 // E2E autopilot pass — credential-suffix name parsing.
-describe('heuristicResumeExtract — professional credential suffix in name line', () => {
+describeIfPremium('heuristicResumeExtract — professional credential suffix in name line', () => {
   test('strips post-nominal credentials from the name ("MARIA GUTIERREZ, RN, BSN, CCRN")', () => {
     const r = heuristicResumeExtract('MARIA ELENA GUTIERREZ, RN, BSN, CCRN\n2847 Westwood Ave | Cincinnati, OH | maria.gutierrez.rn@gmail.com\n\nEDUCATION\nBachelor of Science in Nursing\nUniversity of Cincinnati\n');
     assert.equal(r.identity.name, 'MARIA ELENA GUTIERREZ');
@@ -267,7 +279,7 @@ describe('heuristicResumeExtract — professional credential suffix in name line
 });
 
 // E2E autopilot pass — skills-section parsing robustness (10-profile sweep).
-describe('heuristicResumeExtract — skills section robustness', () => {
+describeIfPremium('heuristicResumeExtract — skills section robustness', () => {
   test('a qualified header ("CORE SKILLS") is recognized, not just bare "SKILLS"', () => {
     const r = heuristicResumeExtract('Jamie Lee\n\nCORE SKILLS\nPython, Go, SQL\n\nEXPERIENCE\nEngineer at Acme (2020 - 2023)\n');
     assert.ok(r.skills_flat.length >= 3, 'skills parsed from a qualified header');
@@ -295,7 +307,7 @@ describe('heuristicResumeExtract — skills section robustness', () => {
 // a deterministic 10-profile sweep: company/title swapped or blank, markdown
 // asterisks leaking into fields, "What You Bring" not recognized as a
 // requirements header, and technologies hardcoded to always be empty.
-describe('heuristicJDExtract — real-world format robustness', () => {
+describeIfPremium('heuristicJDExtract — real-world format robustness', () => {
   test('explicit "**Company:**" label (markdown-wrapped) is read cleanly', () => {
     const jd = heuristicJDExtract('**Senior Product Designer (Contract-to-Hire)**\n\n**Company:** Lumen & Forge, Inc.\n**Location:** Remote\n\n**Requirements**\n- 5+ years of product design experience\n');
     assert.equal(jd.company, 'Lumen & Forge, Inc.');
@@ -342,7 +354,7 @@ describe('heuristicJDExtract — real-world format robustness', () => {
 // The old parser treated every non-bullet line as a NEW entry, so a standard
 // "Company\nTitle\nDates\n- bullets" job (or any line-order variant) broke into
 // 2-3 garbage entries. Affected 20-100% of experience entries on EVERY profile.
-describe('heuristicResumeExtract — experience multi-line grouping', () => {
+describeIfPremium('heuristicResumeExtract — experience multi-line grouping', () => {
   test('"Company — Title" then "Dates" then bullets groups into ONE entry', () => {
     const r = heuristicResumeExtract('Pat Lee\n\nWORK EXPERIENCE\nStripe, Inc. — Staff Software Engineer (L6)\nSan Francisco, CA | March 2022 – Present\n- Led the payments reconciliation rewrite.\n- Reduced latency by 60%.\n\nEDUCATION\nB.S. Computer Science\nStanford University\n');
     assert.equal(r.experience.length, 1);
@@ -404,7 +416,7 @@ describe('heuristicResumeExtract — experience multi-line grouping', () => {
 // E2E MiniMax campaign (autopilot pass) — projects section parsing. A bare
 // GitHub/URL metadata line, or a name with a date range in parens, was
 // mis-parsed into a separate garbage entry or a truncated project name.
-describe('heuristicResumeExtract — projects section robustness', () => {
+describeIfPremium('heuristicResumeExtract — projects section robustness', () => {
   test('a bare "github.com/user/repo | dates" line attaches its URL to the PREVIOUS project, not a new entry', () => {
     const r = heuristicResumeExtract('Pat Lee\n\nPROJECTS\nBookSwap: A peer to peer book exchange platform.\ngithub.com/jmitchell-dev/bookswap | January 2025 - April 2025\n\nEXPERIENCE\nEngineer at Acme (2020 - 2023)\n');
     assert.equal(r.projects.length, 1, 'the URL line must not become its own project');

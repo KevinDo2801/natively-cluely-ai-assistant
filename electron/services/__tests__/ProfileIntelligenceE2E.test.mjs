@@ -21,9 +21,22 @@ import Database from 'better-sqlite3';
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const P = (rel) => pathToFileURL(path.resolve(__dirname, rel)).href;
 
-const { KnowledgeDatabaseManager } = await import(P('../../../dist-electron/premium/electron/knowledge/KnowledgeDatabaseManager.js'));
-const { KnowledgeOrchestrator } = await import(P('../../../dist-electron/premium/electron/knowledge/KnowledgeOrchestrator.js'));
-const { DocType } = await import(P('../../../dist-electron/premium/electron/knowledge/types.js'));
+// The premium submodule was removed from this repo, so the compiled
+// knowledge modules are absent: skip the premium-dependent suites
+// gracefully instead of failing at load time.
+let PREMIUM_AVAILABLE = true;
+let KnowledgeDatabaseManager;
+let KnowledgeOrchestrator;
+let DocType;
+try {
+  ({ KnowledgeDatabaseManager } = await import(P('../../../dist-electron/premium/electron/knowledge/KnowledgeDatabaseManager.js')));
+  ({ KnowledgeOrchestrator } = await import(P('../../../dist-electron/premium/electron/knowledge/KnowledgeOrchestrator.js')));
+  ({ DocType } = await import(P('../../../dist-electron/premium/electron/knowledge/types.js')));
+} catch (err) {
+  PREMIUM_AVAILABLE = false;
+  console.warn(`[premium-absent] ${err?.code ?? err?.message ?? err} — skipping premium-dependent suites in ${import.meta.url}`);
+}
+const describeIfPremium = PREMIUM_AVAILABLE ? describe : describe.skip;
 const { isProfileGroundingV2Enabled } = await import(P('../../../dist-electron/electron/llm/profileGroundingV2.js'));
 
 // This suite asserts the V2 full-injection behavior (the production default).
@@ -111,17 +124,20 @@ const MOCK_EMBED_FN = async () => Array(128).fill(0).map((_, i) => (i % 7) * 0.0
 
 let db, orchestrator, tmpResume, tmpJd;
 
-before(async () => {
-    db = new KnowledgeDatabaseManager(new Database(':memory:'));
-    db.initializeSchema();
-    orchestrator = new KnowledgeOrchestrator(db);
-    orchestrator.setGenerateContentFn(MOCK_GENERATE_CONTENT);
-    orchestrator.setEmbedFn(MOCK_EMBED_FN);
-    tmpResume = makeTempFile(RESUME_FIXTURE);
-    tmpJd = makeTempFile(JD_FIXTURE);
-    await orchestrator.ingestDocument(tmpResume, DocType.RESUME);
-    await orchestrator.ingestDocument(tmpJd, DocType.JD);
-    orchestrator.setKnowledgeMode(true);
+before(async (t) => {
+  // Premium (KnowledgeDatabaseManager/KnowledgeOrchestrator) absent — the
+  // whole suite is skipped, so nothing below may touch them.
+  if (!PREMIUM_AVAILABLE) return t.skip('premium knowledge modules unavailable');
+  db = new KnowledgeDatabaseManager(new Database(':memory:'));
+  db.initializeSchema();
+  orchestrator = new KnowledgeOrchestrator(db);
+  orchestrator.setGenerateContentFn(MOCK_GENERATE_CONTENT);
+  orchestrator.setEmbedFn(MOCK_EMBED_FN);
+  tmpResume = makeTempFile(RESUME_FIXTURE);
+  tmpJd = makeTempFile(JD_FIXTURE);
+  await orchestrator.ingestDocument(tmpResume, DocType.RESUME);
+  await orchestrator.ingestDocument(tmpJd, DocType.JD);
+  orchestrator.setKnowledgeMode(true);
 });
 after(() => {
     try { fs.unlinkSync(tmpResume); } catch {}
@@ -136,7 +152,7 @@ const hasJDBlock = (r) => /<target_job>\n/.test(ctxOf(r));
 // Whether the user's actual facts are reachable (block present OR an intro/name).
 const groundsOnProfile = (r) => hasResumeBlock(r) || /Evin John/.test(ctxOf(r));
 
-describe('Spec §11 E2E: profile questions ARE grounded', { skip: !V2_ON }, () => {
+describeIfPremium('Spec §11 E2E: profile questions ARE grounded', { skip: !V2_ON }, () => {
     test('1/2. "what is my name?" grounds on identity (name reachable)', async () => {
         const r = await orchestrator.processQuestion('what is my name?');
         assert.ok(r, 'must return a result');
@@ -176,7 +192,7 @@ describe('Spec §11 E2E: profile questions ARE grounded', { skip: !V2_ON }, () =
     });
 });
 
-describe('Spec §8.3 E2E: coding/technical/sales/lecture get NO profile', () => {
+describeIfPremium('Spec §8.3 E2E: coding/technical/sales/lecture get NO profile', () => {
     test('8. "solve two sum" gets NO resume/JD', async () => {
         const r = await orchestrator.processQuestion('solve two sum');
         assert.ok(!hasResumeBlock(r), 'coding must not get resume');
@@ -207,7 +223,7 @@ describe('Spec §8.3 E2E: coding/technical/sales/lecture get NO profile', () => 
     });
 });
 
-describe('Spec §12 E2E acceptance: no false refusal text in grounded context', { skip: !V2_ON }, () => {
+describeIfPremium('Spec §12 E2E acceptance: no false refusal text in grounded context', { skip: !V2_ON }, () => {
     test('a skills question carries the anti-refusal grounding rule', async () => {
         const r = await orchestrator.processQuestion('what are my programming languages?');
         assert.ok(r);

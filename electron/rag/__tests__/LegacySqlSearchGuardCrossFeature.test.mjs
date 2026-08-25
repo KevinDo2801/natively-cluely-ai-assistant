@@ -32,8 +32,21 @@ const kdbPath = path.resolve(__dirname, '../../../dist-electron/premium/electron
 
 const ES = await import(pathToFileURL(esPath).href);
 const { VectorStore } = await import(pathToFileURL(vsPath).href);
-const { KnowledgeDatabaseManager } = await import(pathToFileURL(kdbPath).href);
 const { buildLegacySpaceCaseSql, legacySpaceForProvider, LEGACY_PROVIDER_MODEL, embeddingSpaceKey } = ES;
+
+// The premium submodule was removed from this repo, so the compiled
+// KnowledgeDatabaseManager is absent: skip the premium-dependent
+// cross-feature suite gracefully instead of failing at load time.
+// (Suites (5) and (6) use only main-repo modules and always run.)
+let PREMIUM_AVAILABLE = true;
+let KnowledgeDatabaseManager;
+try {
+  ({ KnowledgeDatabaseManager } = await import(pathToFileURL(kdbPath).href));
+} catch (err) {
+  PREMIUM_AVAILABLE = false;
+  console.warn(`[premium-absent] ${err?.code ?? err?.message ?? err} — skipping premium-dependent suites in ${import.meta.url}`);
+}
+const describeIfPremium = PREMIUM_AVAILABLE ? describe : describe.skip;
 
 // ──────────────────────────────────────────────────────────────────────────
 // (5) buildLegacySpaceCaseSql — valid SQL + matches legacySpaceForProvider
@@ -170,7 +183,7 @@ describe('VectorStore search hard-guard (real compiled VectorStore, pure-SQL pat
 // ──────────────────────────────────────────────────────────────────────────
 // (7) Cross-feature isolation + local-only no-op
 // ──────────────────────────────────────────────────────────────────────────
-describe('Cross-feature: meetings RAG vs knowledge base do not interfere', () => {
+describeIfPremium('Cross-feature: meetings RAG vs knowledge base do not interfere', () => {
   test('separate tables: knowledge re-embed never reads/writes RAG meeting tables', () => {
     // Build BOTH schemas in one DB (worst case: shared file) and prove the knowledge
     // re-embed sweep only touches context_nodes.

@@ -12,7 +12,6 @@
     "build": "npm run clean && node node_modules/typescript7/lib/tsc.js -p tsconfig.json && vite build",
     "build:electron": "node scripts/build-electron.js",
     "typecheck:electron": "node node_modules/typescript7/lib/tsc.js -p electron/tsconfig.json --noEmit",
-    "typecheck:premium": "node node_modules/typescript7/lib/tsc.js -p electron/tsconfig.premium-check.json --noEmit",
     "typecheck:ts5": "tsc -p tsconfig.json --noEmit",
     "typecheck:ts5:electron": "tsc -p electron/tsconfig.json --noEmit",
     "typecheck:ts7": "node node_modules/typescript7/lib/tsc.js -p tsconfig.json --noEmit",

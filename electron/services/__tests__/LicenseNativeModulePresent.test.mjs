@@ -61,9 +61,14 @@ Module._resolveFilename = function (request, ...rest) {
   return originalResolve.call(this, request, ...rest);
 };
 
-const { LicenseManager } = await import(
-  '../../../dist-electron/premium/electron/services/LicenseManager.js'
-);
+let LicenseManager = null;
+try {
+  ({ LicenseManager } = await import(
+    '../../../dist-electron/premium/electron/services/LicenseManager.js'
+  ));
+} catch (err) {
+  console.warn(`[premium-absent] ${err?.code ?? err?.message ?? err} — LicenseManager (premium) unavailable; skipping LicenseNativeModulePresent suite in ${import.meta.url}`);
+}
 
 after(() => {
   Module._resolveFilename = originalResolve;
@@ -103,7 +108,10 @@ after(() => {
   globalThis.fetch = originalFetch;
 });
 
-before(() => {
+before((t) => {
+  // LicenseManager (premium) absent — the whole suite is skipped, so nothing
+  // below may touch it.
+  if (!LicenseManager) return t.skip('premium LicenseManager unavailable');
   // Guard the premise. If the stub failed to load, getHardwareId is undefined,
   // every assertion below silently becomes the ABSENT case, and this file
   // duplicates its companion instead of covering the branches only it can reach.
@@ -114,7 +122,11 @@ before(() => {
   );
 });
 
-describe('native module present: this device owns the license', () => {
+// LicenseManager lives in the (removed) premium submodule. When premium is
+// absent the whole suite is moot — guard it so it degrades to a clean skip.
+const describeIfPremium = LicenseManager ? describe : describe.skip;
+
+describeIfPremium('native module present: this device owns the license', () => {
   test('a matching HWID grants Pro', () => {
     writeLicense('gumroad', THIS_DEVICE_HWID);
     assert.equal(freshManager().isPremium(), true);
@@ -137,7 +149,7 @@ describe('native module present: this device owns the license', () => {
   });
 });
 
-describe('native module present: the license belongs to ANOTHER device', () => {
+describeIfPremium('native module present: the license belongs to ANOTHER device', () => {
   test('a mismatched HWID grants nothing', () => {
     writeLicense('gumroad', OTHER_DEVICE_HWID);
     const mgr = freshManager();
@@ -186,7 +198,7 @@ describe('native module present: the license belongs to ANOTHER device', () => {
   });
 });
 
-describe('native module present: replacing one perpetual license with another', () => {
+describeIfPremium('native module present: replacing one perpetual license with another', () => {
   // activateLicense() is the user deliberately entering a new Gumroad/Dodo key,
   // so it opts into replacing a perpetual license (storeLicense's
   // replacePerpetual). Driven end to end through activateLicense rather than by
@@ -302,7 +314,7 @@ describe('native module present: replacing one perpetual license with another', 
   });
 });
 
-describe('native module present: what a benign skip reports', () => {
+describeIfPremium('native module present: what a benign skip reports', () => {
   test('activateLicense does NOT claim success for a key it never validated', async () => {
     // The guard returns before /v1/pro/verify, so nothing checked this key and
     // nothing stored it. Reporting success told a user their subscription key
@@ -372,7 +384,7 @@ describe('native module present: what a benign skip reports', () => {
 
 });
 
-describe('native module present: an unvalidated key must not displace a verified license', () => {
+describeIfPremium('native module present: an unvalidated key must not displace a verified license', () => {
   test('a 422 with no validation available does NOT overwrite a perpetual license', async () => {
     // 422 alone only says the product's activation limit is full — an invalid key
     // produces it too. When validateDodoKey is missing from the binary (the

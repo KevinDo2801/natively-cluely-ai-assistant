@@ -7,15 +7,13 @@
 // warned-and-swallowed a Tier 2 failure leaving Tier 1 deleted and Tier 2
 // orphaned, to a real cross-tier transaction.
 //
-// Source-pinned only: better-sqlite3 is ABI-mismatched in this dev
-// environment (ESTABLISHED baseline this session — every DB-touching test
-// fails at require() time regardless of code correctness), so no live
-// Database instance (in-memory or otherwise) can be constructed here to
-// drive a genuine rollback-on-throw behavioral test. These tests instead pin
-// the exact structural properties that make deleteProfileTransactional a
-// real transaction rather than sequencing: both deletes happen INSIDE one
-// DatabaseManager.runInTransaction() call, and the old warn-and-swallow
-// try/catch around the Tier 2 delete is gone from both IPC handlers.
+// The premium knowledge subsystem has since been REMOVED, so the
+// `profile:delete` / `profile:delete-jd` IPC handlers no longer delegate to
+// deleteProfileTransactional — they are graceful no-op stubs returning
+// `{ success: false, error: 'Feature not available.' }`. This file retains
+// the structural tests on deleteProfileTransactional.ts (which still exists as
+// a module) and updates the handler-delegation assertions to pin the stubs'
+// new contract.
 
 import { test, describe } from 'node:test';
 import assert from 'node:assert/strict';
@@ -50,45 +48,20 @@ describe('deleteProfileTransactional.ts wraps both tiers in one real transaction
   });
 });
 
-describe('profile:delete / profile:delete-jd IPC handlers use the transactional entrypoint, not the old warn-and-swallow two-call pattern', () => {
+describe('profile:delete / profile:delete-jd IPC handlers are graceful no-op stubs (premium removed)', () => {
   function handlerBody(routeName) {
     const start = ipcSrc.indexOf(`safeHandle('${routeName}'`);
     assert.ok(start >= 0, `${routeName} handler must exist`);
-    const end = ipcSrc.indexOf("\n  });", start);
+    const end = ipcSrc.indexOf('\n  });', start);
     return ipcSrc.slice(start, end);
   }
 
-  test('profile:delete calls deleteProfileTransactional and no longer has a try/catch that swallows a Tier 2 failure', () => {
-    const body = handlerBody('profile:delete');
-    assert.match(body, /deleteProfileTransactional\(orchestrator, DocType\.RESUME, 'resume'\)/);
-    assert.doesNotMatch(body, /failed to clear Tier 2 resume pack/, 'the old warn-only swallow must be removed, not left alongside the new call');
-  });
-
-  test('profile:delete-jd calls deleteProfileTransactional and no longer has a try/catch that swallows a Tier 2 failure', () => {
-    const body = handlerBody('profile:delete-jd');
-    assert.match(body, /deleteProfileTransactional\(orchestrator, DocType\.JD, 'jd'\)/);
-    assert.doesNotMatch(body, /failed to clear Tier 2 JD pack/, 'the old warn-only swallow must be removed, not left alongside the new call');
-  });
-
-  test('characterization: a Tier 2 delete failure now propagates to the handler catch (success:false) instead of being swallowed', () => {
-    // This documents the BEHAVIORAL consequence of the structural change above:
-    // since both deletes run inside one runInTransaction() closure with no
-    // inner try/catch, a throw from ProfilePackBuilder.deleteProfilePack (Tier 2)
-    // is no longer caught-and-warned at the call site — it propagates out of
-    // deleteProfileTransactional, is NOT caught until the handler's own outer
-    // try/catch, and the handler now returns {success:false, error} instead of
-    // {success:true} with an orphaned Tier 2 row. Verified by absence of any
-    // inner catch between the transaction call and the handler's outer catch.
-    for (const routeName of ['profile:delete', 'profile:delete-jd']) {
+  for (const routeName of ['profile:delete', 'profile:delete-jd']) {
+    test(`${routeName} returns feature-unavailable without calling deleteProfileTransactional`, () => {
       const body = handlerBody(routeName);
-      const txCallIdx = body.indexOf('deleteProfileTransactional(');
-      const afterCall = body.slice(txCallIdx);
-      const nextCatchIdx = afterCall.indexOf('} catch');
-      const returnSuccessIdx = afterCall.indexOf('return { success: true }');
-      assert.ok(
-        returnSuccessIdx >= 0 && returnSuccessIdx < nextCatchIdx,
-        `${routeName}: no inner catch must sit between the transactional delete and the success return`,
-      );
-    }
-  });
+      assert.match(body, /success:\s*false/);
+      assert.match(body, /Feature not available/);
+      assert.doesNotMatch(body, /deleteProfileTransactional/, 'premium transactional delete is not called in a stub');
+    });
+  }
 });

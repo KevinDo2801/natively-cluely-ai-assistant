@@ -35,16 +35,28 @@ const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const repoRoot = path.resolve(__dirname, '../../../..');
 const require = createRequire(import.meta.url);
 
-const src = readFileSync(
-  path.resolve(repoRoot, 'premium/electron/knowledge/KnowledgeOrchestrator.ts'),
-  'utf8',
-);
+// The premium submodule was removed from this repo, so its KnowledgeOrchestrator
+// source is absent: the two source-pinned suites below skip gracefully instead
+// of failing at load time. (The flag-registration suite uses only main-repo
+// modules and always runs.)
+let PREMIUM_AVAILABLE = true;
+let src = '';
+try {
+  src = readFileSync(
+    path.resolve(repoRoot, 'premium/electron/knowledge/KnowledgeOrchestrator.ts'),
+    'utf8',
+  );
+} catch (err) {
+  PREMIUM_AVAILABLE = false;
+  console.warn(`[premium-absent] ${err?.code ?? err?.message ?? err} — skipping premium-dependent suites in ${import.meta.url}`);
+}
+const describeIfPremium = PREMIUM_AVAILABLE ? describe : describe.skip;
 
 const { isIntelligenceFlagEnabled, __resetIntelligenceFlagsCache } = require(
   path.resolve(repoRoot, 'dist-electron/electron/intelligence/intelligenceFlags.js'),
 );
 
-describe('resume branch: setImmediate deferral removed, direct synchronous call', () => {
+describeIfPremium('resume branch: setImmediate deferral removed, direct synchronous call', () => {
   test('no longer wraps _generateProfileOkfPack("resume") in setImmediate', () => {
     assert.doesNotMatch(src, /setImmediate\(\(\) => this\._generateProfileOkfPack\('resume'\)\)/);
   });
@@ -55,7 +67,7 @@ describe('resume branch: setImmediate deferral removed, direct synchronous call'
   });
 });
 
-describe('JD branch: flag-gated awaited sequence, unchanged default (fire-and-forget) behavior', () => {
+describeIfPremium('JD branch: flag-gated awaited sequence, unchanged default (fire-and-forget) behavior', () => {
   function jdBranchBody() {
     const start = src.indexOf('// 9. Fire AOT Pipeline (JD Only)');
     assert.ok(start >= 0);

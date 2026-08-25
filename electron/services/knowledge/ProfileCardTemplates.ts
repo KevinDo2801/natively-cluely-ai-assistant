@@ -1,7 +1,7 @@
 // electron/services/knowledge/ProfileCardTemplates.ts
 //
 // OKF Profile Intelligence upgrade (2026-07-02) — DETERMINISTIC card builders
-// that transform the premium engine's already-LLM-extracted structured_data
+// that transform the already-LLM-extracted structured_data
 // (StructuredResume / StructuredJD) and AOT artifacts into typed profile
 // KnowledgeCard drafts. NO new LLM call: every card body is assembled from
 // fields that already exist in structured_data, so the OKF layer can never

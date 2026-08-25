@@ -516,9 +516,10 @@ const GAP_BETWEEN_ROLES_PATTERNS = [
 // how a candidate would actually describe their own tenure, and is the
 // convention the task's own expected answers use ("~3 months" for a
 // Jun-Aug internship, "~7 months" total for a 3-month + 4-month pair).
-// NOTE: this deliberately diverges from the EXCLUSIVE
-// premium/electron/knowledge/DocumentChunker.ts#calculateDurationMonths
-// (used for skill-experience-months bucketing, an internal ranking signal
+// NOTE: this deliberately diverges from the EXCLUSIVE tenure convention
+// previously used by the removed premium module
+// (premium/electron/knowledge/DocumentChunker.ts#calculateDurationMonths,
+// applied to skill-experience-months bucketing, an internal ranking signal
 // where the off-by-one doesn't matter) — that function is not reused here
 // because user-facing tenure phrasing and internal ranking arithmetic are
 // different concerns with different correctness bars.

@@ -14,6 +14,20 @@ const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const repoRoot = path.resolve(__dirname, '../../../..');
 const read = (rel) => fs.readFileSync(path.join(repoRoot, rel), 'utf8');
 
+// The premium submodule was removed from this repo, so premium/src is absent:
+// the ModesSettings.tsx UI assertions below skip gracefully instead of failing
+// at runtime. (The IPC/preload/d.ts assertions above use only main-repo
+// sources and always run.)
+let PREMIUM_AVAILABLE = true;
+let modesSettingsSrc = null;
+try {
+  modesSettingsSrc = read('premium/src/ModesSettings.tsx');
+} catch (err) {
+  PREMIUM_AVAILABLE = false;
+  console.warn(`[premium-absent] ${err?.code ?? err?.message ?? err} — skipping premium-dependent tests in ${import.meta.url}`);
+}
+const testIfPremium = PREMIUM_AVAILABLE ? test : test.skip;
+
 const ipcHandlersSrc = read('electron/ipcHandlers.ts');
 const preloadSrc = read('electron/preload.ts');
 const electronDtsSrc = read('src/types/electron.d.ts');
@@ -86,15 +100,15 @@ test('src/types/electron.d.ts: declares matching renderer types for the knowledg
   assert.match(electronDtsSrc, /knowledgeExportPack: \(fileId: string\) => Promise</);
 });
 
-test('premium/src/ModesSettings.tsx: KnowledgePanel UI is gated behind okfKnowledgeUiEnabled state read from getIntelligenceFlags', () => {
-  const src = read('premium/src/ModesSettings.tsx');
+testIfPremium('premium/src/ModesSettings.tsx: KnowledgePanel UI is gated behind okfKnowledgeUiEnabled state read from getIntelligenceFlags', () => {
+  const src = modesSettingsSrc;
   assert.match(src, /getIntelligenceFlags\?\.\(\)/);
   assert.match(src, /f\.key === 'okfKnowledgeUi'/);
   assert.match(src, /okfKnowledgeUiEnabled && /);
 });
 
-test('premium/src/ModesSettings.tsx: defines a KnowledgePanel component with regenerate + export actions', () => {
-  const src = read('premium/src/ModesSettings.tsx');
+testIfPremium('premium/src/ModesSettings.tsx: defines a KnowledgePanel component with regenerate + export actions', () => {
+  const src = modesSettingsSrc;
   assert.match(src, /const KnowledgePanel: React\.FC/);
   assert.match(src, /onRegenerate: \(\) => void/);
   assert.match(src, /onExport: \(\) => void/);

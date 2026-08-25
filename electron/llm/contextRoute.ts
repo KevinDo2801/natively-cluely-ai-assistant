@@ -1,7 +1,7 @@
 // electron/llm/contextRoute.ts
 //
 // THE unified context-routing contract (REPORT_TO_CHATGPT Phase 6). Both the
-// app-layer prompt assembly (WhatToAnswerLLM/PromptAssembler) and the premium
+// app-layer prompt assembly (WhatToAnswerLLM/PromptAssembler) and the
 // knowledge layer should derive their include/exclude decisions from THIS, so
 // the two pipelines can no longer silently diverge on what context a given
 // answer type may see.

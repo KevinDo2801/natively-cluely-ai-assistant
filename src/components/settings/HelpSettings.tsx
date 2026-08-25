@@ -1484,16 +1484,13 @@ export const HelpSettings: React.FC<{ onNavigate?: (tab: string) => void }> = ({
                                     </ul>
                                 </div>
 
-                                <div className="p-4 rounded-xl border bg-accent-subtle border-border-subtle">
+                                <div className="p-4 rounded-xl border bg-bg-item-surface border-border-subtle">
                                     <h4 className="font-semibold text-sm mb-2 text-text-primary flex items-center gap-2">
-                                        <CreditCard className="w-4 h-4 text-accent-primary" /> Pro Requirement
+                                        <User className="w-4 h-4 text-accent-primary" /> How to Use
                                     </h4>
-                                    <p className="text-[11px] text-text-secondary mb-2">
-                                        This is a Natively Pro feature.
-                                    </p>
                                     <ol className="text-[11px] text-text-secondary space-y-1 list-decimal pl-4 mb-0">
-                                        <li>Get a License at <button onClick={() => { (window as any).electronAPI?.openExternal('https://natively.software/') }} className="text-accent-primary hover:underline font-semibold">natively.software</button></li>
                                         <li>Drop your Resume PDF in the UI to activate injection.</li>
+                                        <li>Enable <span className="text-amber-500 font-semibold">Profile Mode</span> to shape every answer.</li>
                                     </ol>
                                 </div>
                             </div>
@@ -1592,7 +1589,6 @@ export const HelpSettings: React.FC<{ onNavigate?: (tab: string) => void }> = ({
                                     <ul className="text-[11px] text-text-secondary space-y-1 list-disc pl-4">
                                         <li>Click the <strong>grid icon</strong> in the Launcher header</li>
                                         <li>Or click the grid icon in the main interface toolbar</li>
-                                        <li>Requires a Natively Pro license</li>
                                     </ul>
                                 </div>
                                 <div className="p-4 rounded-xl border bg-bg-item-surface border-border-subtle">
@@ -1623,15 +1619,6 @@ export const HelpSettings: React.FC<{ onNavigate?: (tab: string) => void }> = ({
                                     </ul>
                                 </div>
                             </div>
-                        </div>
-
-                        <div className="p-3 bg-indigo-500/10 border border-indigo-500/20 rounded-xl">
-                            <h4 className="text-[13px] font-semibold text-indigo-400 flex items-center gap-2 mb-1">
-                                <Star size={14} /> Pro Feature
-                            </h4>
-                            <p className="text-[11px] text-text-secondary leading-relaxed mb-0">
-                                Modes are locked behind Natively Pro. Free and trial users see only the General mode. Activate a license via <strong>Settings → Natively API</strong> to unlock all seven modes.
-                            </p>
                         </div>
                     </div>
                 </AccordionSection>

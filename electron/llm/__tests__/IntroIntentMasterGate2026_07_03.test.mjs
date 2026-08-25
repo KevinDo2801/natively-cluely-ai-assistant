@@ -28,8 +28,19 @@ const readPatterns = (rel) => {
   return [...m[1].matchAll(/'([^']+)'/g)].map((x) => x[1]);
 };
 
-const intentPatterns = readPatterns('premium/electron/knowledge/IntentClassifier.ts');
-const assemblerPatterns = readPatterns('premium/electron/knowledge/ContextAssembler.ts');
+// The premium submodule was removed from this repo, so its sources are absent:
+// skip the premium-dependent suites gracefully instead of failing at load time.
+let PREMIUM_AVAILABLE = true;
+let intentPatterns = [];
+let assemblerPatterns = [];
+try {
+  intentPatterns = readPatterns('premium/electron/knowledge/IntentClassifier.ts');
+  assemblerPatterns = readPatterns('premium/electron/knowledge/ContextAssembler.ts');
+} catch (err) {
+  PREMIUM_AVAILABLE = false;
+  console.warn(`[premium-absent] ${err?.code ?? err?.message ?? err} — skipping premium-dependent suites in ${import.meta.url}`);
+}
+const describeIfPremium = PREMIUM_AVAILABLE ? describe : describe.skip;
 const isIntro = (pats) => (q) => pats.some((p) => q.toLowerCase().includes(p));
 
 const LIVE_INTROS = [
@@ -46,19 +57,19 @@ const NON_INTROS = [
   'How many years have you worked with Go?',
 ];
 
-describe('IntentClassifier INTRO_PATTERNS (master gate) covers live intros', () => {
+describeIfPremium('IntentClassifier INTRO_PATTERNS (master gate) covers live intros', () => {
   const f = isIntro(intentPatterns);
   for (const q of LIVE_INTROS) test(`INTRO: "${q.slice(0, 40)}…"`, () => assert.ok(f(q)));
   for (const q of NON_INTROS) test(`NOT: "${q.slice(0, 40)}…"`, () => assert.ok(!f(q)));
 });
 
-describe('ContextAssembler INTRO_PATTERNS covers live intros', () => {
+describeIfPremium('ContextAssembler INTRO_PATTERNS covers live intros', () => {
   const f = isIntro(assemblerPatterns);
   for (const q of LIVE_INTROS) test(`INTRO: "${q.slice(0, 40)}…"`, () => assert.ok(f(q)));
   for (const q of NON_INTROS) test(`NOT: "${q.slice(0, 40)}…"`, () => assert.ok(!f(q)));
 });
 
-describe('the two INTRO_PATTERNS lists stay in sync (drift WAS the bug)', () => {
+describeIfPremium('the two INTRO_PATTERNS lists stay in sync (drift WAS the bug)', () => {
   test('every live intro phrasing is matched by BOTH lists', () => {
     const a = isIntro(intentPatterns), b = isIntro(assemblerPatterns);
     for (const q of LIVE_INTROS) {

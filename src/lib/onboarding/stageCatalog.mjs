@@ -24,7 +24,6 @@ export const STAGE_ORDER = [
   'browser_extension',
   'profile_intelligence',
   'modes_manager',
-  'trial_promo',
   'support',
   'ads',
   'review_prompt',
@@ -69,7 +68,7 @@ export const STAGES = [
       requiresMeetingInactive: true,
     },
     requiresStages: ['browser_extension'],
-    skipWhen: (s) => s.hasProfile || s.isPremium || s.seenProfileOnboarding,
+    skipWhen: (s) => s.hasProfile || s.seenProfileOnboarding,
   },
   {
     id: 'modes_manager',
@@ -86,22 +85,8 @@ export const STAGES = [
     skipWhen: (s) => s.seenModesOnboarding || s.activeModeSet,
   },
   {
-    id: 'trial_promo',
-    order: 5,
-    triggers: {
-      requiresHomepageMounted: true,
-      requiresHomepageDuration: 6000,
-      requiresForeground: true,
-      requiresMeetingInactive: true,
-    },
-    requiresStages: ['modes_manager'],
-    skipWhen: (s) => s.hasNativelyKey || s.hasTrialToken || s.isPremium,
-    cooldownMs: () => 21 * 24 * 60 * 60 * 1000,
-    reEligibility: (s) => !s.hasNativelyKey && !s.hasTrialToken && !s.isPremium,
-  },
-  {
     id: 'support',
-    order: 6,
+    order: 5,
     triggers: {
       requiresHomepageMounted: true,
       requiresHomepageDuration: 10_000,
@@ -109,13 +94,13 @@ export const STAGES = [
       requiresMeetingInactive: true,
     },
     requiresStages: ['quiet_window'],
-    skipWhen: (s) => !s.donationShouldShow || s.isPremium,
+    skipWhen: (s) => !s.donationShouldShow,
     customPredicate: (ctx) => ctx.turnCount >= 10 || ctx.startupCount >= 10,
     cooldownMs: () => 14 * 24 * 60 * 60 * 1000,
   },
   {
     id: 'ads',
-    order: 7,
+    order: 6,
     triggers: {
       requiresHomepageMounted: true,
       requiresHomepageDuration: 10_000,
@@ -124,12 +109,11 @@ export const STAGES = [
       requiresStartupCount: 4,
     },
     requiresStages: ['support'],
-    skipWhen: (s) => s.isPremium,
     cooldownMs: () => 14 * 24 * 60 * 60 * 1000,
   },
   {
     id: 'review_prompt',
-    order: 8,
+    order: 7,
     triggers: {
       requiresHomepageMounted: true,
       requiresHomepageDuration: 10_000,

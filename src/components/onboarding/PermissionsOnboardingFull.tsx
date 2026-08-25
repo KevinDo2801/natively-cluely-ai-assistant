@@ -419,7 +419,7 @@ export const PermissionsOnboardingFull: React.FC<Props> = ({ isOpen, onDismiss }
                   fontFamily: "'Inter', sans-serif",
                 }}
               >
-                Allow Natively the following system accesses to enable premium recording, real-time assist tools, and seamless audio transcriptions.
+                Allow Natively the following system accesses to enable high-quality recording, real-time assist tools, and seamless audio transcriptions.
               </motion.p>
 
               {/* High-Fidelity Permission list items */}

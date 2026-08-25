@@ -539,7 +539,7 @@ function detectIntentByPattern(lastInterviewerTurn: string): IntentResult | null
     // AnswerPlanner and category-hint fixes for this exact question, traced
     // to `[IntelligenceEngine] Temporal RAG { ..., intent: 'coding', ... }`.
     // Same idiom-neutralization shape as the sibling fixes in
-    // AnswerPlanner.ts/IntentClassifier.ts (premium)/HybridSearchEngine.ts.
+    // AnswerPlanner.ts/IntentClassifier.ts/HybridSearchEngine.ts.
     const textNoStackUpIdiom = text
         .replace(/\bstack(s|ed)?\s+up\b/g, 'measure$1 up')
         // WTA audit F1 (2026-08-18): same neutralization as AnswerPlanner's

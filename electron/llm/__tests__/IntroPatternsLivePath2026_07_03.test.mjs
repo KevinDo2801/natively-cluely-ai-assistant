@@ -1,7 +1,7 @@
 /**
  * Regression for the LIVE intro-grounding gap found by the real-backend MiniMax
  * E2E campaign (round 13/14). The orchestrator's isIntroQuestion (a substring
- * gate over INTRO_PATTERNS in premium/electron/knowledge/ContextAssembler.ts)
+ * gate over INTRO_PATTERNS in ContextAssembler.ts)
  * did NOT match "self-introduction" / "brief intro" / "introducing yourself",
  * so KnowledgeOrchestrator never produced an introResponse and the live intro
  * answered "I don't have a resume loaded". This asserts the pattern list covers
@@ -15,12 +15,22 @@ import { fileURLToPath } from 'node:url';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const repoRoot = path.resolve(__dirname, '../../..');
-const src = fs.readFileSync(path.join(repoRoot, 'premium/electron/knowledge/ContextAssembler.ts'), 'utf8');
-const m = src.match(/const INTRO_PATTERNS = \[([\s\S]*?)\];/);
-const patterns = [...m[1].matchAll(/'([^']+)'/g)].map((x) => x[1]);
+// The premium submodule was removed from this repo, so its source is absent:
+// skip the premium-dependent suites gracefully instead of failing at load time.
+let PREMIUM_AVAILABLE = true;
+let patterns = [];
+try {
+  const src = fs.readFileSync(path.join(repoRoot, 'premium/electron/knowledge/ContextAssembler.ts'), 'utf8');
+  const m = src.match(/const INTRO_PATTERNS = \[([\s\S]*?)\];/);
+  patterns = [...m[1].matchAll(/'([^']+)'/g)].map((x) => x[1]);
+} catch (err) {
+  PREMIUM_AVAILABLE = false;
+  console.warn(`[premium-absent] ${err?.code ?? err?.message ?? err} — skipping premium-dependent suites in ${import.meta.url}`);
+}
+const describeIfPremium = PREMIUM_AVAILABLE ? describe : describe.skip;
 const isIntro = (q) => patterns.some((p) => q.toLowerCase().includes(p));
 
-describe('ContextAssembler INTRO_PATTERNS — live intro phrasings', () => {
+describeIfPremium('ContextAssembler INTRO_PATTERNS — live intro phrasings', () => {
   for (const q of [
     'Great to meet you. To start, could you give us a quick self-introduction?',
     'Could you start by giving a brief introduction of yourself?',

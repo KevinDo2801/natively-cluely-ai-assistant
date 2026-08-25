@@ -24,10 +24,21 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
-const orchSrc = readFileSync(path.resolve(__dirname, '../../../premium/electron/knowledge/KnowledgeOrchestrator.ts'), 'utf8');
+// The premium submodule was removed from this repo, so its source is absent:
+// skip the orchestrator source-pinned suite gracefully instead of failing at
+// load time. The ModeContextRetriever suite keeps running either way.
+let PREMIUM_AVAILABLE = true;
+let orchSrc = '';
+try {
+  orchSrc = readFileSync(path.resolve(__dirname, '../../../premium/electron/knowledge/KnowledgeOrchestrator.ts'), 'utf8');
+} catch (err) {
+  PREMIUM_AVAILABLE = false;
+  console.warn(`[premium-absent] ${err?.code ?? err?.message ?? err} — skipping premium-dependent suites in ${import.meta.url}`);
+}
+const describeIfPremium = PREMIUM_AVAILABLE ? describe : describe.skip;
 const retrieverSrc = readFileSync(path.resolve(__dirname, '../../services/ModeContextRetriever.ts'), 'utf8');
 
-describe('RC5: cloud query embed is budgeted on the hot path', () => {
+describeIfPremium('RC5: cloud query embed is budgeted on the hot path', () => {
   test('cloudQueryEmbedder wraps the raw fn in a Promise.race with QUERY_EMBED_BUDGET_MS', () => {
     const fn = orchSrc.slice(orchSrc.indexOf('private cloudQueryEmbedder'), orchSrc.indexOf('private resolveQueryEmbedder'));
     assert.match(fn, /QUERY_EMBED_BUDGET_MS = 300/);

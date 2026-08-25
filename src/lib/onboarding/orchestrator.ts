@@ -14,7 +14,7 @@
  *
  * It does NOT own:
  *   - The toaster components themselves (they live in stageCatalog.ts)
- *   - The user-state patch (premium/profile/etc.) — pushed in via emit()
+ *   - The user-state patch (profile/extension/etc.) — pushed in via emit()
  *   - The renderer — that lives in OrchestratedToasterHost.tsx
  *
  * Event-driven: events re-evaluate state changes, while a one-shot deadline
@@ -38,7 +38,6 @@ export type ToasterId =
   | 'browser_extension'
   | 'profile_intelligence'
   | 'modes_manager'
-  | 'trial_promo'
   | 'quiet_window'
   | 'support'
   | 'ads'
@@ -73,10 +72,8 @@ export interface OrchestratorState {
 }
 
 export interface UserState {
-  isPremium: boolean;
   hasProfile: boolean;
   hasNativelyKey: boolean;
-  hasTrialToken: boolean;
   extensionConnected: boolean;
   extensionSupported: boolean;
   permsShown: boolean;
@@ -149,10 +146,8 @@ type Listener = (state: OrchestratorState) => void;
 // ─── UserState default ────────────────────────────────────────────
 
 export const DEFAULT_USER_STATE: UserState = {
-  isPremium: false,
   hasProfile: false,
   hasNativelyKey: false,
-  hasTrialToken: false,
   extensionConnected: false,
   extensionSupported: true,
   permsShown: false,
@@ -580,10 +575,10 @@ export class OnboardingOrchestrator {
     if (explicitSkip) this.state.skipped.add(id);
     this.state.activeToasterId = null;
 
-    // Insert quiet_window after trial_promo (the 5th stage) to gate marketing.
-    // Capture the current turnCount as the baseline so the predicate
-    // resolves on the next 3 user turns.
-    if (id === 'trial_promo') {
+    // Insert quiet_window after modes_manager (the last pre-marketing stage)
+    // to gate marketing. Capture the current turnCount as the baseline so the
+    // predicate resolves on the next 3 user turns.
+    if (id === 'modes_manager') {
       this.state.completed['_turnCountAtQuietStart'] = this.state.turnCount;
       this.insertAfterCurrent('quiet_window');
     }

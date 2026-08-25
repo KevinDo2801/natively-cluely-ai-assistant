@@ -31,16 +31,9 @@
   "include": [
     "**/*.ts",
     "**/*.js"
-    // "../premium/electron/**/*.ts" removed from the ROOT FILE SET so that
-    // `strict` applies to this repository's own sources. premium/ is a separate
-    // private submodule and is still fully type-checked as a *dependency* of the
-    // files that import it (verified: 0 x TS2307) — only its internal strict
-    // findings stop being reported here. Making premium strict is a separate
-    // change in natively-premium. See docs/ts7-upgrade-audit.md §7.2.
   ],
   "exclude": [
     "db/seedDemo.ts",
-    "db/test-db.ts",
-    "../premium/**"
+    "db/test-db.ts"
   ]
 }

@@ -3,9 +3,8 @@
  *
  * Owns localStorage keys for the orchestrated onboarding flow. Hydrates from
  * legacy keys (natively_perms_shown_v1, natively_seen_modes_onboarding_v5,
- * natively_seen_profile_onboarding_v1, natively_launch_count_v2.7,
- * natively_trial_promo_ts) so users upgrading from pre-orchestrator builds
- * don't see stale toasters replay.
+ * natively_seen_profile_onboarding_v1, natively_launch_count_v2.7) so users
+ * upgrading from pre-orchestrator builds don't see stale toasters replay.
  *
  * Pure functions — no React, no DOM mutations beyond localStorage. Safe to
  * call from anywhere.
@@ -28,7 +27,6 @@ const LEGACY = {
   seenProfileOnboarding:'natively_seen_profile_onboarding_v1',
   launchCount:          'natively_launch_count_v2.7',
   appOpensCount:        'natively_app_opens_count',
-  trialPromoTs:         'natively_trial_promo_ts', // read but never written (legacy bug)
   adsHistory:           'natively_ads_shown_history',
 } as const;
 
@@ -157,16 +155,7 @@ function hydrateFromLegacy(base: OrchestratorState): OrchestratorState {
     completed['profile_intelligence'] = Date.now();
   }
 
-  // 4. Trial promo — bug: legacy code wrote but never read. Migrate if present.
-  const trialTs = localStorage.getItem(LEGACY.trialPromoTs);
-  if (trialTs) {
-    const ts = parseInt(trialTs, 10);
-    if (Number.isFinite(ts)) {
-      completed['trial_promo'] = ts;
-    }
-  }
-
-  // 5. Startup count — take max of two legacy sources
+  // 4. Startup count — take max of two legacy sources
   const legacyLaunch = parseInt(localStorage.getItem(LEGACY.launchCount) || '0', 10);
   const legacyOpens = parseInt(localStorage.getItem(LEGACY.appOpensCount) || '0', 10);
   const startupCount = Math.max(
@@ -174,7 +163,7 @@ function hydrateFromLegacy(base: OrchestratorState): OrchestratorState {
     Number.isFinite(legacyOpens) ? legacyOpens : 0,
   );
 
-  // 6. Ad history — parse JSON array of ad IDs
+  // 5. Ad history — parse JSON array of ad IDs
   try {
     const adsRaw = localStorage.getItem(LEGACY.adsHistory);
     if (adsRaw) {
@@ -216,7 +205,6 @@ function maybeSweepLegacyKeys(): void {
     ).length > 0;
     if (!anyCompleted) return;
 
-    localStorage.removeItem(LEGACY.trialPromoTs);
     localStorage.removeItem(LEGACY.permsShown);
     localStorage.removeItem(LEGACY.seenModesOnboarding);
     localStorage.removeItem(LEGACY.seenProfileOnboarding);

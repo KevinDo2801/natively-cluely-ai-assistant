@@ -348,9 +348,10 @@ export class DatabaseManager {
             // (transcripts, ai_interactions, chunks, chunk_summaries). SQLite ships
             // with foreign_keys OFF per-connection, so those cascades are inert
             // unless something enables the pragma. Historically the ONLY place that
-            // did was the premium KnowledgeDatabaseManager's constructor — meaning
-            // FK enforcement silently depended on the premium module loading. If
-            // premium failed to load (source-available build, packaging regression),
+            // did was the premium KnowledgeDatabaseManager's constructor (the
+            // premium submodule has since been removed from this repo) — meaning
+            // FK enforcement used to silently depend on that module loading. If it
+            // failed to load (source-available build, packaging regression),
             // every meeting/mode/pack delete would orphan its children. Enable it
             // here, unconditionally, on the one shared connection all writes use.
             // Must run OUTSIDE any transaction (SQLite no-ops `foreign_keys` if set
@@ -1256,11 +1257,11 @@ export class DatabaseManager {
             // real mode: ModesManager.getModes and every getPacksByModeId caller for
             // document-grounded retrieval query by a USER mode id, never this reserved
             // id, so profile cards can never leak into a document-grounded answer via
-            // the mode path. The premium KnowledgeDatabaseManager enables
-            // `PRAGMA foreign_keys = ON` on this same shared connection at boot, so the
-            // FK is genuinely enforced at runtime — the sentinel is required, not
-            // cosmetic. template_type '__reserved__' keeps it out of the general/custom
-            // template universe.
+            // the mode path. DatabaseManager itself enables `PRAGMA foreign_keys
+            // = ON` on this same shared connection at boot (see the pragma setup
+            // in connect()), so the FK is genuinely enforced at runtime — the
+            // sentinel is required, not cosmetic. template_type '__reserved__'
+            // keeps it out of the general/custom template universe.
             //
             // Also add the `pii` marker column to knowledge_cards: profile cards carry
             // pii=1 so downstream tooling (export, UI, any future consumer) can filter

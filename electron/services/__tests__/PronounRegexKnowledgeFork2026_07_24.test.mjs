@@ -51,15 +51,27 @@ import { fileURLToPath, pathToFileURL } from 'node:url';
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const repoRoot = path.resolve(__dirname, '../../..');
 
-const intentClassifier = await import(
-  pathToFileURL(path.resolve(repoRoot, 'dist-electron/premium/electron/knowledge/IntentClassifier.js')).href
-);
-const hybridSearchEngine = await import(
-  pathToFileURL(path.resolve(repoRoot, 'dist-electron/premium/electron/knowledge/HybridSearchEngine.js')).href
-);
+// The premium submodule was removed from this repo, so the compiled
+// IntentClassifier/HybridSearchEngine are absent: skip the premium-dependent
+// suite gracefully instead of failing at load time.
+let PREMIUM_AVAILABLE = true;
+let intentClassifier;
+let hybridSearchEngine;
+try {
+  intentClassifier = await import(
+    pathToFileURL(path.resolve(repoRoot, 'dist-electron/premium/electron/knowledge/IntentClassifier.js')).href
+  );
+  hybridSearchEngine = await import(
+    pathToFileURL(path.resolve(repoRoot, 'dist-electron/premium/electron/knowledge/HybridSearchEngine.js')).href
+  );
+} catch (err) {
+  PREMIUM_AVAILABLE = false;
+  console.warn(`[premium-absent] ${err?.code ?? err?.message ?? err} — skipping premium-dependent suites in ${import.meta.url}`);
+}
+const describeIfPremium = PREMIUM_AVAILABLE ? describe : describe.skip;
 
-const { isGenericKnowledgeQuestion, classifyIntentWithContext } = intentClassifier;
-const { detectCategoryHints } = hybridSearchEngine;
+const { isGenericKnowledgeQuestion, classifyIntentWithContext } = intentClassifier ?? {};
+const { detectCategoryHints } = hybridSearchEngine ?? {};
 
 // Copied verbatim from premium/electron/knowledge/KnowledgeOrchestrator.ts:997
 // (CANDIDATE_FRAMING_REGEX) and :983-988 (candidateDirectedIntents, using the
@@ -94,7 +106,7 @@ const QUESTIONS = {
     'How would you test a real-time interview platform involving WebSockets, video calls, collaborative state and role-based permissions?',
 };
 
-describe('Phase 3 item 1: pronoun-regex 3-way fork on shared contractHash 715f1efe2666e8f6', () => {
+describeIfPremium('Phase 3 item 1: pronoun-regex 3-way fork on shared contractHash 715f1efe2666e8f6', () => {
   test('generic-bypass bucket (no candidate pronoun): SQL isolation, LRU cache, top-k frequent', () => {
     for (const key of ['sqlIsolation', 'lruCache', 'topKFrequent']) {
       const q = QUESTIONS[key];

@@ -50,7 +50,19 @@ const repoRoot = path.resolve(__dirname, '../../../..');
 const require = createRequire(import.meta.url);
 const { queryOkfCards } = require(path.resolve(repoRoot, 'dist-electron/electron/services/knowledge/OkfRetriever.js'));
 const { classifyQuestion } = require(path.resolve(repoRoot, 'dist-electron/electron/services/knowledge/QuestionClassifier.js'));
-const { getRelevantNodes } = require(path.resolve(repoRoot, 'dist-electron/premium/electron/knowledge/HybridSearchEngine.js'));
+// The premium submodule was removed from this repo, so the compiled
+// HybridSearchEngine is absent: skip the Tier 1 suite gracefully instead of
+// failing at require() time. The Tier 2 suite above only needs main-repo
+// modules and keeps running either way.
+let PREMIUM_AVAILABLE = true;
+let getRelevantNodes;
+try {
+  ({ getRelevantNodes } = require(path.resolve(repoRoot, 'dist-electron/premium/electron/knowledge/HybridSearchEngine.js')));
+} catch (err) {
+  PREMIUM_AVAILABLE = false;
+  console.warn(`[premium-absent] ${err?.code ?? err?.message ?? err} — skipping the Tier 1 suite in ${import.meta.url}`);
+}
+const describeIfPremium = PREMIUM_AVAILABLE ? describe : describe.skip;
 
 const KUBERNETES_QUESTION = 'Have I demonstrated Kubernetes experience?';
 
@@ -158,7 +170,7 @@ describe('Tier 2 (queryOkfCards, pure lexical) fails to recall a zero-lexical-ov
   });
 });
 
-describe('Tier 1 (getRelevantNodes, embedding-weighted) recalls the SAME content given a realistic embedding similarity', () => {
+describeIfPremium('Tier 1 (getRelevantNodes, embedding-weighted) recalls the SAME content given a realistic embedding similarity', () => {
   function cosineSimilarity(a, b) {
     const dot = a.reduce((s, v, i) => s + v * b[i], 0);
     const magA = Math.sqrt(a.reduce((s, v) => s + v * v, 0));

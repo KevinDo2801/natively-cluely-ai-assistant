@@ -25,7 +25,17 @@ const dist = (p) => pathToFileURL(path.resolve(__dirname, '../../../dist-electro
 
 const { resolveMinSimilarity } = await import(dist('electron/llm/semanticAdmissionGate.js'));
 const { RAGRetriever } = await import(dist('electron/rag/RAGRetriever.js'));
-const { getRelevantNodes } = await import(dist('premium/electron/knowledge/HybridSearchEngine.js'));
+// The premium submodule was removed from this repo, so the compiled
+// HybridSearchEngine is absent: skip the premium-dependent telemetry tests
+// gracefully instead of failing at load time.
+let PREMIUM_AVAILABLE = true;
+let getRelevantNodes;
+try {
+  ({ getRelevantNodes } = await import(dist('premium/electron/knowledge/HybridSearchEngine.js')));
+} catch (err) {
+  PREMIUM_AVAILABLE = false;
+  console.warn(`[premium-absent] ${err?.code ?? err?.message ?? err} — skipping premium-dependent tests in ${import.meta.url}`);
+}
 
 afterEach(() => {
   delete process.env.NATIVELY_MIN_SIMILARITY_BY_SPACE;
@@ -106,7 +116,7 @@ async function captureTelemetry(runFn) {
   try { return { result: await runFn(), lines }; } finally { console.log = orig; }
 }
 
-test('telemetry fires in OBSERVE mode (kill switch env=off) with per-candidate cosine/boostSum/admitted', async () => {
+test('telemetry fires in OBSERVE mode (kill switch env=off) with per-candidate cosine/boostSum/admitted', { skip: !PREMIUM_AVAILABLE }, async () => {
   process.env.NATIVELY_SEMANTIC_ADMISSION_GATE = 'off';
   const { result, lines } = await captureTelemetry(() =>
     getRelevantNodes('tell me things', [NODE], async () => [1, 0], {
@@ -126,7 +136,7 @@ test('telemetry fires in OBSERVE mode (kill switch env=off) with per-candidate c
   assert.equal(result.length, 1);
 });
 
-test('telemetry reflects enforcement at the DEFAULT (env unset — gate is ON since 2026-08-14)', async () => {
+test('telemetry reflects enforcement at the DEFAULT (env unset — gate is ON since 2026-08-14)', { skip: !PREMIUM_AVAILABLE }, async () => {
   delete process.env.NATIVELY_SEMANTIC_ADMISSION_GATE;
   const { lines } = await captureTelemetry(() =>
     getRelevantNodes('tell me things', [NODE], async () => [1, 0], {

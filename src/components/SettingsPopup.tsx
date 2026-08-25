@@ -89,7 +89,6 @@ const SettingsPopup = () => {
             .catch(() => setCiV3Enabled(false));
     }, []);
     const [hasProfile, setHasProfile] = useState(false);
-    const [isPremium, setIsPremium] = useState(false);
 
     const isFirstRender = React.useRef(true);
 
@@ -153,10 +152,7 @@ const SettingsPopup = () => {
                     setHasProfile(status.hasProfile);
                     setProfileMode(status.profileMode);
                 }
-                // Check premium status
-                const premium = await window.electronAPI?.licenseCheckPremium?.();
-                setIsPremium(!!premium);
-            } catch (e) { console.warn('[SettingsPopup] Failed to load profile/premium status:', e); }
+            } catch (e) { console.warn('[SettingsPopup] Failed to load profile status:', e); }
 
         };
         loadProfile();
@@ -509,20 +505,18 @@ const SettingsPopup = () => {
                 {/* Profile Mode Toggle — hidden under Context Intelligence V3,
                     where source authority replaces the global override (§6). */}
                 {hasProfile && !ciV3Enabled && (
-                    <div className={`flex items-center justify-between px-2.5 py-1.5 rounded-md transition-colors duration-200 group ${!isPremium ? 'opacity-50 grayscale cursor-not-allowed' : `${itemHoverClass} ${glassRowClass} cursor-default`}`} title={!isPremium ? 'Requires Pro license to be active' : ''}>
+                    <div className={`flex items-center justify-between px-2.5 py-1.5 rounded-md transition-colors duration-200 group cursor-default ${itemHoverClass} ${glassRowClass}`}>
                         <div className="flex items-center gap-2.5">
                             <User
-                                className={`w-3.5 h-3.5 transition-colors ${profileMode && isPremium ? 'text-accent-primary' : inactiveIconColorClass}`}
-                                fill={profileMode && isPremium ? "currentColor" : "none"}
+                                className={`w-3.5 h-3.5 transition-colors ${profileMode ? 'text-accent-primary' : inactiveIconColorClass}`}
+                                fill={profileMode ? "currentColor" : "none"}
                             />
                             <span className={`text-[12px] font-medium transition-colors ${labelColorClass}`}>Profile Mode</span>
                         </div>
                         <PopupToggle
-                            checked={profileMode && isPremium}
+                            checked={profileMode}
                             label="Profile Mode"
-                            disabled={!isPremium}
                             onChange={async () => {
-                                if (!isPremium) return;
                                 const newState = !profileMode;
                                 setProfileMode(newState);
                                 try {

@@ -28,10 +28,24 @@ function makeTempFile(content, ext = '.txt') {
 }
 
 const P = (rel) => pathToFileURL(path.resolve(__dirname, rel)).href;
-const { KnowledgeDatabaseManager } = await import(P('../../../dist-electron/premium/electron/knowledge/KnowledgeDatabaseManager.js'));
-const { KnowledgeOrchestrator } = await import(P('../../../dist-electron/premium/electron/knowledge/KnowledgeOrchestrator.js'));
-const { DocType } = await import(P('../../../dist-electron/premium/electron/knowledge/types.js'));
-const { createDocumentNodes } = await import(P('../../../dist-electron/premium/electron/knowledge/DocumentChunker.js'));
+// The premium submodule was removed from this repo, so the compiled
+// knowledge modules are absent: skip the premium-dependent suites
+// gracefully instead of failing at load time.
+let PREMIUM_AVAILABLE = true;
+let KnowledgeDatabaseManager;
+let KnowledgeOrchestrator;
+let DocType;
+let createDocumentNodes;
+try {
+  ({ KnowledgeDatabaseManager } = await import(P('../../../dist-electron/premium/electron/knowledge/KnowledgeDatabaseManager.js')));
+  ({ KnowledgeOrchestrator } = await import(P('../../../dist-electron/premium/electron/knowledge/KnowledgeOrchestrator.js')));
+  ({ DocType } = await import(P('../../../dist-electron/premium/electron/knowledge/types.js')));
+  ({ createDocumentNodes } = await import(P('../../../dist-electron/premium/electron/knowledge/DocumentChunker.js')));
+} catch (err) {
+  PREMIUM_AVAILABLE = false;
+  console.warn(`[premium-absent] ${err?.code ?? err?.message ?? err} — skipping premium-dependent suites in ${import.meta.url}`);
+}
+const describeIfPremium = PREMIUM_AVAILABLE ? describe : describe.skip;
 
 // Extractor returns the NEW categorized shape (as the upgraded prompt instructs).
 const MOCK_GENERATE_CONTENT = async () => JSON.stringify({
@@ -49,7 +63,7 @@ const MOCK_GENERATE_CONTENT = async () => JSON.stringify({
 });
 const MOCK_EMBED_FN = async () => Array(128).fill(0).map((_, i) => (i % 7) * 0.01);
 
-describe('RC-3 integration: categorized skills end-to-end', () => {
+describeIfPremium('RC-3 integration: categorized skills end-to-end', () => {
     let db, orchestrator, tmpResume;
 
     beforeEach(() => {
@@ -96,7 +110,7 @@ describe('RC-3 integration: categorized skills end-to-end', () => {
     });
 });
 
-describe('RC-3 integration: v1→v2 backfill of legacy flat-skills profile', () => {
+describeIfPremium('RC-3 integration: v1→v2 backfill of legacy flat-skills profile', () => {
     let db, orchestrator;
 
     beforeEach(() => {

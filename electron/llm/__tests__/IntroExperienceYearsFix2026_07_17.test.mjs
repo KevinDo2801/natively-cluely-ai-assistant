@@ -29,11 +29,21 @@ import { fileURLToPath } from 'node:url';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const repoRoot = path.resolve(__dirname, '../../..');
-const src = fs.readFileSync(path.join(repoRoot, 'premium/electron/knowledge/ContextAssembler.ts'), 'utf8');
+// The premium submodule was removed from this repo, so its source is absent:
+// skip the premium-dependent suites gracefully instead of failing at load time.
+let PREMIUM_AVAILABLE = true;
+let src = '';
+try {
+  src = fs.readFileSync(path.join(repoRoot, 'premium/electron/knowledge/ContextAssembler.ts'), 'utf8');
+} catch (err) {
+  PREMIUM_AVAILABLE = false;
+  console.warn(`[premium-absent] ${err?.code ?? err?.message ?? err} — skipping premium-dependent suites in ${import.meta.url}`);
+}
+const describeIfPremium = PREMIUM_AVAILABLE ? describe : describe.skip;
 const fnStart = src.indexOf('function generateCandidateIntro');
 const fn = src.slice(fnStart, fnStart + 4200);
 
-describe('generateCandidateIntro includes the candidate\'s total years of experience', () => {
+describeIfPremium('generateCandidateIntro includes the candidate\'s total years of experience', () => {
   test('imports the same deterministic computeTotalExperience the isIdentityDirect fast path uses', () => {
     assert.match(src.slice(0, fnStart), /import\s*\{\s*computeTotalExperience\s*\}\s*from\s*['"]\.\/PostProcessor['"]/, 'computeTotalExperience must be imported from PostProcessor (not re-derived)');
   });
@@ -56,7 +66,7 @@ describe('generateCandidateIntro includes the candidate\'s total years of experi
   });
 });
 
-describe('computeTotalExperience produces a real, non-zero figure for the p01 fixture resume shape', () => {
+describeIfPremium('computeTotalExperience produces a real, non-zero figure for the p01 fixture resume shape', () => {
   test('Aug 2014 - present (4 sequential roles) computes a real figure, not a "few years" hand-wave', async () => {
     const modPath = path.resolve(__dirname, '../../../dist-electron/premium/electron/knowledge/PostProcessor.js');
     const { computeTotalExperience } = await import(`file://${modPath}`);

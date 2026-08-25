@@ -21,7 +21,19 @@ const dbManagerSrc = read('electron/db/DatabaseManager.ts');
 const editorSrc = read('electron/services/knowledge/OkfCardEditor.ts');
 const retrieverSrc = read('electron/services/knowledge/OkfRetriever.ts');
 const storeSrc = read('electron/services/knowledge/KnowledgePackStore.ts');
-const modesSettingsSrc = read('premium/src/ModesSettings.tsx');
+// The premium submodule was removed from this repo, so premium/src is absent:
+// the ModesSettings.tsx assertions below skip gracefully instead of failing at
+// load time. (The DatabaseManager/OkfCardEditor/OkfRetriever/IPC assertions
+// above use only main-repo sources and always run.)
+let PREMIUM_AVAILABLE = true;
+let modesSettingsSrc = null;
+try {
+  modesSettingsSrc = read('premium/src/ModesSettings.tsx');
+} catch (err) {
+  PREMIUM_AVAILABLE = false;
+  console.warn(`[premium-absent] ${err?.code ?? err?.message ?? err} — skipping premium-dependent tests in ${import.meta.url}`);
+}
+const testIfPremium = PREMIUM_AVAILABLE ? test : test.skip;
 
 test('DatabaseManager: migration v20 -> v21 adds knowledge_card_versions table', () => {
   assert.match(dbManagerSrc, /Applying migration v20 → v21: Add knowledge_card_versions table/);
@@ -90,13 +102,13 @@ test('ipcHandlers: all 5 handlers are gated behind isOkfUserEditableCardsEnabled
   }
 });
 
-test('ModesSettings.tsx: approve/reject buttons are gated behind userEditableCardsEnabled prop', () => {
+testIfPremium('ModesSettings.tsx: approve/reject buttons are gated behind userEditableCardsEnabled prop', () => {
   assert.match(modesSettingsSrc, /userEditableCardsEnabled && \(/);
   assert.match(modesSettingsSrc, /onApproveCard: \(cardId: string\) => void/);
   assert.match(modesSettingsSrc, /onRejectCard: \(cardId: string\) => void/);
 });
 
-test('ModesSettings.tsx: rejected cards render with reduced opacity and strikethrough title', () => {
+testIfPremium('ModesSettings.tsx: rejected cards render with reduced opacity and strikethrough title', () => {
   assert.match(modesSettingsSrc, /opacity: card\.approvalStatus === 'rejected' \? 0\.5 : 1/);
   assert.match(modesSettingsSrc, /textDecoration: card\.approvalStatus === 'rejected' \? 'line-through' : 'none'/);
 });

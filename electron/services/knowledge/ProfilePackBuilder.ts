@@ -1,8 +1,8 @@
 // electron/services/knowledge/ProfilePackBuilder.ts
 //
 // OKF Profile Intelligence upgrade (2026-07-02) — the profile analogue of
-// KnowledgeManager.generateForFile. Transforms the premium engine's already-
-// extracted structured_data (StructuredResume / StructuredJD) + AOT artifacts
+// KnowledgeManager.generateForFile. Transforms the already-extracted
+// structured_data (StructuredResume / StructuredJD) + AOT artifacts
 // into a persisted OKF Knowledge Pack, reusing the SHARED stack end to end:
 //   - ProfileCardTemplates → deterministic card drafts (no LLM)
 //   - OkfProfileVerifier    → grounding check (reject fabrication)
@@ -15,7 +15,7 @@
 // be surfaced by document-grounded retrieval's getPacksByModeId(userModeId).
 //
 // This module NEVER calls an LLM and NEVER throws to its caller — a generation
-// failure returns {status:'failed'} so the premium ingest path can fire it
+// failure returns {status:'failed'} so the ingest path can fire it
 // fire-and-forget without any risk of failing or slowing the existing ingest.
 
 import crypto from 'node:crypto';
@@ -37,9 +37,9 @@ export const PROFILE_OKF_MODE_ID = '__profile_okf__';
 /**
  * Stable per-doc-type cache key. NOTE: this is ONLY the in-memory KnowledgeCache
  * key — it is NOT written to knowledge_sources.file_id. That column carries an FK
- * to mode_reference_files(id) (enforced at runtime once premium's
- * KnowledgeDatabaseManager sets PRAGMA foreign_keys = ON on the shared
- * connection), and a profile has NO reference-file row, so profile sources store
+ * to mode_reference_files(id) (enforced at runtime by DatabaseManager, which
+ * sets PRAGMA foreign_keys = ON on the shared connection at boot), and a
+ * profile has NO reference-file row, so profile sources store
  * file_id = NULL and are looked up by (mode_id = reserved, type) instead.
  */
 export const PROFILE_RESUME_FILE_ID = '__profile_resume__';
@@ -50,7 +50,7 @@ export type ProfileDocKind = 'resume' | 'jd';
 export interface ProfileIngestInput {
   kind: ProfileDocKind;
   /**
-   * The premium knowledge_documents row id. Reserved/provenance only — it is
+   * The knowledge_documents row id. Reserved/provenance only — it is
    * deliberately NOT part of the content hash (a re-upload mints a new id, which
    * would defeat the unchanged-content short-circuit). Optional.
    */
@@ -229,7 +229,7 @@ export class ProfilePackBuilder {
       // correctly short-circuits (status 'generated', cached pack returned).
       // totalExperienceYears is folded in too: it feeds the identity card body
       // ("Approximately N years…") and, while derived from the (hashed) experience
-      // dates, the premium engine could recompute it independently — including it
+      // dates, the ingest pipeline could recompute it independently — including it
       // closes the "resume text identical but recomputed year count" staleness gap.
       const contentHash = sha256(`${kind}:${input.totalExperienceYears ?? ''}:${sourceText}`);
       const existingSource = this.findProfileSource(kind);

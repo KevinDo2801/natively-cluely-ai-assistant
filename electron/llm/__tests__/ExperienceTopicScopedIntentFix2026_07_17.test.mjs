@@ -31,13 +31,24 @@ import path from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
-const { classifyIntentWithContext } = await import(
-  pathToFileURL(path.resolve(__dirname, '../../../dist-electron/premium/electron/knowledge/IntentClassifier.js')).href
-);
+// The premium submodule was removed from this repo, so the compiled
+// IntentClassifier is absent: skip the premium-dependent suite gracefully
+// instead of failing at load time.
+let PREMIUM_AVAILABLE = true;
+let classifyIntentWithContext;
+try {
+  ({ classifyIntentWithContext } = await import(
+    pathToFileURL(path.resolve(__dirname, '../../../dist-electron/premium/electron/knowledge/IntentClassifier.js')).href
+  ));
+} catch (err) {
+  PREMIUM_AVAILABLE = false;
+  console.warn(`[premium-absent] ${err?.code ?? err?.message ?? err} — skipping premium-dependent suites in ${import.meta.url}`);
+}
+const describeIfPremium = PREMIUM_AVAILABLE ? describe : describe.skip;
 
 const c = (q) => classifyIntentWithContext(q, {});
 
-describe('experience/background patterns disqualify from INTRO when topic-scoped', () => {
+describeIfPremium('experience/background patterns disqualify from INTRO when topic-scoped', () => {
   test('the exact live-failing question (post toCandidateFraming rewrite) is NOT intro', () => {
     assert.notEqual(c("understood, thanks for sharing. let's go back to technical topics — what's my experience mentoring engineers?"), 'intro');
   });

@@ -277,7 +277,17 @@ describe('intro variants + grammar', () => {
 describe('wiring pins', () => {
     const ipcSrc = readFileSync(path.resolve(__dirname, '../../ipcHandlers.ts'), 'utf8');
     const llmHelperSrc = readFileSync(path.resolve(__dirname, '../../LLMHelper.ts'), 'utf8');
-    const orchSrc = readFileSync(path.resolve(__dirname, '../../../premium/electron/knowledge/KnowledgeOrchestrator.ts'), 'utf8');
+    // The premium submodule was removed from this repo, so its source is
+    // absent: the two KnowledgeOrchestrator source-pinned assertions below
+    // are skipped gracefully instead of failing the whole wiring suite.
+    let PREMIUM_AVAILABLE = true;
+    let orchSrc = '';
+    try {
+        orchSrc = readFileSync(path.resolve(__dirname, '../../../premium/electron/knowledge/KnowledgeOrchestrator.ts'), 'utf8');
+    } catch (err) {
+        PREMIUM_AVAILABLE = false;
+        console.warn(`[premium-absent] ${err?.code ?? err?.message ?? err} — skipping KnowledgeOrchestrator source-pinned assertions in ${import.meta.url}`);
+    }
 
     test('ipcHandlers uses resolveIdentityProbe (old inline regex gone)', () => {
         assert.doesNotMatch(ipcSrc, /const IDENTITY_PROBE_RE\s*=/);
@@ -294,12 +304,14 @@ describe('wiring pins', () => {
         assert.match(ipcSrc, /!context && !autoContextSnapshot && isBareFollowUp\(message\)/);
         assert.match(ipcSrc, /buildContextFreeClarification\(clarSurface\)/);
     });
-    test('gap pivots gated on fit/gap/behavioral answer types', () => {
-        assert.match(orchSrc, /gapRelevantTypes = new Set\(\['jd_fit_answer', 'gap_analysis_answer', 'behavioral_interview_answer'\]\)/);
-    });
-    test('live company research is budget-bounded in the hot path', () => {
-        assert.match(orchSrc, /Promise\.race\(\[\s*researchPromise/);
-    });
+    if (PREMIUM_AVAILABLE) {
+        test('gap pivots gated on fit/gap/behavioral answer types', () => {
+            assert.match(orchSrc, /gapRelevantTypes = new Set\(\['jd_fit_answer', 'gap_analysis_answer', 'behavioral_interview_answer'\]\)/);
+        });
+        test('live company research is budget-bounded in the hot path', () => {
+            assert.match(orchSrc, /Promise\.race\(\[\s*researchPromise/);
+        });
+    }
     test('foreground gate wired: manual begin/end + embedding queue + live indexer yield', () => {
         assert.match(ipcSrc, /ForegroundGate\.begin\('manual'\)/);
         const pipelineSrc = readFileSync(path.resolve(__dirname, '../../rag/EmbeddingPipeline.ts'), 'utf8');

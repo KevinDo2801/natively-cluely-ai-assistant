@@ -30,7 +30,15 @@ function LauncherAnimShell({ children }: { children: React.ReactNode }) {
   const animatingRef = useRef(false);
 
   useEffect(() => {
-    const api = window.electronAPI;
+    // The launcher-animation IPC channels were removed from the main process;
+    // keep this shell defensive so it compiles and degrades to a plain window
+    // when the channels are absent (no animation events, no calls fire).
+    const api = window.electronAPI as unknown as {
+      launcherAnimOpenReady?: () => void;
+      launcherAnimCloseDone?: () => void;
+      onLauncherAnimOpen?: (cb: (p: any) => void) => (() => void) | undefined;
+      onLauncherAnimClose?: (cb: (p: any) => void) => (() => void) | undefined;
+    };
     const el = ref.current;
     if (!api || !el) return;
 
@@ -57,7 +65,7 @@ function LauncherAnimShell({ children }: { children: React.ReactNode }) {
       // guarantees a committed frame), then transition to identity.
       requestAnimationFrame(() =>
         requestAnimationFrame(() => {
-          api.launcherAnimOpenReady();
+          api.launcherAnimOpenReady?.();
           if (reduceMotion) {
             el.style.transition = 'none';
             el.style.transform = 'translate(0, 0) scale(1)';
@@ -86,7 +94,7 @@ function LauncherAnimShell({ children }: { children: React.ReactNode }) {
         if (reduceMotion) {
           applyClosed(p);
           animatingRef.current = false;
-          api.launcherAnimCloseDone();
+          api.launcherAnimCloseDone?.();
           return;
         }
         el.style.transition = `transform ${DURATION_MS}ms ${EASE}, opacity ${DURATION_MS}ms ${EASE}`;
@@ -94,7 +102,7 @@ function LauncherAnimShell({ children }: { children: React.ReactNode }) {
         el.style.opacity = '0';
         window.setTimeout(() => {
           animatingRef.current = false;
-          api.launcherAnimCloseDone();
+          api.launcherAnimCloseDone?.();
         }, DURATION_MS + 80);
       });
     };

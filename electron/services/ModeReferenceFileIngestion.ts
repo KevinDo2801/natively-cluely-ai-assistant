@@ -8,8 +8,8 @@
 // PDF worker pin, and PDF/DOCX/text parsing. Migrated to the shared
 // SafeDocumentTextExtractor.extractSafeDocumentText so a format/safety
 // fix in the shared utility automatically applies here AND to the
-// Profile Intelligence upload path (premium/electron/knowledge/
-// DocumentReader.ts which has used it since commit 41edd51). The
+// Profile Intelligence upload path (which has used it since commit
+// 41edd51). The
 // MODE_REFERENCE_FILE_EXTENSIONS / MODE_REFERENCE_FILE_MAX_BYTES exports
 // remain ON the file (re-exported from the shared utility) so callers
 // that imported them from this module keep working.

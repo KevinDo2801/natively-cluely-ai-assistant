@@ -148,7 +148,7 @@ export class SettingsWindowHelper {
 
         // Settings staleness fix (2026-08-21): this window is created once at
         // app start and only hidden/shown afterwards, so its React tree's
-        // mount-time fetches (credentials, profile/premium, toggle initial
+        // mount-time fetches (credentials, profile, toggle initial
         // states) go stale across shows. The renderer's focus-refresh never
         // fires on the overlay-anchored popover path (showInactive). Tell the
         // renderer it was just shown so it can re-pull main-process state.

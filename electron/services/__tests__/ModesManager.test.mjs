@@ -430,10 +430,10 @@ test('reference context skips empty files and truncates large files with complet
   assert.ok(block.length < longContent.length);
 });
 
-test('isPremiumKnowledgeInterceptAllowed gates the whole premium intercept by active mode (issue #272)', () => {
+test('isPremiumKnowledgeInterceptAllowed gates the whole knowledge intercept by active mode (issue #272)', () => {
   // No active mode — default to allowed so we never regress modes that
   // legitimately use the intercept (looking-for-work, sales, recruiting,
-  // general). The source-available side cannot inspect the premium tracker, so
+  // general). The source-available side cannot inspect the knowledge tracker, so
   // we fail open when nothing is selected.
   installDb(makeDb());
   assert.equal(
@@ -460,7 +460,7 @@ test('isPremiumKnowledgeInterceptAllowed gates the whole premium intercept by ac
     assert.equal(
       ModesManager.getInstance().isPremiumKnowledgeInterceptAllowed(),
       true,
-      `${templateType} should allow the premium knowledge intercept`,
+      `${templateType} should allow the knowledge intercept`,
     );
   }
 
@@ -469,7 +469,7 @@ test('isPremiumKnowledgeInterceptAllowed gates the whole premium intercept by ac
     assert.equal(
       ModesManager.getInstance().isPremiumKnowledgeInterceptAllowed(),
       false,
-      `${templateType} must NOT allow the premium intercept — would overwrite the user's expected answer with off-topic content (issue #272)`,
+      `${templateType} must NOT allow the knowledge intercept — would overwrite the user's expected answer with off-topic content (issue #272)`,
     );
   }
 });
@@ -477,7 +477,7 @@ test('isPremiumKnowledgeInterceptAllowed gates the whole premium intercept by ac
 test('isPremiumKnowledgeInterceptAllowed honors templateType on user-created custom modes (issue #272)', () => {
   // Custom modes inherit the gate from their underlying template. A user who
   // names their mode "TechInterview2025" but picks templateType
-  // 'technical-interview' must still be protected from premium-flavored
+  // 'technical-interview' must still be protected from knowledge-flavored
   // interjections.
   installDb(makeDb({
     modes: [modeRow({

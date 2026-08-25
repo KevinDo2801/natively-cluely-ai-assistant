@@ -1,16 +1,16 @@
 // electron/intelligence/knowledgeOrchestratorGate.ts
 //
 // Phase 6 Slice 4 (context-rebuild, docs/context-rebuild/05_MIGRATION_PLAN.md
-// "Slice 4" item 3): the type barrier at the `premium` submodule boundary
-// (target arch §5, review Q2's required-not-optional item).
+// "Slice 4" item 3): a compile-time type barrier at the knowledge-orchestrator
+// boundary (target arch §5, review Q2's required-not-optional item).
 //
 // `LLMHelper.getKnowledgeOrchestrator(): any` (electron/LLMHelper.ts:1842)
-// is an unguarded, `any`-typed accessor with 19 real call sites (all in
+// is an unguarded, `any`-typed accessor with many real call sites (all in
 // ipcHandlers.ts, grep-confirmed) — some of which are turn-scoped
 // read/inject operations (the ones this barrier targets) and some of which
 // are admin operations (delete/ingest) genuinely unrelated to any specific
 // turn's answer-type policy. Changing `getKnowledgeOrchestrator()`'s own
-// signature to require a `CanonicalTurn` would force EVERY one of those 19
+// signature to require a `CanonicalTurn` would force EVERY one of those
 // sites to supply one, including the admin ones that have none — a
 // consequential, all-or-nothing migration this pass does not attempt (see
 // 05_MIGRATION_PLAN.md's Slice 4 STATUS note for the reasoning).
@@ -20,7 +20,7 @@
 // FORCED to consult the gate calls `processQuestionGated(...)` here, which
 // requires a `CanonicalTurn` (or the narrower `AllowedSourcesProjection`)
 // parameter — a call site omitting it cannot compile. The existing
-// `getKnowledgeOrchestrator()` accessor and its 19 call sites are
+// `getKnowledgeOrchestrator()` accessor and its call sites are
 // untouched; adoption of this gated path is incremental, not forced by
 // this change.
 
@@ -62,7 +62,7 @@ export interface GatedProcessQuestionResult {
 }
 
 /**
- * The one entry point a NEW premium consumer should call to read/inject
+ * The one entry point a knowledge-layer consumer should call to read/inject
  * profile content for a turn — requires a `CanonicalTurn` (or the narrower
  * `AllowedSourcesProjection`), so a call site that omits it cannot compile.
  * Short-circuits to bypass (never calls the real orchestrator) when

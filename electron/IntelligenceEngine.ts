@@ -57,12 +57,17 @@ import { isIntelligenceFlagEnabled } from './intelligence/intelligenceFlags';
 import { applyAnswerContract } from './intelligence/OutputShapeNormalizer';
 import { LiveTranscriptBrain } from './intelligence/LiveTranscriptBrain';
 import { recordAttribution } from './intelligence/IntelligenceAttribution';
-// Type-only (fully erased at runtime, adds no require()). `getKnowledgeOrchestrator()`
-// is declared `: any`, so the orchestrator's real result type is invisible here and
-// tsc collapsed the grounding result to `{}`. Naming it restores genuine checking on
-// the seven property reads below instead of masking them with a cast.
-// Follow-up: type getKnowledgeOrchestrator() properly and drop this import.
-import type { PromptAssemblyResult } from '../premium/electron/knowledge/ContextAssembler';
+// `getKnowledgeOrchestrator()` is declared `: any`. The premium ContextAssembler
+// type it used to import is gone (premium/ removed), so the orchestrator result
+// is typed structurally here for the property reads below. With premium absent
+// the orchestrator is always null and this path is inert at runtime.
+type PromptAssemblyResult = {
+  factualRecall?: boolean;
+  liveNegotiationResponse?: unknown;
+  contextBlock?: string;
+  isIntroQuestion?: boolean;
+  introResponse?: string;
+};
 
 // Mode types
 export type IntelligenceMode = 'idle' | 'assist' | 'what_to_say' | 'follow_up' | 'recap' | 'clarify' | 'manual' | 'follow_up_questions' | 'code_hint' | 'brainstorm';

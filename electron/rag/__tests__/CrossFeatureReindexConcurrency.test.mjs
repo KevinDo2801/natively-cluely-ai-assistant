@@ -41,9 +41,21 @@ const esPath = path.resolve(__dirname, '../../../dist-electron/electron/rag/embe
 const { VectorStore } = await import(pathToFileURL(vsPath).href);
 const { EmbeddingPipeline } = await import(pathToFileURL(epPath).href);
 const { RAGManager } = await import(pathToFileURL(rmPath).href);
-const { KnowledgeOrchestrator } = await import(pathToFileURL(koPath).href);
-const { KnowledgeDatabaseManager } = await import(pathToFileURL(kdbPath).href);
 const { embeddingSpaceKey } = await import(pathToFileURL(esPath).href);
+// The premium submodule was removed from this repo, so the compiled
+// KnowledgeOrchestrator/KnowledgeDatabaseManager are absent: skip the
+// premium-dependent suites gracefully instead of failing at load time.
+let PREMIUM_AVAILABLE = true;
+let KnowledgeOrchestrator;
+let KnowledgeDatabaseManager;
+try {
+  ({ KnowledgeOrchestrator } = await import(pathToFileURL(koPath).href));
+  ({ KnowledgeDatabaseManager } = await import(pathToFileURL(kdbPath).href));
+} catch (err) {
+  PREMIUM_AVAILABLE = false;
+  console.warn(`[premium-absent] ${err?.code ?? err?.message ?? err} — skipping premium-dependent suites in ${import.meta.url}`);
+}
+const describeIfPremium = PREMIUM_AVAILABLE ? describe : describe.skip;
 
 const SPACE_V1 = embeddingSpaceKey({ name: 'gemini', model: 'gemini-embedding-001', dimensions: 768 });
 const SPACE_V2 = embeddingSpaceKey({ name: 'gemini', model: 'gemini-embedding-2', dimensions: 768 });
@@ -112,7 +124,7 @@ function makeKnowledge(db, { embedFn, activeSpaceFn }) {
   return orch;
 }
 
-describe('cross-feature: meetings reindex + knowledge re-embed concurrently (one DB)', () => {
+describeIfPremium('cross-feature: meetings reindex + knowledge re-embed concurrently (one DB)', () => {
   let db;
   beforeEach(() => { db = new Database(':memory:'); makeMeetingsSchema(db); });
   afterEach(() => { try { db.close(); } catch { /* */ } });

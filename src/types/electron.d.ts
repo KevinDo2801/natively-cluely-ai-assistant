@@ -228,15 +228,6 @@ export interface ElectronAPI {
   /** Opens the OS microphone privacy panel. The only remedy on win32. */
   openMicSettings:      () => Promise<{ ok: boolean; reason?: string }>
 
-  // Free Trial
-  startTrial:     () => Promise<{ ok: boolean; hasToken?: boolean; started_at?: string; expires_at?: string; expired?: boolean; already_used?: boolean; converted_to?: string | null; usage?: { ai: number; stt_seconds: number; search: number }; limits?: { duration_ms: number; ai_requests: number; stt_minutes: number; search_requests: number }; error?: string; status?: number }>
-  getTrialStatus: () => Promise<{ ok: boolean; expired?: boolean; remaining_ms?: number; started_at?: string; expires_at?: string; converted_to?: string | null; usage?: { ai: number; stt_seconds: number; search: number }; limits?: object; error?: string }>
-  getLocalTrial:  () => Promise<{ hasToken: boolean; trialClaimed?: boolean; expiresAt?: string; startedAt?: string; expired?: boolean }>
-  convertTrial:   (choice: string) => Promise<{ ok: boolean }>
-  endTrialByok:        () => Promise<{ success: boolean; error?: string }>
-  wipeTrialProfileData: () => Promise<{ success: boolean; error?: string }>
-  onTrialEnded:   (cb: (data: { choice: string }) => void) => () => void
-
   // STT Provider Management
   setSttProvider: (provider: 'none' | 'google' | 'groq' | 'openai' | 'deepgram' | 'elevenlabs' | 'azure' | 'ibmwatson' | 'soniox' | 'nvidia_nim' | 'natively' | 'local-whisper') => Promise<{ success: boolean; error?: string }>
   getSttProvider: () => Promise<string>
@@ -619,16 +610,6 @@ export interface ElectronAPI {
   // Dynamic Model Discovery
   fetchProviderModels: (provider: 'gemini' | 'groq' | 'openai' | 'claude' | 'deepseek', apiKey: string) => Promise<{ success: boolean; models?: {id: string, label: string}[]; error?: string }>
   setProviderPreferredModel: (provider: 'gemini' | 'groq' | 'openai' | 'claude' | 'deepseek' | 'litellm', modelId: string) => Promise<void>
-
-  // License Management
-  licenseActivate: (key: string) => Promise<{ success: boolean; error?: string }>
-  licenseCheckPremium: () => Promise<boolean>
-  licenseGetDetails: () => Promise<{ isPremium: boolean; plan?: string; provider?: string }>
-  /** Async startup check — calls Dodo validate endpoint to detect server-side revocations. */
-  licenseCheckPremiumAsync: () => Promise<boolean>
-  onLicenseStatusChanged: (callback: (data: { isPremium: boolean, plan?: string }) => void) => () => void
-  licenseDeactivate: () => Promise<void>
-  licenseGetHardwareId: () => Promise<string>
 
   // Overlay Opacity (Stealth Mode)
   setOverlayOpacity: (opacity: number) => Promise<void>;

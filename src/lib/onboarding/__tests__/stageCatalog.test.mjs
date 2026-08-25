@@ -55,10 +55,8 @@ test('INVARIANT: every gate-only stage is onceEver — stageCatalog.ts (producti
 // ─── Fixtures ──────────────────────────────────────────────────────
 
 const DEFAULT_USER_STATE = {
-  isPremium: false,
   hasProfile: false,
   hasNativelyKey: false,
-  hasTrialToken: false,
   extensionConnected: false,
   extensionSupported: true,
   permsShown: false,
@@ -164,15 +162,6 @@ test('profile_intelligence: skipped when hasProfile', () => {
   assert.equal(show('profile_intelligence', ctx), false);
 });
 
-test('profile_intelligence: skipped when isPremium', () => {
-  const ctx = makeCtx({
-    userState: { ...DEFAULT_USER_STATE, isPremium: true },
-    completed: { permissions: 1, browser_extension: 2 },
-    homepageMountedFor: 5_000,
-  });
-  assert.equal(show('profile_intelligence', ctx), false);
-});
-
 test('profile_intelligence: blocked by missing browser_extension prerequisite', () => {
   const ctx = makeCtx({
     completed: { permissions: 1 },
@@ -209,49 +198,10 @@ test('modes_manager: skipped when activeModeSet', () => {
   assert.equal(show('modes_manager', ctx), false);
 });
 
-// ─── Trial promo ──────────────────────────────────────────────────
-
-test('trial_promo: skipped when hasNativelyKey', () => {
-  const ctx = makeCtx({
-    userState: { ...DEFAULT_USER_STATE, hasNativelyKey: true },
-    completed: { permissions: 1, browser_extension: 2, profile_intelligence: 3, modes_manager: 4 },
-    homepageMountedFor: 7_000,
-  });
-  assert.equal(show('trial_promo', ctx), false);
-});
-
-test('trial_promo: skipped when hasTrialToken', () => {
-  const ctx = makeCtx({
-    userState: { ...DEFAULT_USER_STATE, hasTrialToken: true },
-    completed: { permissions: 1, browser_extension: 2, profile_intelligence: 3, modes_manager: 4 },
-    homepageMountedFor: 7_000,
-  });
-  assert.equal(show('trial_promo', ctx), false);
-});
-
-test('trial_promo: skipped when isPremium', () => {
-  const ctx = makeCtx({
-    userState: { ...DEFAULT_USER_STATE, isPremium: true },
-    completed: { permissions: 1, browser_extension: 2, profile_intelligence: 3, modes_manager: 4 },
-    homepageMountedFor: 7_000,
-  });
-  assert.equal(show('trial_promo', ctx), false);
-});
-
 // ─── Support ──────────────────────────────────────────────────────
 
 test('support: skipped when !donationShouldShow', () => {
   const ctx = makeCtx({
-    completed: { quiet_window: 1 },
-    turnCount: 15,
-    homepageMountedFor: 11_000,
-  });
-  assert.equal(show('support', ctx), false);
-});
-
-test('support: skipped when isPremium', () => {
-  const ctx = makeCtx({
-    userState: { ...DEFAULT_USER_STATE, isPremium: true, donationShouldShow: true },
     completed: { quiet_window: 1 },
     turnCount: 15,
     homepageMountedFor: 11_000,
@@ -301,16 +251,6 @@ test('ads: requires startupCount >= 4', () => {
 
 test('ads: requires support prerequisite', () => {
   const ctx = makeCtx({
-    startupCount: 5,
-    homepageMountedFor: 11_000,
-  });
-  assert.equal(show('ads', ctx), false);
-});
-
-test('ads: skipped when isPremium', () => {
-  const ctx = makeCtx({
-    userState: { ...DEFAULT_USER_STATE, isPremium: true },
-    completed: { support: 1 },
     startupCount: 5,
     homepageMountedFor: 11_000,
   });

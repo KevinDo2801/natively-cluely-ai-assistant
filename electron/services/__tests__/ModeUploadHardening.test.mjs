@@ -72,7 +72,10 @@ describe('FIX-009: shared document upload hardening', () => {
     assert.match(IPC_SOURCE, /name: 'All Files', extensions: \['\*'\]/);
   });
 
-  test('Profile handlers translate legacy .doc failures returned by the orchestrator', () => {
+  test('Profile handlers are graceful no-op stubs after premium removal (no .doc mapping)', () => {
+    // The premium knowledge subsystem (and the orchestrator that translated
+    // legacy .doc failures) was removed, so the upload handlers are now stubs
+    // returning 'Feature not available.' — the .doc error mapping is gone.
     const resumeHandler = IPC_SOURCE.slice(
       IPC_SOURCE.indexOf("safeHandle('profile:upload-resume'"),
       IPC_SOURCE.indexOf("safeHandle('profile:get-status'"),
@@ -81,12 +84,11 @@ describe('FIX-009: shared document upload hardening', () => {
       IPC_SOURCE.indexOf("safeHandle('profile:upload-jd'"),
       IPC_SOURCE.indexOf("safeHandle('profile:delete-jd'"),
     );
-    const docError = /Legacy Word \.doc files are not supported\. Save the file as \.docx and upload it again\./;
-    const resultMapping = /if \(!result\?\.success && path\.extname\(resolvedPath\)\.toLowerCase\(\) === '\.doc'\)/;
 
     for (const handler of [resumeHandler, jdHandler]) {
-      assert.match(handler, docError);
-      assert.match(handler, resultMapping);
+      assert.match(handler, /success:\s*false/, 'stub must return success:false');
+      assert.match(handler, /Feature not available/, 'stub must report the feature is unavailable without premium');
+      assert.doesNotMatch(handler, /Legacy Word \.doc files are not supported/, 'the removed .doc translation must be gone');
     }
   });
 

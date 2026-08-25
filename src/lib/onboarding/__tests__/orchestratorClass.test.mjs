@@ -130,7 +130,7 @@ before(async () => {
   STAGES = stagesMod.STAGES;
   // Production starts the orchestrator with the quiet_window stage appended
   // (App.tsx: orch.start([...STAGES, QUIET_WINDOW_STAGE])). quiet_window is
-  // inserted into the queue when trial_promo completes, so its config must be
+  // inserted into the queue when modes_manager completes, so its config must be
   // registered or that id would sit unresolved in the queue. Include it here so
   // the drain-termination guard reflects real startup.
   ALL_STAGES = stagesMod.QUIET_WINDOW_STAGE

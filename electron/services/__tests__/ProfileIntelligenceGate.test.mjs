@@ -19,18 +19,24 @@ import { fileURLToPath } from 'node:url';
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const SOURCE = path.resolve(__dirname, '../../ipcHandlers.ts');
 
-const GUARDED_HANDLERS = [
-  'profile:upload-resume',
+// The premium knowledge subsystem was removed, so the upload handlers are
+// now graceful no-op stubs (they no longer gate on isProOrTrialActive — there
+// is no premium orchestrator to gate). The remaining profile handlers
+// (set-mode, research-company, generate-negotiation) still enforce the gate.
+const GATED_HANDLERS = [
   'profile:set-mode',
-  'profile:upload-jd',
   'profile:research-company',
   'profile:generate-negotiation',
+];
+const STUB_HANDLERS = [
+  'profile:upload-resume',
+  'profile:upload-jd',
 ];
 
 describe('Profile Intelligence IPC: Pro/trial gate', () => {
   const source = fs.readFileSync(SOURCE, 'utf8');
 
-  for (const handler of GUARDED_HANDLERS) {
+  for (const handler of GATED_HANDLERS) {
     test(`handler "${handler}" calls isProOrTrialActive() before doing work`, () => {
       // Find the handler body — start at safeHandle("name", and run until the
       // matching });
@@ -62,6 +68,17 @@ describe('Profile Intelligence IPC: Pro/trial gate', () => {
         gateIdx < ingestIdx,
         `Handler ${handler}: gate check (idx ${gateIdx}) must precede premium work (idx ${ingestIdx})`
       );
+    });
+  }
+
+  for (const handler of STUB_HANDLERS) {
+    test(`handler "${handler}" is a graceful no-op stub (premium removed — no gate to enforce)`, () => {
+      const idx = findSafeHandle(source, handler);
+      assert.ok(idx >= 0, `Handler ${handler} not found in ipcHandlers.ts`);
+      const slice = sliceSafeHandleBlock(source, handler).slice(0, 1500);
+      assert.match(slice, /success:\s*false/, `${handler} must return success:false`);
+      assert.match(slice, /Feature not available/, `${handler} must report the feature is unavailable without premium`);
+      assert.doesNotMatch(slice, /isProOrTrialActive/, `${handler} must not gate — the premium orchestrator is gone`);
     });
   }
 

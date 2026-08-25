@@ -29,6 +29,6 @@
       "@config/*": ["./src/config/*"]
     }
   },
-  "include": ["src", "premium/src"], // React source files and optional premium components
+  "include": ["src"], // React source files
   "references": [{ "path": "./tsconfig.node.json" }]
 }

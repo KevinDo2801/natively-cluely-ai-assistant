@@ -1,10 +1,9 @@
 /**
- * Stage catalog — declarative configs for the 8 orchestrated onboarding stages
- * (10 entries incl. quiet_window).
+ * Stage catalog — declarative configs for the orchestrated onboarding stages.
  *
  * Order matters: stages are evaluated front-to-back by the orchestrator, and
  * the first eligible wins (single-slot invariant). The quiet_window is
- * inserted dynamically after trial_promo dismisses, so it is not in this
+ * inserted dynamically after modes_manager dismisses, so it is not in this
  * static catalog.
  */
 
@@ -39,7 +38,6 @@ export const STAGE_ORDER: ToasterId[] = [
   'browser_extension',
   'profile_intelligence',
   'modes_manager',
-  'trial_promo',
   'support',
   'ads',
   'review_prompt',
@@ -102,7 +100,6 @@ export const STAGES: StageConfig[] = [
     requiresStages: ['browser_extension'],
     skipWhen: (s) =>
       s.hasProfile ||
-      s.isPremium ||
       s.seenProfileOnboarding,
   },
 
@@ -127,32 +124,11 @@ export const STAGES: StageConfig[] = [
   },
 
   // ──────────────────────────────────────────────────────────────
-  // 5. Trial promo — after modes seen/skipped
-  // ──────────────────────────────────────────────────────────────
-  {
-    id: 'trial_promo',
-    order: 5,
-    triggers: {
-      requiresHomepageMounted: true,
-      requiresHomepageDuration: 6_000,
-      requiresForeground: true,
-      requiresMeetingInactive: true,
-    },
-    requiresStages: ['modes_manager'],
-    skipWhen: (s) =>
-      s.hasNativelyKey ||
-      s.hasTrialToken ||
-      s.isPremium,
-    cooldownMs: () => 21 * 24 * 60 * 60 * 1000, // 21 days
-    reEligibility: (s) => !s.hasNativelyKey && !s.hasTrialToken && !s.isPremium,
-  },
-
-  // ──────────────────────────────────────────────────────────────
-  // 6. Support — after quiet_window resolves
+  // 5. Support — after quiet_window resolves
   // ──────────────────────────────────────────────────────────────
   {
     id: 'support',
-    order: 6,
+    order: 5,
     triggers: {
       requiresHomepageMounted: true,
       requiresHomepageDuration: 10_000,
@@ -160,7 +136,7 @@ export const STAGES: StageConfig[] = [
       requiresMeetingInactive: true,
     },
     requiresStages: ['quiet_window'],
-    skipWhen: (s) => !s.donationShouldShow || s.isPremium,
+    skipWhen: (s) => !s.donationShouldShow,
     customPredicate: (ctx: Ctx) =>
       // Trigger after enough engagement: 10 turns OR 10 successful startups
       ctx.turnCount >= 10 || ctx.startupCount >= 10,
@@ -168,11 +144,11 @@ export const STAGES: StageConfig[] = [
   },
 
   // ──────────────────────────────────────────────────────────────
-  // 7. Ads — useAdCampaigns rotation. After support seen/skipped.
+  // 6. Ads — sequencing gate. After support seen/skipped.
   // ──────────────────────────────────────────────────────────────
   {
     id: 'ads',
-    order: 7,
+    order: 6,
     triggers: {
       requiresHomepageMounted: true,
       requiresHomepageDuration: 10_000,
@@ -181,16 +157,15 @@ export const STAGES: StageConfig[] = [
       requiresStartupCount: 4,
     },
     requiresStages: ['support'],
-    skipWhen: (s) => s.isPremium,
     cooldownMs: () => 14 * 24 * 60 * 60 * 1000, // 14 days
   },
 
   // ──────────────────────────────────────────────────────────────
-  // 8. Review prompt — late-stage engagement gate
+  // 7. Review prompt — late-stage engagement gate
   // ──────────────────────────────────────────────────────────────
   {
     id: 'review_prompt',
-    order: 8,
+    order: 7,
     triggers: {
       requiresHomepageMounted: true,
       requiresHomepageDuration: 10_000,
@@ -206,7 +181,7 @@ export const STAGES: StageConfig[] = [
 ];
 
 // ─── Quiet window stage ───────────────────────────────────────────
-// Inserted dynamically after trial_promo dismisses. Resolves on 3 user turns
+// Inserted dynamically after modes_manager dismisses. Resolves on 3 user turns
 // via customPredicate. No React component — pure orchestrator gate.
 
 export const QUIET_WINDOW_STAGE: StageConfig = {
@@ -223,7 +198,7 @@ export const QUIET_WINDOW_STAGE: StageConfig = {
   // pass calling persist()+notify(), churning unbounded native memory. That
   // pegged the launcher renderer's main thread and grew its RSS to ~9 GB before
   // an exitCode-5 OOM crash (2026-07-19). It resolves exactly once (3 user turns
-  // after trial_promo), so once-ever is also the correct semantics.
+  // after modes_manager), so once-ever is also the correct semantics.
   onceEver: true,
   triggers: {},
   customPredicate: (ctx: Ctx) => {

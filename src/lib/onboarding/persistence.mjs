@@ -19,7 +19,6 @@ const LEGACY = {
   seenProfileOnboarding:'natively_seen_profile_onboarding_v1',
   launchCount:          'natively_launch_count_v2.7',
   appOpensCount:        'natively_app_opens_count',
-  trialPromoTs:         'natively_trial_promo_ts',
   adsHistory:           'natively_ads_shown_history',
 };
 
@@ -116,14 +115,6 @@ function hydrateFromLegacy(base) {
     completed['profile_intelligence'] = Date.now();
   }
 
-  const trialTs = localStorage.getItem(LEGACY.trialPromoTs);
-  if (trialTs) {
-    const ts = parseInt(trialTs, 10);
-    if (Number.isFinite(ts)) {
-      completed['trial_promo'] = ts;
-    }
-  }
-
   const legacyLaunch = parseInt(localStorage.getItem(LEGACY.launchCount) || '0', 10);
   const legacyOpens = parseInt(localStorage.getItem(LEGACY.appOpensCount) || '0', 10);
   const startupCount = Math.max(
@@ -158,7 +149,6 @@ function maybeSweepLegacyKeys() {
     ).length > 0;
     if (!anyCompleted) return;
 
-    localStorage.removeItem(LEGACY.trialPromoTs);
     localStorage.removeItem(LEGACY.permsShown);
     localStorage.removeItem(LEGACY.seenModesOnboarding);
     localStorage.removeItem(LEGACY.seenProfileOnboarding);

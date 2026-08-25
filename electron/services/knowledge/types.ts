@@ -16,7 +16,7 @@ export type KnowledgeSourceType =
   | 'profile_fact'
   | 'hindsight_fact'
   // OKF Profile Intelligence upgrade (2026-07-02): a candidate resume or target
-  // job description ingested through the premium KnowledgeOrchestrator, mapped
+  // job description ingested through the KnowledgeOrchestrator, mapped
   // deterministically into profile OKF cards. Distinct source types so profile
   // packs are always identifiable as PII and never confused with document
   // reference-file packs.
@@ -54,7 +54,7 @@ export type KnowledgeCardType =
   // FrontMatterExtractor.ts.
   | 'metadata'
   // OKF Profile Intelligence card types (2026-07-02). Deterministic transform
-  // of the premium engine's structured_data + AOT artifacts. Each maps to a
+  // of the orchestrator's structured_data + AOT artifacts. Each maps to a
   // human-readable OKF `type` in OkfMarkdownExporter.
   | 'candidate_identity'
   | 'candidate_summary'

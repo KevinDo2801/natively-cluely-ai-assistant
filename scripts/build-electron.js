@@ -36,34 +36,6 @@ if (fs.existsSync(electronDir)) {
   entryPoints.push(...findTs(electronDir).map(f => path.relative(rootDir, f)));
 }
 
-// Also include premium electron files if they exist
-const premiumDir = path.resolve(rootDir, 'premium/electron');
-const premiumAbsent = !fs.existsSync(premiumDir);
-if (fs.existsSync(premiumDir)) {
-  entryPoints.push(...findTs(premiumDir).map(f => path.relative(rootDir, f)));
-}
-
-// The premium/ submodule (private repo) is OPTIONAL. featureGate.ts probes for
-// it at runtime and every premium require() site is guarded (try/catch or
-// isPremiumAvailable()), so the source-available build must compile WITHOUT
-// premium present. esbuild 0.21's `external` wildcards do not span `/`, so a
-// wildcard string can't cover the relative requires (../premium/...,
-// ../../premium/...) that vary by source depth — an onResolve plugin is the
-// robust way to leave those requires for runtime, where the missing module
-// throws and the guards catch it. The plugin is active ONLY when the submodule
-// is absent: premium-present builds keep the current inlining behavior (single
-// module instances, no duplicate-bundle divergence).
-const premiumExternalPlugin = {
-  name: 'premium-external',
-  setup(build) {
-    build.onResolve({ filter: /premium\/electron\// }, (args) => {
-      if (args.path.includes('premium/electron/')) {
-        return { path: args.path, external: true };
-      }
-    });
-  },
-};
-
 const start = Date.now();
 
 const buildOptions = {
@@ -136,7 +108,7 @@ const buildOptions = {
     js: `try{if(process.env.NATIVELY_UI_EVAL==='1'&&!globalThis.__nativelyDnsPinned){globalThis.__nativelyDnsPinned=1;var __dns=require('dns');var __ol=__dns.lookup.bind(__dns);__dns.lookup=function(h,o,cb){if(typeof o==='function'){cb=o;o={};}if(h==='api.natively.software'){return __dns.resolve4(h,function(e,a){if(e||!a||!a.length)return __ol(h,o,cb);if(o&&o.all)return cb(null,[{address:a[0],family:4}]);return cb(null,a[0],4);});}return __ol(h,o,cb);};console.log('[eval] dns.lookup→resolve4 pinned for api.natively.software');}}catch(__e){try{console.warn('[eval] dns pin banner failed:',__e&&__e.message);}catch(_){}}`,
   },
   logLevel: 'warning',
-  plugins: premiumAbsent ? [premiumExternalPlugin] : [],
+  plugins: [],
 };
 
 const onFailure = (err) => {

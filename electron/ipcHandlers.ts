@@ -322,48 +322,11 @@ export function initializeIpcHandlers(appState: AppState): void {
   };
 
   /**
-   * Returns true if the user has an active premium license OR an unexpired free trial.
-   * Used to gate profile intelligence features (resume upload, JD upload, company research, etc.).
+   * Paywall removed with the premium submodule: everything is now unlocked.
+   * Returns true unconditionally so all existing gated call sites keep working.
    */
   const isProOrTrialActive = (): boolean => {
-    // 1. Full premium license (Dodo / Gumroad / Natively API subscription)
-    try {
-      const { LicenseManager } = require('../premium/electron/services/LicenseManager');
-      if (LicenseManager.getInstance().isPremium()) return true;
-    } catch {
-      /* premium module not available */
-    }
-
-    // 2. Active free trial (token present and not expired)
-    try {
-      const { CredentialsManager } = require('./services/CredentialsManager');
-      const cm = CredentialsManager.getInstance();
-      const token = cm.getTrialToken();
-      if (!token) return false;
-      const expiresAt = cm.getTrialExpiresAt();
-      if (!expiresAt) return false;
-      return new Date(expiresAt).getTime() > Date.now();
-    } catch {
-      return false;
-    }
-  };
-
-  // Clears premium-only context when the pro license is lost.
-  const clearActiveModeOnLicenseLoss = (): void => {
-    try {
-      // Through ModesManager, not DatabaseManager, so the active-mode snapshot
-      // is invalidated with the write. Clearing the row directly left every
-      // answer surface still holding the premium mode it had cached — the
-      // context this function exists to remove.
-      const { ModesManager } = require('./services/ModesManager');
-      ModesManager.getInstance().setActiveMode(null);
-      BrowserWindow.getAllWindows().forEach((win) => {
-        if (!win.isDestroyed()) win.webContents.send('modes-active-cleared');
-      });
-      console.log('[IPC] Premium-only context cleared due to license loss');
-    } catch (e) {
-      /* non-fatal */
-    }
+    return true;
   };
 
   // --- NEW Test Helper ---
@@ -413,89 +376,6 @@ export function initializeIpcHandlers(appState: AppState): void {
     } catch (err: any) {
       console.error('[IPC] dev:thinking-budget-bench failed:', err);
       return { ok: false, error: String(err?.message || err) };
-    }
-  });
-
-  safeHandle('license:activate', async (event, key: string) => {
-    try {
-      const { LicenseManager } = require('../premium/electron/services/LicenseManager');
-      const result = await LicenseManager.getInstance().activateLicense(key);
-      if (result?.success) {
-        BrowserWindow.getAllWindows().forEach((win) => {
-          if (!win.isDestroyed())
-            win.webContents.send('license-status-changed', { isPremium: true });
-        });
-      }
-      return result;
-    } catch (err: any) {
-      // Only show generic message if the premium module itself is missing.
-      // activateLicense() returns {success:false, error} for all expected failures
-      // (bad key, network error, etc.) — it should never throw in normal operation.
-      console.error('[IPC] license:activate unexpected error:', err);
-      return { success: false, error: 'Premium features not available in this build.' };
-    }
-  });
-  safeHandle('license:check-premium', async () => {
-    try {
-      const { LicenseManager } = require('../premium/electron/services/LicenseManager');
-      return LicenseManager.getInstance().isPremium();
-    } catch {
-      return false;
-    }
-  });
-
-  safeHandle('license:get-details', async () => {
-    try {
-      const { LicenseManager } = require('../premium/electron/services/LicenseManager');
-      return LicenseManager.getInstance().getLicenseDetails();
-    } catch {
-      return { isPremium: false };
-    }
-  });
-  // Async variant: performs Dodo server-side revocation check on startup.
-  // Returns false only if the server definitively revokes the key.
-  // Network errors fail-open (returns cached sync result).
-  safeHandle('license:check-premium-async', async () => {
-    try {
-      const { LicenseManager } = require('../premium/electron/services/LicenseManager');
-      return await LicenseManager.getInstance().isPremiumAsync();
-    } catch {
-      return false;
-    }
-  });
-  safeHandle('license:deactivate', async () => {
-    try {
-      const { LicenseManager } = require('../premium/electron/services/LicenseManager');
-      // deactivate() is async — it calls the Dodo server to free the activation slot
-      // before removing the local license file. Must be awaited.
-      await LicenseManager.getInstance().deactivate();
-      // Auto-disable knowledge mode when license is removed
-      try {
-        const orchestrator = appState.getKnowledgeOrchestrator();
-        if (orchestrator) {
-          orchestrator.setKnowledgeMode(false);
-          console.log('[IPC] Knowledge mode auto-disabled due to license deactivation');
-        }
-      } catch (e) {
-        /* ignore */
-      }
-      // Notify all windows so the license UI (ProGate, settings) refreshes immediately
-      clearActiveModeOnLicenseLoss();
-      BrowserWindow.getAllWindows().forEach((win) => {
-        if (!win.isDestroyed())
-          win.webContents.send('license-status-changed', { isPremium: false });
-      });
-    } catch {
-      /* LicenseManager not available */
-    }
-    return { success: true };
-  });
-  safeHandle('license:get-hardware-id', async () => {
-    try {
-      const { LicenseManager } = require('../premium/electron/services/LicenseManager');
-      return LicenseManager.getInstance().getHardwareId();
-    } catch {
-      return 'unavailable';
     }
   });
 
@@ -7096,88 +6976,6 @@ export function initializeIpcHandlers(appState: AppState): void {
       // race — so the broadcast now has to happen here, at the source of truth.)
       broadcastCredentialsChanged();
 
-      // Auto-activate Natively Pro for pro/max/ultra API plans.
-      // Skips silently if the user already has a Gumroad/Dodo lifetime license.
-      //
-      // This is awaited inline — NOT detached. The await is what serializes a
-      // rapid set→clear (or clear→set) sequence: it keeps the renderer's
-      // "Saving…" state (and the disabled button) active until the license
-      // mutation completes, so the user physically cannot fire the conflicting
-      // call mid-flight. Detaching it removed that backpressure and opened an
-      // ordering race where a fire-and-forget activate could land its
-      // storeLicense AFTER a clear's deactivate, leaving Pro active with no key
-      // (an entitlement leak), since LicenseManager has no cross-call mutex.
-      // The crash/hang this whole change set fixes is closed by the
-      // reconfigureSttProvider serialization alone; this activation already ran
-      // strictly AFTER reconfigure completed (never concurrent with it), so
-      // there is nothing to gain by detaching it and a billing bug to lose.
-      if (apiKey) {
-        try {
-          const { LicenseManager } = require('../premium/electron/services/LicenseManager');
-          const result = await LicenseManager.getInstance().activateWithApiKey(apiKey);
-          if (result.success) {
-            console.log('[IPC] set-natively-api-key: Pro auto-activated via API plan.');
-            // Notify all windows so the license UI refreshes immediately
-            BrowserWindow.getAllWindows().forEach((win) => {
-              if (!win.isDestroyed())
-                win.webContents.send('license-status-changed', { isPremium: true });
-            });
-          } else if (result.skipped && !result.error) {
-            // Benign skip: the stored perpetual license is verified and already
-            // granting Pro, so there is nothing to tell the user.
-            console.log(
-              '[IPC] set-natively-api-key: existing Gumroad/Dodo license preserved — Pro not overwritten.',
-            );
-          } else if (result.skipped) {
-            // Skip WITH an error: the perpetual license could not be verified
-            // (native module absent), so it grants nothing AND the API key was
-            // refused — the user has Pro from neither credential. This is a
-            // support-visible fault, not the benign case above; do not bury it
-            // at log level. NOTE: still not surfaced in the UI — the
-            // license-status-changed payload is typed { isPremium, plan? } and
-            // has no channel for a reason string. Users hitting this via the
-            // license box DO see it (activateLicense returns result.error).
-            console.warn(
-              '[IPC] set-natively-api-key: Pro inactive —',
-              result.error,
-            );
-          } else {
-            console.log('[IPC] set-natively-api-key: Pro not activated —', result.error);
-          }
-        } catch (e: any) {
-          // LicenseManager not available in this build — non-fatal
-          console.warn(
-            '[IPC] set-natively-api-key: LicenseManager unavailable for Pro auto-activation:',
-            e?.message,
-          );
-        }
-      } else {
-        // API key was cleared — deactivate any natively_api Pro license so premium is revoked.
-        try {
-          const { LicenseManager } = require('../premium/electron/services/LicenseManager');
-          const lm = LicenseManager.getInstance();
-          // Only deactivate if the stored license is from a natively_api subscription.
-          // Never touch Gumroad/Dodo lifetime licenses here.
-          const details = lm.getLicenseDetails();
-          if (details.isPremium && details.provider === 'natively_api') {
-            await lm.deactivate();
-            console.log(
-              '[IPC] set-natively-api-key: key cleared — natively_api Pro license deactivated.',
-            );
-            clearActiveModeOnLicenseLoss();
-            BrowserWindow.getAllWindows().forEach((win) => {
-              if (!win.isDestroyed())
-                win.webContents.send('license-status-changed', { isPremium: false });
-            });
-          }
-        } catch (e: any) {
-          console.warn(
-            '[IPC] set-natively-api-key: LicenseManager unavailable for Pro deactivation on key clear:',
-            e?.message,
-          );
-        }
-      }
-
       return { success: true };
     } catch (error: any) {
       console.error('Error saving Natively API key:', error);
@@ -7280,12 +7078,8 @@ export function initializeIpcHandlers(appState: AppState): void {
       // Fail closed instead — a trial that cannot be bound to this machine
       // must not be started.
       let hwid = '';
-      try {
-        const { LicenseManager } = require('../premium/electron/services/LicenseManager');
-        hwid = LicenseManager.getInstance().getHardwareId() || '';
-      } catch {
-        /* LicenseManager not available — handled by the guard below */
-      }
+      // Hardware id came from the removed premium LicenseManager. Without it a
+      // trial cannot be HWID-bound — the guard below fails closed.
       if (!hwid || hwid === 'unavailable') {
         console.error('[Trial] Refusing to start a trial without a real hardware id (native module unavailable).');
         return { ok: false, error: 'hardware_id_unavailable' };
@@ -7583,22 +7377,11 @@ export function initializeIpcHandlers(appState: AppState): void {
       if (llmHelper) llmHelper.setNativelyKey(null);
       await appState.reconfigureSttProvider();
 
-      // 4. Deactivate Pro license (removes license.enc)
-      try {
-        const { LicenseManager } = require('../premium/electron/services/LicenseManager');
-        await LicenseManager.getInstance().deactivate();
-      } catch {
-        /* LicenseManager not available in this build */
-      }
-
-      // 5. Disable knowledge mode + wipe orchestrator in-memory caches for resume/JD
+      // 5. Disable knowledge mode
       try {
         const orchestrator = appState.getKnowledgeOrchestrator();
         if (orchestrator) {
           orchestrator.setKnowledgeMode(false);
-          const { DocType } = require('../premium/electron/knowledge/types');
-          orchestrator.deleteDocumentsByType(DocType.RESUME);
-          orchestrator.deleteDocumentsByType(DocType.JD);
         }
       } catch {
         /* ignore */
@@ -7638,11 +7421,9 @@ export function initializeIpcHandlers(appState: AppState): void {
         console.warn('[IPC] trial:end-byok: profile OKF pack wipe failed:', piiErr?.message || piiErr);
       }
 
-      // 7. Notify all windows to refresh license + model state
-      clearActiveModeOnLicenseLoss();
+      // 7. Notify all windows to refresh model state
       BrowserWindow.getAllWindows().forEach((win) => {
         if (!win.isDestroyed()) {
-          win.webContents.send('license-status-changed', { isPremium: false });
           win.webContents.send('trial-ended', { choice: 'byok' });
         }
       });
@@ -7659,14 +7440,11 @@ export function initializeIpcHandlers(appState: AppState): void {
   // profile intelligence data can't linger in SQLite after the trial window closes.
   safeHandle('trial:wipe-profile-data', async () => {
     try {
-      // 1. Disable knowledge mode + wipe orchestrator in-memory caches
+      // 1. Disable knowledge mode
       try {
         const orchestrator = appState.getKnowledgeOrchestrator();
         if (orchestrator) {
           orchestrator.setKnowledgeMode(false);
-          const { DocType } = require('../premium/electron/knowledge/types');
-          orchestrator.deleteDocumentsByType(DocType.RESUME);
-          orchestrator.deleteDocumentsByType(DocType.JD);
         }
       } catch {
         /* ignore — orchestrator may not be initialised */
@@ -11054,113 +10832,15 @@ export function initializeIpcHandlers(appState: AppState): void {
     return key;
   };
 
-  safeHandle('profile:upload-resume', async (_, filePath: string) => {
-    try {
-      // Premium gate: require active license or free trial for profile features
-      if (!isProOrTrialActive()) {
-        return {
-          success: false,
-          error:
-            'Pro license required. Please activate a license key to use Profile Intelligence features.',
-        };
-      }
-      const resolvedPath = consumeSelectedProfilePath(filePath);
-      if (!resolvedPath) {
-        console.warn('[IPC] profile:upload-resume rejected: path was not produced by profile:select-file or has expired.');
-        return { success: false, error: 'Please re-select the resume file.' };
-      }
-      console.log(`[IPC] profile:upload-resume called with: ${resolvedPath}`);
-      const orchestrator = appState.getKnowledgeOrchestrator();
-      if (!orchestrator) {
-        return {
-          success: false,
-          error: 'Knowledge engine not initialized. Please ensure API keys are configured.',
-        };
-      }
-      const { DocType } = require('../premium/electron/knowledge/types');
-      const result = await orchestrator.ingestDocument(resolvedPath, DocType.RESUME);
-      if (!result?.success && path.extname(resolvedPath).toLowerCase() === '.doc') {
-        return { success: false, error: 'Legacy Word .doc files are not supported. Save the file as .docx and upload it again.' };
-      }
-      if (result?.success) {
-        // RC-8 fix: uploading a resume must make it immediately usable. Previously
-        // knowledge mode was a SEPARATE manual toggle, so a freshly-uploaded resume
-        // sat inert until the user found the switch — every question fell through to
-        // the bare chat prompt and got "I don't have access to your information".
-        // Enable + persist so it survives restart (main.ts:1113 restores the setting).
-        try {
-          orchestrator.setKnowledgeMode(true);
-          const { SettingsManager } = require('./services/SettingsManager');
-          SettingsManager.getInstance().set('knowledgeMode', true);
-        } catch (e) {
-          console.warn('[IPC] profile:upload-resume: failed to auto-enable knowledge mode', e);
-        }
-        const activeResume = (orchestrator as any)?.activeResume?.structured_data ?? null;
-        const factsReady = profileFactsReady(activeResume);
-        console.log('[ProfileIntelligence] profileFactsReady', {
-          profileFactsReady: factsReady,
-          hasName: Boolean(activeResume?.identity?.name),
-          experienceCount: Array.isArray(activeResume?.experience) ? activeResume.experience.length : 0,
-          projectCount: Array.isArray(activeResume?.projects) ? activeResume.projects.length : 0,
-          skillsCount: Array.isArray(activeResume?.skills)
-            ? activeResume.skills.length
-            : (activeResume?.skills && typeof activeResume.skills === 'object'
-                ? Object.values(activeResume.skills).reduce((n: number, v: any) => n + (Array.isArray(v) ? v.length : 0), 0)
-                : 0),
-          extractionMode: activeResume?._extraction_mode ?? 'unknown',
-        });
-      }
-      return result;
-    } catch (error: any) {
-      console.error('[IPC] profile:upload-resume error:', error);
-      return { success: false, error: error.message };
-    }
+  safeHandle('profile:upload-resume', async (_: any, _filePath: string) => {
+    // Premium knowledge subsystem removed — profile intelligence is unavailable.
+    return { success: false, error: 'Feature not available.' };
   });
 
   safeHandle('profile:get-status', async () => {
-    try {
-      const orchestrator = appState.getKnowledgeOrchestrator();
-      if (!orchestrator) {
-        return { hasProfile: false, profileMode: false };
-      }
-      // Map new KnowledgeStatus back to legacy UI shape temporarily, plus explicit
-      // readiness flags used by eval/UI polling. profileFactsReady is true as soon
-      // as structured resume extraction is saved; it does NOT wait for embeddings
-      // or the JD AOT pipeline.
-      const status = orchestrator.getStatus();
-      const activeResume = (orchestrator as any)?.activeResume?.structured_data ?? null;
-      const activeJD = (orchestrator as any)?.activeJD?.structured_data ?? null;
-      // Indexing runs in the main process and outlives the Profile Intelligence
-      // panel (a React modal — closing it unmounts a subtree, it does NOT cancel
-      // this handler). The panel's local uploading state dies with that unmount,
-      // so main has to hand it back or a reopen mid-ingest renders the empty
-      // upload slot and invites a duplicate upload. NOT covered by
-      // aot_pipeline_running: that is JD-side and, per the comment above,
-      // deliberately excluded from the resume readiness signal.
-      const { DocType: StatusDocType } = require('../premium/electron/knowledge/types');
-      return {
-        hasProfile: status.hasResume,
-        profileMode: status.activeMode,
-        name: status.resumeSummary?.name,
-        role: status.resumeSummary?.role,
-        totalExperienceYears: status.resumeSummary?.totalExperienceYears,
-        resume_structured_extraction_complete: Boolean(activeResume),
-        resume_profile_facts_ready: profileFactsReady(activeResume),
-        profileFactsReady: profileFactsReady(activeResume),
-        jd_structured_extraction_complete: Boolean(activeJD),
-        jdFactsReady: Boolean(activeJD),
-        aot_pipeline_running: Boolean((orchestrator as any)?.getAOTPipeline?.()?.isRunning?.()),
-        resume_indexing_in_flight: Boolean((orchestrator as any)?.isIngesting?.(StatusDocType.RESUME)),
-        jd_indexing_in_flight: Boolean((orchestrator as any)?.isIngesting?.(StatusDocType.JD)),
-        // D3: surface how the resume was parsed so the UI can hint that a
-        // heuristic (LLM-down) profile may be re-extracted for richer facts.
-        extractionMode: activeResume
-          ? ((activeResume as any)?._extraction_mode === 'heuristic' ? 'heuristic' : 'llm')
-          : 'none',
-      };
-    } catch (error: any) {
-      return { hasProfile: false, profileMode: false };
-    }
+    // Premium knowledge subsystem removed — report an empty (no-profile) status,
+    // matching the shape this handler already returned without an orchestrator.
+    return { hasProfile: false, profileMode: false };
   });
 
   safeHandle('profile:set-mode', async (_, enabled: boolean) => {
@@ -11194,24 +10874,8 @@ export function initializeIpcHandlers(appState: AppState): void {
   });
 
   safeHandle('profile:delete', async () => {
-    try {
-      const orchestrator = appState.getKnowledgeOrchestrator();
-      if (!orchestrator) {
-        return { success: false, error: 'Knowledge engine not initialized' };
-      }
-      const { DocType } = require('../premium/electron/knowledge/types');
-      // Both tiers in ONE transaction. Deleting only Tier 1 here left Tier 2's
-      // PII-bearing knowledge_cards orphaned — the user asked for their résumé
-      // to be removed and half of it stayed on disk. Tier 1 (premium
-      // KnowledgeDatabaseManager) and Tier 2 (this repo's DatabaseManager) wrap
-      // the SAME better-sqlite3 connection, so runInTransaction() is a genuine
-      // cross-tier rollback rather than call sequencing.
-      const { deleteProfileTransactional } = require('./services/knowledge/deleteProfileTransactional') as typeof import('./services/knowledge/deleteProfileTransactional');
-      deleteProfileTransactional(orchestrator, DocType.RESUME, 'resume');
-      return { success: true };
-    } catch (error: any) {
-      return { success: false, error: error.message };
-    }
+    // Premium knowledge subsystem removed — profile intelligence is unavailable.
+    return { success: false, error: 'Feature not available.' };
   });
 
   safeHandle('profile:get-profile', async () => {
@@ -11278,69 +10942,14 @@ export function initializeIpcHandlers(appState: AppState): void {
   // JD & Research IPC Handlers
   // ==========================================
 
-  safeHandle('profile:upload-jd', async (_, filePath: string) => {
-    try {
-      // Premium gate
-      if (!isProOrTrialActive()) {
-        return {
-          success: false,
-          error:
-            'Pro license required. Please activate a license key to use Profile Intelligence features.',
-        };
-      }
-      const resolvedPath = consumeSelectedProfilePath(filePath);
-      if (!resolvedPath) {
-        console.warn('[IPC] profile:upload-jd rejected: path was not produced by profile:select-file or has expired.');
-        return { success: false, error: 'Please re-select the JD file.' };
-      }
-      console.log(`[IPC] profile:upload-jd called with: ${resolvedPath}`);
-      const orchestrator = appState.getKnowledgeOrchestrator();
-      if (!orchestrator) {
-        return {
-          success: false,
-          error: 'Knowledge engine not initialized. Please ensure API keys are configured.',
-        };
-      }
-      const { DocType } = require('../premium/electron/knowledge/types');
-      const result = await orchestrator.ingestDocument(resolvedPath, DocType.JD);
-      if (!result?.success && path.extname(resolvedPath).toLowerCase() === '.doc') {
-        return { success: false, error: 'Legacy Word .doc files are not supported. Save the file as .docx and upload it again.' };
-      }
-      if (result?.success) {
-        // RC-8 fix: a JD is only useful with knowledge mode on. If a resume is already
-        // loaded, setKnowledgeMode(true) takes effect immediately; if not, it no-ops
-        // safely (the gate still requires a resume) but we persist the intent so the
-        // JD becomes active as soon as a resume is uploaded.
-        try {
-          orchestrator.setKnowledgeMode(true);
-          const { SettingsManager } = require('./services/SettingsManager');
-          SettingsManager.getInstance().set('knowledgeMode', true);
-        } catch (e) {
-          console.warn('[IPC] profile:upload-jd: failed to auto-enable knowledge mode', e);
-        }
-      }
-      return result;
-    } catch (error: any) {
-      console.error('[IPC] profile:upload-jd error:', error);
-      return { success: false, error: error.message };
-    }
+  safeHandle('profile:upload-jd', async (_: any, _filePath: string) => {
+    // Premium knowledge subsystem removed — profile intelligence is unavailable.
+    return { success: false, error: 'Feature not available.' };
   });
 
   safeHandle('profile:delete-jd', async () => {
-    try {
-      const orchestrator = appState.getKnowledgeOrchestrator();
-      if (!orchestrator) {
-        return { success: false, error: 'Knowledge engine not initialized' };
-      }
-      const { DocType } = require('../premium/electron/knowledge/types');
-      // Same cross-tier transaction as profile:delete above — see the comment
-      // there for why a Tier-1-only delete is a partial delete.
-      const { deleteProfileTransactional } = require('./services/knowledge/deleteProfileTransactional') as typeof import('./services/knowledge/deleteProfileTransactional');
-      deleteProfileTransactional(orchestrator, DocType.JD, 'jd');
-      return { success: true };
-    } catch (error: any) {
-      return { success: false, error: error.message };
-    }
+    // Premium knowledge subsystem removed — profile intelligence is unavailable.
+    return { success: false, error: 'Feature not available.' };
   });
 
   // OKF Profile Intelligence — Phase 3 (2026-07-02): export the candidate
@@ -11832,104 +11441,17 @@ export function initializeIpcHandlers(appState: AppState): void {
   // canonical Profile Intelligence data model is never bypassed. The temp path
   // is registered by main (not supplied by the renderer), so the
   // selected-path allowlist is respected rather than worked around.
-  safeHandle('roleInsight:paste-jd', async (_, text: string) => {
-    let tempPath: string | null = null;
-    try {
-      if (!isProOrTrialActive()) return { success: false, error: 'Pro license required.' };
-      if (typeof text !== 'string' || text.trim().length < 200) {
-        return { success: false, error: 'Paste the full job description — this looks too short to analyse.' };
-      }
-      const orchestrator = appState.getKnowledgeOrchestrator();
-      if (!orchestrator) return { success: false, error: 'Knowledge engine not initialized.' };
-
-      const os = require('os');
-      const fsp = require('fs/promises');
-      tempPath = path.join(os.tmpdir(), `natively-jd-${Date.now()}.txt`);
-      await fsp.writeFile(tempPath, text, 'utf8');
-      registerSelectedProfilePath(tempPath);
-
-      const resolved = consumeSelectedProfilePath(tempPath);
-      if (!resolved) return { success: false, error: 'Could not stage the pasted job description.' };
-
-      const { DocType } = require('../premium/electron/knowledge/types');
-      const result = await orchestrator.ingestDocument(resolved, DocType.JD);
-      if (result?.success) {
-        try {
-          orchestrator.setKnowledgeMode(true);
-          const { SettingsManager } = require('./services/SettingsManager');
-          SettingsManager.getInstance().set('knowledgeMode', true);
-        } catch (e) {
-          console.warn('[IPC] roleInsight:paste-jd: failed to auto-enable knowledge mode', e);
-        }
-      }
-      return result;
-    } catch (error: any) {
-      console.error('[IPC] roleInsight:paste-jd error:', error);
-      return { success: false, error: error.message };
-    } finally {
-      if (tempPath) {
-        try { require('fs').unlinkSync(tempPath); } catch { /* best effort */ }
-      }
-    }
+  safeHandle('roleInsight:paste-jd', async (_: any, _text: string) => {
+    // Premium knowledge subsystem removed — role insight is unavailable.
+    return { success: false, error: 'Feature not available.' };
   });
 
   // Import a job description from a URL via Tavily extraction, then ingest it
   // through the normal path. Fails with a clear message rather than silently
   // falling back, so the user knows the URL was not read.
-  safeHandle('roleInsight:import-jd-url', async (_, url: string) => {
-    let tempPath: string | null = null;
-    try {
-      if (!isProOrTrialActive()) return { success: false, error: 'Pro license required.' };
-      if (typeof url !== 'string' || !/^https?:\/\//i.test(url.trim())) {
-        return { success: false, error: 'Enter a valid job posting URL starting with http:// or https://' };
-      }
-      const orchestrator = appState.getKnowledgeOrchestrator();
-      if (!orchestrator) return { success: false, error: 'Knowledge engine not initialized.' };
-
-      const { resolveCompanySearchProvider } = require('./services/resolveCompanySearchProvider');
-      const provider = resolveCompanySearchProvider();
-      if (!provider || typeof provider.extractUrl !== 'function') {
-        return {
-          success: false,
-          error: 'Reading a job URL needs a Tavily API key. Add one under Tavily Search, or paste the job description instead.',
-        };
-      }
-
-      const { resolveFromUrl } = require('../premium/electron/knowledge/roleInsight/JdSourceResolver');
-      const resolvedJd = await resolveFromUrl(url.trim(), provider, '');
-      if (!resolvedJd) {
-        return {
-          success: false,
-          error: 'That page could not be read. Paste the job description text instead.',
-        };
-      }
-
-      const os = require('os');
-      const fsp = require('fs/promises');
-      tempPath = path.join(os.tmpdir(), `natively-jd-${Date.now()}.txt`);
-      await fsp.writeFile(tempPath, resolvedJd.text, 'utf8');
-      registerSelectedProfilePath(tempPath);
-      const staged = consumeSelectedProfilePath(tempPath);
-      if (!staged) return { success: false, error: 'Could not stage the imported job description.' };
-
-      const { DocType } = require('../premium/electron/knowledge/types');
-      const result = await orchestrator.ingestDocument(staged, DocType.JD);
-      if (result?.success) {
-        try {
-          orchestrator.setKnowledgeMode(true);
-          const { SettingsManager } = require('./services/SettingsManager');
-          SettingsManager.getInstance().set('knowledgeMode', true);
-        } catch { /* non-fatal */ }
-      }
-      return { ...result, sourceUrl: url.trim() };
-    } catch (error: any) {
-      console.error('[IPC] roleInsight:import-jd-url error:', error);
-      return { success: false, error: error.message };
-    } finally {
-      if (tempPath) {
-        try { require('fs').unlinkSync(tempPath); } catch { /* best effort */ }
-      }
-    }
+  safeHandle('roleInsight:import-jd-url', async (_: any, _url: string) => {
+    // Premium knowledge subsystem removed — role insight is unavailable.
+    return { success: false, error: 'Feature not available.' };
   });
 
   // ==========================================
@@ -13828,33 +13350,11 @@ export function initializeIpcHandlers(appState: AppState): void {
     // Natively backend), DocumentChunker, embeddings, context_nodes, AOT pipeline,
     // OKF profile pack — is the REAL pipeline. Never registered outside NATIVELY_E2E.
     safeHandle('__e2e__:ingest-profile-doc', async (
-      _,
-      params: { filePath: string; docType: 'resume' | 'jd' },
+      _: any,
+      _params: { filePath: string; docType: 'resume' | 'jd' },
     ) => {
-      try {
-        const orchestrator = appState.getKnowledgeOrchestrator();
-        if (!orchestrator) return { success: false, error: 'orchestrator_not_initialized' };
-        const { DocType } = require('../premium/electron/knowledge/types');
-        const dt = params.docType === 'jd' ? DocType.JD : DocType.RESUME;
-        const result = await orchestrator.ingestDocument(params.filePath, dt);
-        if (result?.success) {
-          try {
-            orchestrator.setKnowledgeMode(true);
-            const { SettingsManager } = require('./services/SettingsManager');
-            SettingsManager.getInstance().set('knowledgeMode', true);
-          } catch { /* non-fatal */ }
-        }
-        const activeResume = (orchestrator as any)?.activeResume?.structured_data ?? null;
-        const activeJD = (orchestrator as any)?.activeJD?.structured_data ?? null;
-        return {
-          ...result,
-          docType: params.docType,
-          hasStructuredResume: Boolean(activeResume),
-          hasStructuredJD: Boolean(activeJD),
-        };
-      } catch (e: any) {
-        return { success: false, error: e?.message || String(e) };
-      }
+      // Premium knowledge subsystem removed — E2E profile ingestion is unavailable.
+      return { success: false, error: 'orchestrator_not_initialized' };
     });
 
     // E2E-only: read back live ingestion state from the orchestrator + DB so the
@@ -13915,16 +13415,8 @@ export function initializeIpcHandlers(appState: AppState): void {
 
     // E2E-only: clear profile between sequential profiles (prevents cross-profile bleed).
     safeHandle('__e2e__:clear-profile', async () => {
-      try {
-        const orchestrator = appState.getKnowledgeOrchestrator();
-        if (!orchestrator) return { success: false, error: 'orchestrator_not_initialized' };
-        const { DocType } = require('../premium/electron/knowledge/types');
-        orchestrator.deleteDocumentsByType(DocType.RESUME);
-        orchestrator.deleteDocumentsByType(DocType.JD);
-        return { success: true };
-      } catch (e: any) {
-        return { success: false, error: e?.message || String(e) };
-      }
+      // Premium knowledge subsystem removed — E2E profile clearing is unavailable.
+      return { success: false, error: 'orchestrator_not_initialized' };
     });
 
     safeHandle('__e2e__:ask', async (

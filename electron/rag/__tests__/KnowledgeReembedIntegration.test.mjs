@@ -26,8 +26,20 @@ const koPath = path.resolve(__dirname, '../../../dist-electron/premium/electron/
 const kdbPath = path.resolve(__dirname, '../../../dist-electron/premium/electron/knowledge/KnowledgeDatabaseManager.js');
 const esPath = path.resolve(__dirname, '../../../dist-electron/electron/rag/embeddingSpace.js');
 
-const { KnowledgeOrchestrator } = await import(pathToFileURL(koPath).href);
-const { KnowledgeDatabaseManager } = await import(pathToFileURL(kdbPath).href);
+// The premium submodule was removed from this repo, so the compiled
+// KnowledgeOrchestrator/KnowledgeDatabaseManager are absent: skip the
+// premium-dependent suites gracefully instead of failing at load time.
+let PREMIUM_AVAILABLE = true;
+let KnowledgeOrchestrator;
+let KnowledgeDatabaseManager;
+try {
+  ({ KnowledgeOrchestrator } = await import(pathToFileURL(koPath).href));
+  ({ KnowledgeDatabaseManager } = await import(pathToFileURL(kdbPath).href));
+} catch (err) {
+  PREMIUM_AVAILABLE = false;
+  console.warn(`[premium-absent] ${err?.code ?? err?.message ?? err} — skipping premium-dependent suites in ${import.meta.url}`);
+}
+const describeIfPremium = PREMIUM_AVAILABLE ? describe : describe.skip;
 const { embeddingSpaceKey } = await import(pathToFileURL(esPath).href);
 
 const SPACE_V1 = embeddingSpaceKey({ name: 'gemini', model: 'gemini-embedding-001', dimensions: 768 });
@@ -65,7 +77,7 @@ function seedNode(db, { title, space, fill = 0.1, embedded = true }) {
   ).run(title, `content of ${title}`, '[]', blob, space);
 }
 
-describe('KnowledgeOrchestrator.ensureEmbeddingSpace (real compiled method + real DB)', () => {
+describeIfPremium('KnowledgeOrchestrator.ensureEmbeddingSpace (real compiled method + real DB)', () => {
   let db;
   beforeEach(() => { db = new Database(':memory:'); });
   afterEach(() => db.close());
@@ -191,7 +203,7 @@ describe('KnowledgeOrchestrator.ensureEmbeddingSpace (real compiled method + rea
   });
 });
 
-describe('KnowledgeOrchestrator._spaceGatedNodes (real compiled method)', () => {
+describeIfPremium('KnowledgeOrchestrator._spaceGatedNodes (real compiled method)', () => {
   let db;
   beforeEach(() => { db = new Database(':memory:'); });
   afterEach(() => db.close());
@@ -318,7 +330,7 @@ describe('KnowledgeOrchestrator._spaceGatedNodes (real compiled method)', () => 
   });
 });
 
-describe('KnowledgeOrchestrator.resolveQueryEmbedder space-gating (real compiled method)', () => {
+describeIfPremium('KnowledgeOrchestrator.resolveQueryEmbedder space-gating (real compiled method)', () => {
   let db;
   beforeEach(() => { db = new Database(':memory:'); });
   afterEach(() => db.close());

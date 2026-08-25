@@ -225,7 +225,7 @@ export const NEGOTIATION_PATTERNS = [
   // High-signal compensation PUSHBACK phrasings the interviewer uses ("our budget
   // is lower", "can you come down", "that's higher than we budgeted"). Specific
   // enough to avoid colliding with a PM's "project budget" — requires the comp
-  // direction verb. Mirrors the premium classifier's stickiness vocabulary.
+  // direction verb. Mirrors the classifier's stickiness vocabulary.
   /\bbudget is (lower|tight|limited|less|under|capped|fixed|only|around|\$|\d)\b/i,
   /\b(come down|go lower|do better) (on|with)\b|\bcan you come down\b|\bmeet (me )?in the middle\b/i,
 ];

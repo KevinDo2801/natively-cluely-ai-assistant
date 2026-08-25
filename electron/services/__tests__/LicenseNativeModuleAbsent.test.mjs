@@ -45,9 +45,14 @@ Module._resolveFilename = function (request, ...rest) {
   return originalResolve.call(this, request, ...rest);
 };
 
-const { LicenseManager } = await import(
-  '../../../dist-electron/premium/electron/services/LicenseManager.js'
-);
+let LicenseManager = null;
+try {
+  ({ LicenseManager } = await import(
+    '../../../dist-electron/premium/electron/services/LicenseManager.js'
+  ));
+} catch (err) {
+  console.warn(`[premium-absent] ${err?.code ?? err?.message ?? err} — LicenseManager (premium) unavailable; skipping LicenseNativeModuleAbsent suite in ${import.meta.url}`);
+}
 
 after(() => {
   Module._resolveFilename = originalResolve;
@@ -104,6 +109,10 @@ async function withStubbedFetch({ status, body }, fn) {
   }
 }
 
+// LicenseManager lives in the (removed) premium submodule. When premium is
+// absent the whole suite is moot — guard it so it degrades to a clean skip.
+const describeIfPremium = LicenseManager ? describe : describe.skip;
+
 const originalFetch = globalThis.fetch;
 beforeEach(() => {
   fs.rmSync(LICENSE_PATH, { force: true });
@@ -116,7 +125,10 @@ after(() => {
   globalThis.fetch = originalFetch;
 });
 
-before(() => {
+before((t) => {
+  // LicenseManager (premium) absent — the whole suite is skipped, so nothing
+  // below may touch it.
+  if (!LicenseManager) return t.skip('premium LicenseManager unavailable');
   // Guard the premise: if the native module somehow loaded, every assertion
   // below is vacuous and would pass for the wrong reason.
   const mgr = freshManager();
@@ -127,7 +139,7 @@ before(() => {
   );
 });
 
-describe('native module absent: natively_api (server-validated, not HWID-bound)', () => {
+describeIfPremium('native module absent: natively_api (server-validated, not HWID-bound)', () => {
   test('isPremium() resolves true from a stored license', () => {
     writeLicense('natively_api', { plan: 'ultra' });
     assert.equal(freshManager().isPremium(), true);
@@ -167,7 +179,7 @@ describe('native module absent: natively_api (server-validated, not HWID-bound)'
   });
 });
 
-describe('native module absent: HWID-bound providers stay locked', () => {
+describeIfPremium('native module absent: HWID-bound providers stay locked', () => {
   for (const provider of ['gumroad', 'dodo']) {
     test(`${provider} license resolves false — device binding is unverifiable`, () => {
       writeLicense(provider);
@@ -185,7 +197,7 @@ describe('native module absent: HWID-bound providers stay locked', () => {
   });
 });
 
-describe('native module absent: activateWithApiKey must not clobber a perpetual license', () => {
+describeIfPremium('native module absent: activateWithApiKey must not clobber a perpetual license', () => {
   // The skip decision happens before any network call, so these run offline.
   // The hazard: activateWithApiKey used readStoredLicense() to detect an
   // existing license, and that read returns null for an HWID-bound license it
@@ -248,7 +260,7 @@ describe('native module absent: activateWithApiKey must not clobber a perpetual 
   });
 });
 
-describe('native module absent: a license.enc that cannot be decrypted', () => {
+describeIfPremium('native module absent: a license.enc that cannot be decrypted', () => {
   // Overwrite protection is decrypt-based, so a file it cannot read looks exactly
   // like free space. Refusing on it would be worse than letting the write
   // through: a genuinely corrupt file would lock the user out of activating at
@@ -329,7 +341,7 @@ describe('native module absent: a license.enc that cannot be decrypted', () => {
   });
 });
 
-describe('native module absent: no license at all', () => {
+describeIfPremium('native module absent: no license at all', () => {
   test('isPremium() is false and getLicenseDetails() reports no plan', () => {
     const mgr = freshManager();
     assert.equal(mgr.isPremium(), false);

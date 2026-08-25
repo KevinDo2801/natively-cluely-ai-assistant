@@ -8,7 +8,7 @@
 // 8+ years production)" in the résumé fixture's Languages line).
 //
 // Root cause: `detectCategoryHints` / `CATEGORY_KEYWORD_MAP`
-// (premium/electron/knowledge/HybridSearchEngine.ts) maps the word
+// (HybridSearchEngine.ts) maps the word
 // "experience" to the 'experience' category, but had NO entry for its
 // synonym "expertise" at all — so a question phrased with "expertise"
 // produced ZERO category hints, and `buildStructuredCategoryPack`
@@ -25,11 +25,22 @@ import path from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
-const { detectCategoryHints } = await import(
-  pathToFileURL(path.resolve(__dirname, '../../../dist-electron/premium/electron/knowledge/HybridSearchEngine.js')).href
-);
+// The premium submodule was removed from this repo, so the compiled
+// HybridSearchEngine is absent: skip the premium-dependent suites
+// gracefully instead of failing at load time.
+let PREMIUM_AVAILABLE = true;
+let detectCategoryHints;
+try {
+  ({ detectCategoryHints } = await import(
+    pathToFileURL(path.resolve(__dirname, '../../../dist-electron/premium/electron/knowledge/HybridSearchEngine.js')).href
+  ));
+} catch (err) {
+  PREMIUM_AVAILABLE = false;
+  console.warn(`[premium-absent] ${err?.code ?? err?.message ?? err} — skipping premium-dependent suites in ${import.meta.url}`);
+}
+const describeIfPremium = PREMIUM_AVAILABLE ? describe : describe.skip;
 
-describe('"expertise" is recognized as an experience-category keyword', () => {
+describeIfPremium('"expertise" is recognized as an experience-category keyword', () => {
   test('the exact live-failing question now yields the experience category hint', () => {
     const hints = detectCategoryHints('The JD calls for 8+ years and deep Go or Java expertise — how do you stack up there?');
     assert.ok(hints.includes('experience'), `expected 'experience' in hints, got ${JSON.stringify(hints)}`);

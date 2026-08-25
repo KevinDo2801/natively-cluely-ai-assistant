@@ -30,8 +30,8 @@
 // The remaining 3 assertions in the original file (candidate_leadership as
 // a KnowledgeCardType; ProfileCardTemplates' card-building; OkfMarkdownExporter's
 // label) are about main-repo files (types.ts/ProfileCardTemplates.ts/
-// OkfMarkdownExporter.ts), NOT the premium submodule Slice 4 touches — they
-// stay in the original file, source-pinned (one of them, the KnowledgeCardType
+// OkfMarkdownExporter.ts) — they stay in the original file, source-pinned
+// (one of them, the KnowledgeCardType
 // union-membership check, has no runtime equivalent at all: TS union types
 // don't exist at runtime).
 
@@ -43,7 +43,18 @@ import { fileURLToPath } from 'node:url';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const require = createRequire(import.meta.url);
-const { KnowledgeOrchestrator } = require('../../../dist-electron/premium/electron/knowledge/KnowledgeOrchestrator.js');
+// The premium submodule was removed from this repo, so the compiled
+// KnowledgeOrchestrator is absent: skip the premium-dependent suites
+// gracefully instead of failing at require() time.
+let PREMIUM_AVAILABLE = true;
+let KnowledgeOrchestrator;
+try {
+  ({ KnowledgeOrchestrator } = require('../../../dist-electron/premium/electron/knowledge/KnowledgeOrchestrator.js'));
+} catch (err) {
+  PREMIUM_AVAILABLE = false;
+  console.warn(`[premium-absent] ${err?.code ?? err?.message ?? err} — skipping premium-dependent suites in ${import.meta.url}`);
+}
+const describeIfPremium = PREMIUM_AVAILABLE ? describe : describe.skip;
 
 function resumeWithLeadership(leadership) {
   return {
@@ -84,7 +95,7 @@ function makeOrchestrator(resume) {
 
 const LEADERSHIP_ENTRY = { role: 'Technical Head', organization: 'SEDS CUSAT', description: 'Led the avionics subsystem team.' };
 
-describe('RC6 behavioral: leadership content surfaces for an org-NAMED question with no category keyword', () => {
+describeIfPremium('RC6 behavioral: leadership content surfaces for an org-NAMED question with no category keyword', () => {
   test('"Tell me about your role at SEDS CUSAT." (no "leadership"/"led"/"managed" keyword) surfaces the leadership entry, not a denial', async () => {
     const o = makeOrchestrator(resumeWithLeadership([LEADERSHIP_ENTRY]));
     const result = await o.processQuestion('Tell me about your role at SEDS CUSAT.');
@@ -109,7 +120,7 @@ describe('RC6 behavioral: leadership content surfaces for an org-NAMED question 
   });
 });
 
-describe('RC6 behavioral: org matching is dynamic — a DIFFERENT resume\'s org still matches by name, no hardcoding', () => {
+describeIfPremium('RC6 behavioral: org matching is dynamic — a DIFFERENT resume\'s org still matches by name, no hardcoding', () => {
   test('a completely different, synthetic org name (not SEDS/TEDx) still surfaces via the same mechanism', async () => {
     const entry = { role: 'President', organization: 'Quantum Robotics Guild', description: 'Ran weekly build sessions.' };
     const o = makeOrchestrator(resumeWithLeadership([entry]));

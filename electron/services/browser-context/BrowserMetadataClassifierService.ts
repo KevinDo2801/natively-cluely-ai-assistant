@@ -204,7 +204,7 @@ export class BrowserMetadataClassifierService {
     };
   }
 
-  /** Brace-tracking JSON-object extractor (mirrors premium/.../jsonExtract.ts). */
+  /** Brace-tracking JSON-object extractor. */
   private extractJsonObject(raw: string): unknown {
     const cleaned = String(raw || '')
       .trim()

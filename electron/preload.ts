@@ -853,49 +853,6 @@ interface ElectronAPI {
   }>;
   profileResetNegotiation: () => Promise<{ success: boolean; error?: string }>;
 
-  // Role Insight — résumé × job-description requirement analysis.
-  // Report/status payloads are intentionally `any` here: their shape is owned by
-  // premium/electron/knowledge/roleInsight/types.ts, and duplicating it in the
-  // preload contract would create two definitions free to drift apart.
-  roleInsightGetStatus: () => Promise<any>;
-  roleInsightGetReport: (analysisId?: string) => Promise<{ success: boolean; report?: any; error?: string }>;
-  roleInsightListHistory: () => Promise<{ success: boolean; history: any[]; error?: string }>;
-  roleInsightAnalyse: (options?: { jobUrl?: string; skipExternalVerification?: boolean }) => Promise<{
-    success: boolean;
-    report?: any;
-    error?: string;
-    cancelled?: boolean;
-    missingSources?: string[];
-    diagnosticId?: string;
-  }>;
-  roleInsightCancel: () => Promise<{ success: boolean; error?: string }>;
-  roleInsightApplyCorrection: (args: {
-    analysisId: string;
-    requirementId?: string | null;
-    kind: string;
-    detail?: string;
-    evidenceText?: string;
-    priority?: string;
-    mandatory?: boolean;
-    evidenceId?: string;
-  }) => Promise<{ success: boolean; report?: any; error?: string }>;
-  roleInsightAnswerClarification: (args: {
-    analysisId: string;
-    requirementId: string;
-    answer: string;
-    detail?: string;
-  }) => Promise<{ success: boolean; report?: any; error?: string }>;
-  roleInsightSaveToProfile: (args: {
-    analysisId: string;
-    requirementId: string;
-    claim: string;
-  }) => Promise<{ success: boolean; error?: string }>;
-  roleInsightPasteJd: (text: string) => Promise<{ success: boolean; error?: string }>;
-  roleInsightImportJdUrl: (url: string) => Promise<{ success: boolean; error?: string; sourceUrl?: string }>;
-  onRoleInsightProgress: (
-    callback: (payload: { stage: string | null; analysing: boolean }) => void,
-  ) => () => void;
-
   // Tavily Search API
   setTavilyApiKey: (apiKey: string) => Promise<{ success: boolean; error?: string }>;
 
@@ -2542,24 +2499,6 @@ contextBridge.exposeInMainWorld('electronAPI', {
   profileGetNegotiationState: () => ipcRenderer.invoke('profile:get-negotiation-state'),
   profileResetNegotiation: () => ipcRenderer.invoke('profile:reset-negotiation'),
 
-  // Role Insight
-  roleInsightGetStatus: () => ipcRenderer.invoke('roleInsight:get-status'),
-  roleInsightGetReport: (analysisId?: string) => ipcRenderer.invoke('roleInsight:get-report', analysisId),
-  roleInsightListHistory: () => ipcRenderer.invoke('roleInsight:list-history'),
-  roleInsightAnalyse: (options?: { jobUrl?: string; skipExternalVerification?: boolean }) =>
-    ipcRenderer.invoke('roleInsight:analyse', options ?? {}),
-  roleInsightCancel: () => ipcRenderer.invoke('roleInsight:cancel'),
-  roleInsightApplyCorrection: (args: any) => ipcRenderer.invoke('roleInsight:apply-correction', args),
-  roleInsightAnswerClarification: (args: any) => ipcRenderer.invoke('roleInsight:answer-clarification', args),
-  roleInsightSaveToProfile: (args: any) => ipcRenderer.invoke('roleInsight:save-to-profile', args),
-  roleInsightPasteJd: (text: string) => ipcRenderer.invoke('roleInsight:paste-jd', text),
-  roleInsightImportJdUrl: (url: string) => ipcRenderer.invoke('roleInsight:import-jd-url', url),
-  onRoleInsightProgress: (callback: (payload: { stage: string | null; analysing: boolean }) => void) => {
-    const listener = (_event: any, payload: any) => callback(payload);
-    ipcRenderer.on('role-insight-progress', listener);
-    return () => ipcRenderer.removeListener('role-insight-progress', listener);
-  },
-
   // Tavily Search API
   setTavilyApiKey: (apiKey: string) => ipcRenderer.invoke('set-tavily-api-key', apiKey),
 
@@ -2568,21 +2507,6 @@ contextBridge.exposeInMainWorld('electronAPI', {
     ipcRenderer.invoke('fetch-provider-models', provider, apiKey),
   setProviderPreferredModel: (provider: 'gemini' | 'groq' | 'openai' | 'claude' | 'deepseek' | 'nvidia_nim' | 'litellm', modelId: string) =>
     ipcRenderer.invoke('set-provider-preferred-model', provider, modelId),
-
-  // License Management
-  licenseActivate: (key: string) => ipcRenderer.invoke('license:activate', key),
-  licenseCheckPremium: () => ipcRenderer.invoke('license:check-premium'),
-  licenseGetDetails: () => ipcRenderer.invoke('license:get-details'),
-  licenseCheckPremiumAsync: () => ipcRenderer.invoke('license:check-premium-async'),
-  licenseDeactivate: () => ipcRenderer.invoke('license:deactivate'),
-  licenseGetHardwareId: () => ipcRenderer.invoke('license:get-hardware-id'),
-  onLicenseStatusChanged: (callback: (data: { isPremium: boolean; plan?: string }) => void) => {
-    const subscription = (_: any, data: { isPremium: boolean; plan?: string }) => callback(data);
-    ipcRenderer.on('license-status-changed', subscription);
-    return () => {
-      ipcRenderer.removeListener('license-status-changed', subscription);
-    };
-  },
 
   onModesActiveCleared: (callback: () => void) => {
     const subscription = () => callback();

@@ -33,6 +33,22 @@ import { fileURLToPath, pathToFileURL } from 'node:url';
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const repoRoot = path.resolve(__dirname, '../../..');
 
+// The premium submodule was removed from this repo, so the compiled
+// IntentClassifier is absent: skip the premium-dependent suite gracefully
+// instead of failing at load time. The Bug 1 suite (main-repo source pins)
+// keeps running either way.
+let PREMIUM_AVAILABLE = true;
+let isGenericKnowledgeQuestion;
+try {
+  ({ isGenericKnowledgeQuestion } = await import(
+    pathToFileURL(path.resolve(repoRoot, 'dist-electron/premium/electron/knowledge/IntentClassifier.js')).href
+  ));
+} catch (err) {
+  PREMIUM_AVAILABLE = false;
+  console.warn(`[premium-absent] ${err?.code ?? err?.message ?? err} — skipping premium-dependent suites in ${import.meta.url}`);
+}
+const describeIfPremium = PREMIUM_AVAILABLE ? describe : describe.skip;
+
 // Split a call's argument text on commas at depth 0 only, so nested calls,
 // object/array literals and ternaries do not produce phantom arguments.
 function splitTopLevelArgs(argText) {
@@ -98,12 +114,9 @@ describe('Bug 1: internal action LLMs must not go through the knowledge-mode int
   }
 });
 
-describe('Bug 2: "what do I do" / "what have I built" are candidate-directed, not generic knowledge', () => {
-  let isGenericKnowledgeQuestion;
-  test('load compiled IntentClassifier', async () => {
-    ({ isGenericKnowledgeQuestion } = await import(
-      pathToFileURL(path.resolve(repoRoot, 'dist-electron/premium/electron/knowledge/IntentClassifier.js')).href
-    ));
+describeIfPremium('Bug 2: "what do I do" / "what have I built" are candidate-directed, not generic knowledge', () => {
+  test('compiled IntentClassifier loaded', () => {
+    assert.equal(typeof isGenericKnowledgeQuestion, 'function');
   });
 
   const candidateDirected = [

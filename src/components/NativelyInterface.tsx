@@ -326,7 +326,6 @@ import {
   getOverlayAppearance,
   OVERLAY_OPACITY_DEFAULT,
 } from '../lib/overlayAppearance';
-import { NegotiationCoachingCard } from '../premium';
 import type { DynamicActionPayload } from '../types/electron';
 import { getCodexCliModelDisplayName, litellmModelLabel } from '../utils/modelUtils';
 import { getModifierSymbol, isMac, isWindows } from '../utils/platformUtils';
@@ -6708,32 +6707,6 @@ Provide only the answer, nothing else.`;
         }
       }
       // ────────────────────────────────────────────────────────────────────
-
-      // Negotiation coaching card takes priority
-      if (msg.isNegotiationCoaching && msg.negotiationCoachingData) {
-        return (
-          <NegotiationCoachingCard
-            {...msg.negotiationCoachingData}
-            phase={msg.negotiationCoachingData.phase as any}
-            interfaceTheme={interfaceTheme}
-            isLightTheme={isLightTheme}
-            onSilenceTimerEnd={() => {
-              setMessages((prev) =>
-                prev.map((m) =>
-                  m.id === msg.id
-                    ? {
-                        ...m,
-                        negotiationCoachingData: m.negotiationCoachingData
-                          ? { ...m.negotiationCoachingData, showSilenceTimer: false }
-                          : undefined,
-                      }
-                    : m,
-                ),
-              );
-            }}
-          />
-        );
-      }
 
       // Code-containing messages get special styling
       // We split by code blocks to keep the "Code Solution" UI intact for the code parts

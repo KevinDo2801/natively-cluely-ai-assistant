@@ -29,7 +29,18 @@ import assert from 'node:assert/strict';
 import { createRequire } from 'node:module';
 
 const require = createRequire(import.meta.url);
-const { KnowledgeOrchestrator } = require('../../../dist-electron/premium/electron/knowledge/KnowledgeOrchestrator.js');
+// The premium submodule was removed from this repo, so the compiled
+// KnowledgeOrchestrator is absent: skip the premium-dependent suites
+// gracefully instead of failing at require() time.
+let PREMIUM_AVAILABLE = true;
+let KnowledgeOrchestrator;
+try {
+  ({ KnowledgeOrchestrator } = require('../../../dist-electron/premium/electron/knowledge/KnowledgeOrchestrator.js'));
+} catch (err) {
+  PREMIUM_AVAILABLE = false;
+  console.warn(`[premium-absent] ${err?.code ?? err?.message ?? err} — skipping premium-dependent suites in ${import.meta.url}`);
+}
+const describeIfPremium = PREMIUM_AVAILABLE ? describe : describe.skip;
 
 // --- Synthetic resume (fully fictional; no real PII; values differ from the
 // other production-path test so a hardcoded match would fail) ---
@@ -79,7 +90,7 @@ function makeOrchestrator(resume = SYNTHETIC_RESUME) {
   return orch;
 }
 
-describe('Persona-fabrication zero-node fallback — production path', () => {
+describeIfPremium('Persona-fabrication zero-node fallback — production path', () => {
   test('"why should they hire me?" (no category keyword, empty retrieval) grounds REAL experience instead of a void', async () => {
     const orch = makeOrchestrator();
     const result = await orch.processQuestion('why should they hire me?');

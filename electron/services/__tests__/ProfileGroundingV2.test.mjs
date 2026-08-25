@@ -23,10 +23,27 @@ import Database from 'better-sqlite3';
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const P = (rel) => pathToFileURL(path.resolve(__dirname, rel)).href;
 
-const { KnowledgeDatabaseManager } = await import(P('../../../dist-electron/premium/electron/knowledge/KnowledgeDatabaseManager.js'));
-const { KnowledgeOrchestrator } = await import(P('../../../dist-electron/premium/electron/knowledge/KnowledgeOrchestrator.js'));
-const { DocType } = await import(P('../../../dist-electron/premium/electron/knowledge/types.js'));
-const { buildGroundingBlock, buildCandidateProfileBlock, buildTargetJobBlock } = await import(P('../../../dist-electron/premium/electron/knowledge/ProfileContextBuilder.js'));
+// The premium submodule was removed from this repo, so the compiled
+// knowledge modules are absent: skip the premium-dependent suites
+// gracefully instead of failing at load time. (The flag-mechanism and
+// prompt carve-out suites below use only main-repo modules and always run.)
+let PREMIUM_AVAILABLE = true;
+let KnowledgeDatabaseManager;
+let KnowledgeOrchestrator;
+let DocType;
+let buildGroundingBlock;
+let buildCandidateProfileBlock;
+let buildTargetJobBlock;
+try {
+  ({ KnowledgeDatabaseManager } = await import(P('../../../dist-electron/premium/electron/knowledge/KnowledgeDatabaseManager.js')));
+  ({ KnowledgeOrchestrator } = await import(P('../../../dist-electron/premium/electron/knowledge/KnowledgeOrchestrator.js')));
+  ({ DocType } = await import(P('../../../dist-electron/premium/electron/knowledge/types.js')));
+  ({ buildGroundingBlock, buildCandidateProfileBlock, buildTargetJobBlock } = await import(P('../../../dist-electron/premium/electron/knowledge/ProfileContextBuilder.js')));
+} catch (err) {
+  PREMIUM_AVAILABLE = false;
+  console.warn(`[premium-absent] ${err?.code ?? err?.message ?? err} — skipping premium-dependent suites in ${import.meta.url}`);
+}
+const describeIfPremium = PREMIUM_AVAILABLE ? describe : describe.skip;
 const { isProfileGroundingV2Enabled, __resetProfileGroundingV2Cache } = await import(P('../../../dist-electron/electron/llm/profileGroundingV2.js'));
 
 // Enable the flag ONCE at module load, before any test runs. node:test executes
@@ -62,7 +79,7 @@ const JD_DOC = {
 // ---------------------------------------------------------------------------
 // Pure builder
 // ---------------------------------------------------------------------------
-describe('P2: ProfileContextBuilder renders the full typed profile', () => {
+describeIfPremium('P2: ProfileContextBuilder renders the full typed profile', () => {
     test('candidate profile block includes name, ALL skill categories, experience, projects, education', () => {
         const b = buildCandidateProfileBlock(RESUME_DOC);
         assert.match(b, /<candidate_profile>/);
@@ -139,7 +156,7 @@ function makeOrchestrator(resume, jd) {
 
 // Flag is pinned ON for the whole file (set at module load above), so these
 // orchestrator tests need no per-test env mutation — eliminating the race.
-describe('P2: orchestrator injection (flag ON for file)', () => {
+describeIfPremium('P2: orchestrator injection (flag ON for file)', () => {
     test('a profile question gets the full grounding block + factualRecall', async () => {
         const orch = makeOrchestrator(RESUME_DOC, JD_DOC);
         const result = await orch.processQuestion('what are my main programming languages?');
@@ -187,7 +204,7 @@ describe('P2: orchestrator injection (flag ON for file)', () => {
 
 // S2 (spec §8.3): answer-type gating — profile must be EXCLUDED from coding/
 // technical/sales/lecture answers even with a resume loaded and the flag ON.
-describe('S2: answer-type gating of the grounding block (flag ON)', () => {
+describeIfPremium('S2: answer-type gating of the grounding block (flag ON)', () => {
     test('coding question gets NO <candidate_profile> block (spec §12.4, test 15)', async () => {
         const orch = makeOrchestrator(RESUME_DOC, JD_DOC);
         const result = await orch.processQuestion('write a function to reverse a string');

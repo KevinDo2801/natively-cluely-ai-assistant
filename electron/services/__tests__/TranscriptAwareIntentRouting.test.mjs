@@ -22,13 +22,27 @@ import { test, describe } from 'node:test';
 import assert from 'node:assert/strict';
 import { createRequire } from 'node:module';
 const require = createRequire(import.meta.url);
-const { classifyIntent, classifyIntentWithContext, looksLikeGarbledComp } =
-  require('../../../dist-electron/premium/electron/knowledge/IntentClassifier.js');
-const { textHasCompEvidence } =
-  require('../../../dist-electron/premium/electron/knowledge/NegotiationConversationTracker.js');
+// The premium submodule was removed from this repo, so the compiled
+// IntentClassifier / NegotiationConversationTracker are absent: skip the
+// premium-dependent suites gracefully instead of failing at require() time.
+let PREMIUM_AVAILABLE = true;
+let classifyIntent;
+let classifyIntentWithContext;
+let looksLikeGarbledComp;
+let textHasCompEvidence;
+try {
+  ({ classifyIntent, classifyIntentWithContext, looksLikeGarbledComp } =
+    require('../../../dist-electron/premium/electron/knowledge/IntentClassifier.js'));
+  ({ textHasCompEvidence } =
+    require('../../../dist-electron/premium/electron/knowledge/NegotiationConversationTracker.js'));
+} catch (err) {
+  PREMIUM_AVAILABLE = false;
+  console.warn(`[premium-absent] ${err?.code ?? err?.message ?? err} — skipping premium-dependent suites in ${import.meta.url}`);
+}
+const describeIfPremium = PREMIUM_AVAILABLE ? describe : describe.skip;
 
 // ── Phase 1a: comp-evidence detector over interviewer turns ───────────────────
-describe('Phase 1: textHasCompEvidence (interviewer turn scan)', () => {
+describeIfPremium('Phase 1: textHasCompEvidence (interviewer turn scan)', () => {
   test('flags comp turns (keyword or amount)', () => {
     for (const t of [
       'so what are your salary expectations?',
@@ -53,7 +67,7 @@ describe('Phase 1: textHasCompEvidence (interviewer turn scan)', () => {
 });
 
 // ── Phase 1b: transcript hint activates the comp thread ───────────────────────
-describe('Phase 1: recentInterviewerComp activates negotiation for follow-ups', () => {
+describeIfPremium('Phase 1: recentInterviewerComp activates negotiation for follow-ups', () => {
   const hint = { recentInterviewerComp: true };
 
   test('ambiguous comp follow-ups route to negotiation when interviewer just raised comp', () => {
@@ -78,7 +92,7 @@ describe('Phase 1: recentInterviewerComp activates negotiation for follow-ups', 
 });
 
 // ── Phase 2: garbled/typo comp rescue (deterministic edit distance) ───────────
-describe('Phase 2: looksLikeGarbledComp (typo/garbled STT rescue gate)', () => {
+describeIfPremium('Phase 2: looksLikeGarbledComp (typo/garbled STT rescue gate)', () => {
   test('TRUE for near-miss comp words (would route GENERAL→negotiation)', () => {
     for (const q of [
       'what do you think about the slalary',
@@ -125,7 +139,7 @@ describe('Phase 2: looksLikeGarbledComp (typo/garbled STT rescue gate)', () => {
 // decay lives in KnowledgeOrchestrator.processQuestion. Here we assert the
 // building block: a confident non-comp intent NEVER routes to negotiation, which
 // is what makes intervening turns "substantive non-comp" and able to decay.
-describe('Phase 1: decay building block — confident non-comp intents never stick', () => {
+describeIfPremium('Phase 1: decay building block — confident non-comp intents never stick', () => {
   const sticky = { recentIntentWasNegotiation: true, recentInterviewerComp: true };
   for (const [q, expected] of [
     ['what is a hashmap', 'technical'],

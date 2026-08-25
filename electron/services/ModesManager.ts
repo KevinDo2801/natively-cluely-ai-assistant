@@ -562,16 +562,16 @@ export class ModesManager {
         return store.info;
     }
 
-    // Modes where the premium knowledge intercept (negotiation coaching, intro
-    // shortcut, premium-flavored systemPromptInjection/contextBlock) is OUT OF
+    // Modes where the knowledge intercept (negotiation coaching, intro
+    // shortcut, systemPromptInjection/contextBlock) is OUT OF
     // SCOPE and would replace the user's expected answer with off-topic content.
     // Technical interviews are coding/system-design only; team meetings and
     // lectures have no candidate/interview scope. Issue #272: technical-
     // interview users were getting one-line salary coaching cards instead of
-    // technical answers because the premium tracker fires on any interviewer
+    // technical answers because the negotiation tracker fires on any interviewer
     // utterance regardless of the active mode. The fix also closes two sibling
     // vectors of the same bug class — the intro-question shortcut and the
-    // premium prompt/context injection — by gating the whole intercept here.
+    // prompt/context injection — by gating the whole intercept here.
     private static readonly PREMIUM_INTERCEPT_INCOMPATIBLE_TEMPLATES: ReadonlySet<ModeTemplateType> = new Set([
         'technical-interview',
         'team-meet',
@@ -582,10 +582,10 @@ export class ModesManager {
     ]);
 
     /**
-     * True when the premium knowledge intercept (negotiation coaching, intro
-     * shortcut, premium system-prompt/context injection) is contextually
+     * True when the knowledge intercept (negotiation coaching, intro
+     * shortcut, system-prompt/context injection) is contextually
      * appropriate for the active mode. False for technical-interview, team-
-     * meet, and lecture — modes where premium-flavored interjections overwrite
+     * meet, and lecture — modes where knowledge-flavored interjections overwrite
      * the user's expected answer. Defaults to true when no mode is active.
      */
     public isPremiumKnowledgeInterceptAllowed(): boolean {

@@ -26,7 +26,18 @@ const require = createRequire(import.meta.url);
 
 const { extractLatestQuestion, toCandidateFraming } = await import(pathToFileURL(
   path.resolve(__dirname, '../../../dist-electron/electron/llm/transcriptQuestionExtractor.js')).href);
-const { KnowledgeOrchestrator } = require('../../../dist-electron/premium/electron/knowledge/KnowledgeOrchestrator.js');
+// The premium submodule was removed from this repo, so the compiled
+// KnowledgeOrchestrator is absent: skip the premium-dependent suites
+// gracefully instead of failing at require() time.
+let PREMIUM_AVAILABLE = true;
+let KnowledgeOrchestrator;
+try {
+  ({ KnowledgeOrchestrator } = require('../../../dist-electron/premium/electron/knowledge/KnowledgeOrchestrator.js'));
+} catch (err) {
+  PREMIUM_AVAILABLE = false;
+  console.warn(`[premium-absent] ${err?.code ?? err?.message ?? err} — skipping premium-dependent suites in ${import.meta.url}`);
+}
+const describeIfPremium = PREMIUM_AVAILABLE ? describe : describe.skip;
 
 const RESUME = {
   id: 1, type: 'resume',
@@ -85,7 +96,7 @@ async function ground(orchestrator, turns, question = undefined) {
   return { extracted, candidateProfile };
 }
 
-describe('interviewer-perspective grounding (extractor → orchestrator)', () => {
+describeIfPremium('interviewer-perspective grounding (extractor → orchestrator)', () => {
   test('Interviewer: "Tell me about your projects." → loaded projects grounded', async () => {
     const o = makeOrchestrator();
     const { extracted, candidateProfile } = await ground(o, [

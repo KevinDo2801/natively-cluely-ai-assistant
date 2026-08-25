@@ -14,9 +14,19 @@ import { fileURLToPath } from 'node:url';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const repoRoot = path.resolve(__dirname, '../../..');
-const src = fs.readFileSync(path.join(repoRoot, 'premium/electron/knowledge/ContextAssembler.ts'), 'utf8');
+// The premium submodule was removed from this repo, so its source is absent:
+// skip the premium-dependent suites gracefully instead of failing at load time.
+let PREMIUM_AVAILABLE = true;
+let src = '';
+try {
+  src = fs.readFileSync(path.join(repoRoot, 'premium/electron/knowledge/ContextAssembler.ts'), 'utf8');
+} catch (err) {
+  PREMIUM_AVAILABLE = false;
+  console.warn(`[premium-absent] ${err?.code ?? err?.message ?? err} — skipping premium-dependent suites in ${import.meta.url}`);
+}
+const describeIfPremium = PREMIUM_AVAILABLE ? describe : describe.skip;
 
-describe('generateCandidateIntro leads with the candidate name', () => {
+describeIfPremium('generateCandidateIntro leads with the candidate name', () => {
   const fn = src.slice(src.indexOf('function generateCandidateIntro'), src.indexOf('function generateCandidateIntro') + 4200);
   test('the generation prompt requires opening with the name', () => {
     assert.match(fn, /OPEN WITH THE CANDIDATE'?S NAME/i, 'explicit name-lead rule present');

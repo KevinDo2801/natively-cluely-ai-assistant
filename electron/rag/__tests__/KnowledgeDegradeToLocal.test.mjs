@@ -21,8 +21,20 @@ import Database from 'better-sqlite3';
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const koPath = path.resolve(__dirname, '../../../dist-electron/premium/electron/knowledge/KnowledgeOrchestrator.js');
 const kdbPath = path.resolve(__dirname, '../../../dist-electron/premium/electron/knowledge/KnowledgeDatabaseManager.js');
-const { KnowledgeOrchestrator } = await import(pathToFileURL(koPath).href);
-const { KnowledgeDatabaseManager } = await import(pathToFileURL(kdbPath).href);
+// The premium submodule was removed from this repo, so the compiled
+// KnowledgeOrchestrator/KnowledgeDatabaseManager are absent: skip the
+// premium-dependent suites gracefully instead of failing at load time.
+let PREMIUM_AVAILABLE = true;
+let KnowledgeOrchestrator;
+let KnowledgeDatabaseManager;
+try {
+  ({ KnowledgeOrchestrator } = await import(pathToFileURL(koPath).href));
+  ({ KnowledgeDatabaseManager } = await import(pathToFileURL(kdbPath).href));
+} catch (err) {
+  PREMIUM_AVAILABLE = false;
+  console.warn(`[premium-absent] ${err?.code ?? err?.message ?? err} — skipping premium-dependent suites in ${import.meta.url}`);
+}
+const describeIfPremium = PREMIUM_AVAILABLE ? describe : describe.skip;
 
 const CLOUD = 'gemini:gemini-embedding-2:768';
 const LOCAL = 'local:xenova/all-minilm-l6-v2:384';
@@ -50,7 +62,7 @@ function seed(db, title, space, fill = 0.1, dim = 768) {
   ).run(title, `content ${title}`, blob, space);
 }
 
-describe('ensureEmbeddingSpace degrade-to-local (MEDIUM-2)', () => {
+describeIfPremium('ensureEmbeddingSpace degrade-to-local (MEDIUM-2)', () => {
   let db;
   beforeEach(() => { db = new Database(':memory:'); });
   afterEach(() => db.close());
