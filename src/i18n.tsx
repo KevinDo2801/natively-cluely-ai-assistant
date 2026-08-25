@@ -148,6 +148,12 @@ const RU: Record<string, string> = {
     'Coaching': 'Коучинг',
     'Connecting...': 'Подключение...',
 
+    // ── Live meeting note (v31) ──
+    'Live': 'В эфире',
+    'Live meeting in progress': 'Идёт живая встреча',
+    'Summary will be generated after the meeting ends': 'Резюме будет сформировано после завершения встречи',
+    'Usage will appear after the meeting ends': 'История использования появится после завершения встречи',
+
     // ── Other settings tabs ──
     'Process Disguise': 'Маскировка процесса',
     'Keyboard shortcuts': 'Горячие клавиши',
@@ -268,6 +274,12 @@ const ZH: Record<string, string> = {
     'Settings': '设置',
     'General': '通用',
     'Close': '关闭',
+
+    // ── Live meeting note (v31) ──
+    'Live': '直播',
+    'Live meeting in progress': '会议进行中',
+    'Summary will be generated after the meeting ends': '摘要将在会议结束后生成',
+    'Usage will appear after the meeting ends': '用量将在会议结束后显示',
 };
 
 // Japanese — JA_GENERATED (parallel-agent output) spread first, then hand-authored
@@ -284,6 +296,12 @@ const JA: Record<string, string> = {
     'Settings': '設定',
     'General': '一般',
     'Close': '閉じる',
+
+    // ── Live meeting note (v31) ──
+    'Live': 'ライブ',
+    'Live meeting in progress': '会議が進行中です',
+    'Summary will be generated after the meeting ends': '要約は会議終了後に生成されます',
+    'Usage will appear after the meeting ends': '利用履歴は会議終了後に表示されます',
 };
 
 // Spanish — ES_GENERATED spread first, then hand-authored overrides on any collision.
@@ -299,6 +317,12 @@ const ES: Record<string, string> = {
     'Settings': 'Ajustes',
     'General': 'General',
     'Close': 'Cerrar',
+
+    // ── Live meeting note (v31) ──
+    'Live': 'En vivo',
+    'Live meeting in progress': 'Reunión en curso',
+    'Summary will be generated after the meeting ends': 'El resumen se generará cuando termine la reunión',
+    'Usage will appear after the meeting ends': 'El uso aparecerá cuando termine la reunión',
 };
 
 // Per-language dictionary lookup. `en` always returns the source string (no

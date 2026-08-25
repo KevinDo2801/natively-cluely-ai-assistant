@@ -156,6 +156,11 @@ export class IntelligenceManager extends EventEmitter {
         return this.session.getFullTranscript().map(s => ({ speaker: s.speaker, text: s.text, timestamp: s.timestamp }));
     }
 
+    /** Current meeting's full usage log (live-note DB flush; mirrors getCurrentMeetingTranscript). */
+    getCurrentMeetingUsage(): any[] {
+        return this.session.getFullUsage();
+    }
+
     logUsage(type: string, question: string, answer: string): void {
         this.session.logUsage(type, question, answer);
     }
@@ -302,8 +307,14 @@ export class IntelligenceManager extends EventEmitter {
     // Meeting Lifecycle (delegates to persistence)
     // ============================================
 
-    async stopMeeting(): Promise<{ meetingId: string; memoryEligibleCount: number } | null> {
-        return this.persistence.stopMeeting();
+    /**
+     * Stop the current meeting session and persist it (placeholder + background
+     * title/summary generation). `liveMeetingId` — when the meeting was started
+     * with a live note row (v31) — makes the placeholder/final save reuse that
+     * row so the note created at Start is finalized in place.
+     */
+    async stopMeeting(liveMeetingId?: string | null): Promise<{ meetingId: string; memoryEligibleCount: number } | null> {
+        return this.persistence.stopMeeting(liveMeetingId);
     }
 
     async recoverUnprocessedMeetings(): Promise<void> {

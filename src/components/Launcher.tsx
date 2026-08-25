@@ -40,6 +40,7 @@ interface Meeting {
         items?: string[];
     }>;
     active?: boolean; // UI state
+    isLive?: boolean; // Live meeting note (v31): row created at Start, not yet finalized
     time?: string; // Optional for compatibility
 }
 
@@ -1001,7 +1002,12 @@ const Launcher: React.FC<LauncherProps> = ({ onStartMeeting, onOpenSettings, onO
 
                                                             {/* Time & Duration Section */}
                                                             <div className="flex items-center gap-4">
-                                                                {m.title === 'Processing...' ? (
+                                                                {m.isLive ? (
+                                                                    <span className="relative z-10 flex items-center gap-1.5 bg-emerald-500/15 text-emerald-400 text-[10px] px-2 py-0.5 rounded-full font-semibold uppercase tracking-wide">
+                                                                        <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-pulse" />
+                                                                        {t('Live')}
+                                                                    </span>
+                                                                ) : m.title === 'Processing...' ? (
                                                                     <div className="flex items-center gap-2 transition-all duration-200 ease-out group-hover:opacity-0 group-hover:translate-x-2 delayed-hover-exit">
                                                                         <RefreshCw size={12} className="animate-spin text-blue-500" />
                                                                         <span className="text-xs text-blue-500 font-medium">{t('Finalizing...')}</span>

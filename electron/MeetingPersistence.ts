@@ -32,7 +32,7 @@ export class MeetingPersistence {
      * Stops the meeting immediately, snapshots data, and triggers background processing.
      * Returns immediately so UI can switch.
      */
-    public async stopMeeting(): Promise<{ meetingId: string; memoryEligibleCount: number } | null> {
+    public async stopMeeting(liveMeetingId?: string | null): Promise<{ meetingId: string; memoryEligibleCount: number } | null> {
         console.log('[MeetingPersistence] Stopping meeting and queueing save...');
 
         // 0. Force-save any pending interim transcript
@@ -42,6 +42,16 @@ export class MeetingPersistence {
         const durationMs = Date.now() - this.session.getSessionStartTime();
         if (durationMs < 1000) {
             console.log("Meeting too short, ignoring.");
+            // Live meeting note (v31): the row created at Start must not be left
+            // behind as an orphan — delete it so no stale "Live" entry survives.
+            if (liveMeetingId) {
+                try {
+                    DatabaseManager.getInstance().deleteMeeting(liveMeetingId);
+                    console.log(`[MeetingPersistence] Deleted live meeting row for too-short meeting: ${liveMeetingId}`);
+                } catch (e) {
+                    console.error('[MeetingPersistence] Failed to delete live meeting row (too-short meeting):', e);
+                }
+            }
             this.session.reset();
             return null;
         }
@@ -71,6 +81,16 @@ export class MeetingPersistence {
                     properties: { persisted: false, reason: 'do_not_persist', durationMs },
                 });
             } catch { /* non-fatal */ }
+            // Live meeting note (v31): remove the row created at Start — the
+            // privacy contract says this meeting must leave no trace.
+            if (liveMeetingId) {
+                try {
+                    DatabaseManager.getInstance().deleteMeeting(liveMeetingId);
+                    console.log(`[MeetingPersistence] Deleted live meeting row for do-not-persist meeting: ${liveMeetingId}`);
+                } catch (e) {
+                    console.error('[MeetingPersistence] Failed to delete live meeting row (doNotPersist):', e);
+                }
+            }
             this.session.reset();
             return null;
         }
@@ -127,7 +147,7 @@ export class MeetingPersistence {
         // 2. Reset state immediately so new meeting can start or UI is clean
         this.session.reset();
 
-        const meetingId = crypto.randomUUID();
+        const meetingId = liveMeetingId ?? crypto.randomUUID();
 
         // 4. Initial Save (Placeholder)
         const minutes = Math.floor(durationMs / 60000);
@@ -815,6 +835,24 @@ Return ONLY valid JSON (no markdown code blocks):
     public async recoverUnprocessedMeetings(): Promise<void> {
         console.log('[MeetingPersistence] Checking for unprocessed meetings...');
         const db = DatabaseManager.getInstance();
+
+        // Live meeting note (v31): rows left behind by an app quit/crash
+        // mid-meeting are adopted first — the meeting is over (no live capture
+        // anymore), so they become ordinary unprocessed meetings that the loop
+        // below finalizes (title/summary generation) using the transcript that
+        // was flushed into them while live. Safe to run unconditionally here
+        // because the ONLY caller is startup init (main.ts initializeApp), when
+        // no meeting can be active — and the UPDATE targets is_live=1 rows,
+        // which are never produced while a meeting is being recovered.
+        try {
+            const adopted = db.adoptOrphanedLiveMeetings();
+            if (adopted > 0) {
+                console.log(`[MeetingPersistence] Adopted ${adopted} orphaned live meeting row(s) for recovery.`);
+            }
+        } catch (e) {
+            console.error('[MeetingPersistence] Failed to adopt orphaned live meetings:', e);
+        }
+
         const unprocessed = db.getUnprocessedMeetings();
 
         if (unprocessed.length === 0) {

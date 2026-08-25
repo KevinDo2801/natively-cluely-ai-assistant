@@ -346,7 +346,7 @@ interface ElectronAPI {
 
   // Native Audio Service Events
   onNativeAudioTranscript: (
-    callback: (transcript: { speaker: string; text: string; final: boolean }) => void,
+    callback: (transcript: { speaker: string; text: string; final: boolean; timestamp?: number }) => void,
   ) => () => void;
   onNativeAudioSuggestion: (
     callback: (suggestion: { context: string; lastQuestion: string; confidence: number }) => void,
@@ -451,7 +451,7 @@ interface ElectronAPI {
     => Promise<{ success: boolean; injected?: number; error?: string }>;
   finalizeMicSTT: () => Promise<void>;
   getRecentMeetings: () => Promise<
-    Array<{ id: string; title: string; date: string; duration: string; summary: string }>
+    Array<{ id: string; title: string; date: string; duration: string; summary: string; isLive?: boolean }>
   >;
   getMeetingDetails: (id: string) => Promise<any>;
   searchGlobalMeetings: (query: string, filters?: any) => Promise<{ enabled: boolean; results: any[] }>;
@@ -1605,7 +1605,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
 
   // Native Audio Service Events
   onNativeAudioTranscript: (
-    callback: (transcript: { speaker: string; text: string; final: boolean }) => void,
+    callback: (transcript: { speaker: string; text: string; final: boolean; timestamp?: number }) => void,
   ) => {
     const subscription = (_: any, data: any) => callback(data);
     ipcRenderer.on('native-audio-transcript', subscription);

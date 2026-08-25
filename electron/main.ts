@@ -1421,6 +1421,14 @@ export class AppState {
   // embedding work, slowing the meeting-end perceived latency, and racing the
   // SQLite INSERT OR IGNORE that protects against duplicates.
   private _ragProcessingInFlight: Set<string> = new Set();
+  // LIVE MEETING NOTE (v31): id of the meetings row created at Start
+  // (is_live=1) so the note exists immediately and survives a crash/quit
+  // mid-meeting, plus the timer that flushes the in-memory transcript + usage
+  // into that row while the meeting runs. Cleared at Stop; a quit before Stop
+  // leaves the row behind for adoptOrphanedLiveMeetings on the next launch.
+  private _liveMeetingId: string | null = null;
+  private _liveFlushTimer: NodeJS.Timeout | null = null;
+  private static readonly LIVE_NOTE_FLUSH_MS = 5000;
   private _isQuitting: boolean = false;
   private _verboseLogging: boolean = false;
   private _ambientChatEnabled: boolean = false;
@@ -5879,6 +5887,15 @@ export class AppState {
       this.intelligenceManager.setMeetingMetadata(metadata);
     }
 
+    // LIVE MEETING NOTE (v31): persist a `meetings` row with is_live=1 right at
+    // Start so the note exists immediately (the Launcher history list shows a
+    // "Live" entry) and survives a crash/quit mid-meeting. Transcript + usage
+    // are flushed into it periodically (see startLiveMeetingNote). At Stop the
+    // SAME row is finalized — summary/usage are generated into it instead of a
+    // new id. Failures are never fatal: the meeting continues untouched and the
+    // stop path falls back to the legacy new-id flow.
+    this.startLiveMeetingNote(metadata);
+
     // Phase 3 — bind dynamic action engine to this meeting + active mode.
     // Action store is per-(sessionId, modeId), so a fresh sessionId here gives
     // us per-meeting isolation. Re-binding on mode switch is handled in the
@@ -6079,6 +6096,89 @@ export class AppState {
   }
 
   /**
+   * Create the live meeting row (is_live=1) at Start and arm the periodic
+   * transcript+usage flush into it. Gated on the same privacy contract as
+   * MeetingPersistence.stopMeeting (retention 'never' / doNotPersist) and DB
+   * availability. Never blocks the meeting: every failure is caught, logged,
+   * and the row deleted so no orphan is left behind by a start-side error.
+   */
+  private startLiveMeetingNote(metadata?: any): void {
+    try {
+      const { DatabaseManager } = require('./db/DatabaseManager');
+      const db = DatabaseManager.getInstance();
+      if (!db.isAvailable()) {
+        console.warn('[Main] DB unavailable — skipping live meeting note creation.');
+        return;
+      }
+      const { SettingsManager } = require('./services/SettingsManager');
+      const retention = SettingsManager.getInstance().get('meetingRetention');
+      if (retention === 'never' || metadata?.doNotPersist === true) {
+        console.log('[Main] Retention/doNotPersist — skipping live meeting note creation.');
+        return;
+      }
+
+      const liveId = crypto.randomUUID();
+      const startTime = Date.now();
+      db.saveMeeting({
+        id: liveId,
+        title: metadata?.title || 'Live meeting',
+        date: new Date(startTime).toISOString(),
+        duration: '0:00',
+        summary: '',
+        detailedSummary: { actionItems: [], keyPoints: [] },
+        transcript: [],
+        usage: [],
+        isProcessed: false,
+        summaryStatus: 'queued',
+        isLive: true,
+      }, startTime, 0);
+
+      this._liveMeetingId = liveId;
+      // The Launcher refreshes its history list on this broadcast and shows the
+      // "Live" entry at the top (newest created_at).
+      this.broadcast('meetings-updated');
+
+      if (this._liveFlushTimer) clearInterval(this._liveFlushTimer);
+      this._liveFlushTimer = setInterval(() => {
+        this.flushLiveMeetingSnapshot();
+      }, AppState.LIVE_NOTE_FLUSH_MS);
+      console.log(`[Main] Live meeting note created: ${liveId}`);
+    } catch (err) {
+      console.error('[Main] Failed to create live meeting note (meeting continues; stop will use the fallback path):', err);
+      if (this._liveMeetingId) {
+        try { require('./db/DatabaseManager').DatabaseManager.getInstance().deleteMeeting(this._liveMeetingId); } catch { /* best effort */ }
+        this._liveMeetingId = null;
+      }
+      if (this._liveFlushTimer) {
+        clearInterval(this._liveFlushTimer);
+        this._liveFlushTimer = null;
+      }
+    }
+  }
+
+  /**
+   * Flush the current in-memory transcript (finals) + usage into the live
+   * meeting row. Called by the periodic timer and once more synchronously at
+   * shutdown (before-quit) so a quit mid-meeting loses at most the seconds
+   * since the last tick. Best-effort: failures are logged, never thrown — note
+   * persistence must never affect the meeting itself.
+   */
+  public flushLiveMeetingSnapshot(): void {
+    const liveId = this._liveMeetingId;
+    if (!liveId || !this.isMeetingActive) return;
+    try {
+      const { DatabaseManager } = require('./db/DatabaseManager');
+      DatabaseManager.getInstance().upsertLiveMeetingSnapshot(
+        liveId,
+        this.intelligenceManager.getCurrentMeetingTranscript(),
+        this.intelligenceManager.getCurrentMeetingUsage(),
+      );
+    } catch (err) {
+      console.error('[Main] Live meeting note flush failed:', err);
+    }
+  }
+
+  /**
    * Public meeting-stop entry point. Same rationale as startMeeting(): all
    * requests are serialized through the transition queue. The existing
    * `_endMeetingInFlight` guard below is retained — it protects the
@@ -6171,6 +6271,19 @@ export class AppState {
     this._meetingGeneration++;
     this._isDraining = true;
     this.broadcastMeetingState();
+
+    // LIVE MEETING NOTE (v31): stop the periodic flush and hand the live row id
+    // to stopMeeting so the placeholder + final save REUSE it — the note is
+    // finalized in place (summary/usage generated into the same row) instead of
+    // minting a new id. If the background teardown dies before stopMeeting runs,
+    // the row stays is_live=1 with the last-flushed transcript and is adopted
+    // by recoverUnprocessedMeetings on the next launch (crash-survival by design).
+    const liveMeetingId = this._liveMeetingId;
+    this._liveMeetingId = null;
+    if (this._liveFlushTimer) {
+      clearInterval(this._liveFlushTimer);
+      this._liveFlushTimer = null;
+    }
 
     // ─── ABORT + AWAIT IN-FLIGHT AUDIO INIT (before any capture teardown) ───
     // If startMeeting()'s async audio init is still mid-`setupSystemAudioPipeline()`
@@ -6294,7 +6407,9 @@ export class AppState {
 
         // 3. Snapshot transcript + persist placeholder + queue title/summary LLM.
         //    intelligenceManager.stopMeeting itself runs LLM in background.
-        const stopResult = await this.intelligenceManager.stopMeeting();
+        //    liveMeetingId (may be null) makes the placeholder + final save
+        //    reuse the row created at Start instead of minting a new id.
+        const stopResult = await this.intelligenceManager.stopMeeting(liveMeetingId);
         const meetingId = stopResult?.meetingId ?? null;
 
         // 5. RAG cleanup — same logic as before, just inside the BG IIFE.
@@ -8765,6 +8880,16 @@ if (process.env.THINKING_MATRIX === '1') {
     } catch (e) {
       console.error('[main] Failed to stop DefaultOutputWatcher during shutdown:', e);
     }
+
+    // LIVE MEETING NOTE (v31): flush the current transcript+usage into the live
+    // row synchronously (better-sqlite3 writes are sync) so a quit mid-meeting
+    // loses at most the seconds since the last periodic flush. If the process
+    // dies before this runs, the row stays is_live=1 and is adopted by
+    // recoverUnprocessedMeetings on the next launch. Runs after the watcher
+    // teardown — setQuitting must stay first so straggler ticks bail.
+    try {
+      appState.flushLiveMeetingSnapshot();
+    } catch { /* best effort — never block quit */ }
 
     // 2026-07-08: TRUNCATE the SQLite WAL file early in shutdown.
     // On a force-quit (e.g. user ⌘Q during a meeting, macOS sending

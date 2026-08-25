@@ -41,7 +41,9 @@ function makeSchema(db) {
       created_at TEXT DEFAULT CURRENT_TIMESTAMP,
       calendar_event_id TEXT,
       source TEXT,
-      is_processed INTEGER DEFAULT 1
+      is_processed INTEGER DEFAULT 1,
+      summary_status TEXT DEFAULT 'completed',
+      is_live INTEGER DEFAULT 0
     );
     CREATE TABLE transcripts (
       id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -66,8 +68,8 @@ function makeSchema(db) {
 // DELETE-first idempotency fix under test (db/DatabaseManager.ts).
 function saveMeeting(db, meeting, startTimeMs, durationMs) {
   const insertMeeting = db.prepare(`
-    INSERT OR REPLACE INTO meetings (id, title, start_time, duration_ms, summary_json, created_at, calendar_event_id, source, is_processed)
-    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+    INSERT OR REPLACE INTO meetings (id, title, start_time, duration_ms, summary_json, created_at, calendar_event_id, source, is_processed, summary_status, is_live)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
   `);
   const insertTranscript = db.prepare(`
     INSERT INTO transcripts (meeting_id, speaker, content, timestamp_ms)
@@ -87,6 +89,8 @@ function saveMeeting(db, meeting, startTimeMs, durationMs) {
       meeting.id, meeting.title, startTimeMs, durationMs, summaryJson,
       meeting.date, meeting.calendarEventId || null, meeting.source || 'manual',
       meeting.isProcessed ? 1 : 0,
+      meeting.summaryStatus || (meeting.isProcessed ? 'completed' : 'queued'),
+      meeting.isLive ? 1 : 0,
     );
     deleteTranscripts.run(meeting.id);
     if (meeting.transcript) {
@@ -167,6 +171,22 @@ describe('saveMeeting idempotency (audit finding #1)', () => {
 
     assert.equal(db.prepare('SELECT COUNT(*) c FROM transcripts WHERE meeting_id = ?').get('meeting-B').c, 2,
       'meeting B child rows must be untouched by re-saving meeting A');
+  });
+
+  test('live → final transition keeps the id and clears the is_live flag (v31)', () => {
+    // The live note row was created at Start with is_live=1; the Stop-side
+    // placeholder + final saves reuse the SAME id, so the row is finalized in
+    // place and must stop being "live" while children stay exactly-once.
+    saveMeeting(db, { ...placeholder, isLive: true }, 1000, 0); // created at Start
+    saveMeeting(db, placeholder, 1000, 5000); // placeholder at Stop (same id, isLive falsy)
+    saveMeeting(db, finalRecord, 1000, 5000); // final at Stop (same id)
+
+    const row = db.prepare('SELECT title, is_processed, is_live FROM meetings WHERE id = ?').get('meeting-A');
+    assert.equal(row.is_live, 0, 'final save must clear the live flag');
+    assert.equal(row.is_processed, 1);
+    assert.equal(row.title, 'Intro chat');
+    assert.equal(db.prepare('SELECT COUNT(*) c FROM transcripts WHERE meeting_id = ?').get('meeting-A').c, 2,
+      'children must not be duplicated across live → placeholder → final saves');
   });
 });
 

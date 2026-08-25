@@ -61,6 +61,8 @@ export interface Meeting {
     source?: 'manual' | 'calendar';
     isProcessed?: boolean;
     summaryStatus?: SummaryStatus;
+    /** Live meeting note: row created at meeting Start (is_live=1), finalized (0) at Stop. */
+    isLive?: boolean;
 }
 
 /**
@@ -69,6 +71,17 @@ export interface Meeting {
  * not hold later SCHEMA migrations (notably v29's vec0 cosine rebuild) hostage.
  */
 const PAGE_COUNT_REPAIR_PENDING_KEY = 'pending_page_count_repair';
+
+/**
+ * JIT live-indexing scaffold meeting id (RAGManager.startLiveIndexing). A
+ * transient meetings row kept only so live RAG chunks satisfy the meetings
+ * foreign key while a meeting runs; it is deleted at meeting end
+ * (deleteMeetingData('live-meeting-current')) and must never surface in the
+ * history list or recovery as if it were a real meeting. This is the SAME
+ * constant every caller uses (electron/main.ts, ipcHandlers.ts, RAGManager) —
+ * see the F-411 audit for why it is a fixed literal.
+ */
+const JIT_LIVE_MEETING_ID = 'live-meeting-current';
 
 export class DatabaseManager {
     private static instance: DatabaseManager;
@@ -1720,6 +1733,26 @@ export class DatabaseManager {
             }
         }
 
+        // Version 30 → 31: Live meeting notes. A meetings row is created at
+        // meeting Start with is_live=1 so the note exists immediately and
+        // survives a crash/quit mid-meeting; transcript + usage are flushed
+        // into it periodically while the meeting runs. At Stop the same row is
+        // finalized (is_live → 0) and title/summary are generated into it.
+        // Orphaned is_live rows (app quit before Stop) are adopted by
+        // MeetingPersistence.recoverUnprocessedMeetings on the next launch.
+        //
+        // APPLIED UNCONDITIONALLY, NOT VERSION-GATED — same live-incident
+        // lesson as user_titled above (2026-08-23): an additive nullable column
+        // is idempotent by construction (the try/catch absorbs "duplicate
+        // column"), and a version counter that a parallel branch can race must
+        // never be able to suppress it — a missing is_live column makes EVERY
+        // saveMeeting INSERT throw and silently kills meeting persistence.
+        try { this.db.exec("ALTER TABLE meetings ADD COLUMN is_live INTEGER DEFAULT 0"); } catch (e) { /* Column already exists */ }
+        if (version < 31) {
+            console.log('[DatabaseManager] Applying migration v30 → v31: Add is_live to meetings');
+            this.db.pragma('user_version = 31');
+        }
+
         console.log('[DatabaseManager] Migrations completed.');
     }
 
@@ -2842,8 +2875,8 @@ export class DatabaseManager {
         }
 
         const insertMeeting = this.db.prepare(`
-            INSERT OR REPLACE INTO meetings (id, title, start_time, duration_ms, summary_json, created_at, calendar_event_id, source, is_processed, summary_status, user_titled)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            INSERT OR REPLACE INTO meetings (id, title, start_time, duration_ms, summary_json, created_at, calendar_event_id, source, is_processed, summary_status, user_titled, is_live)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         `);
         // RC-7 (2026-08-21): INSERT OR REPLACE rewrites the whole row, so a
         // user rename made while the row still said "Processing…" (the
@@ -2893,7 +2926,8 @@ export class DatabaseManager {
                 meeting.source || 'manual',
                 meeting.isProcessed ? 1 : 0,
                 meeting.summaryStatus || (meeting.isProcessed ? 'completed' : 'queued'),
-                userTitled ? 1 : 0
+                userTitled ? 1 : 0,
+                meeting.isLive ? 1 : 0
             );
 
             // 2. Insert Transcript
@@ -3098,13 +3132,17 @@ export class DatabaseManager {
     public getRecentMeetings(limit: number = 50): Meeting[] {
         if (!this.db) return [];
 
+        // Exclude the transient JIT live-indexing scaffold (v31: the live-note
+        // row is the user-facing "Live" entry; the JIT row is internal FK
+        // scaffolding deleted at meeting end and must not appear in history).
         const stmt = this.db.prepare(`
             SELECT * FROM meetings
+            WHERE id != ?
             ORDER BY created_at DESC
             LIMIT ?
         `);
 
-        const rows = stmt.all(limit) as any[];
+        const rows = stmt.all(JIT_LIVE_MEETING_ID, limit) as any[];
 
         return rows.map(row => {
             const summaryData = JSON.parse(row.summary_json || '{}');
@@ -3125,6 +3163,7 @@ export class DatabaseManager {
                 calendarEventId: row.calendar_event_id,
                 source: row.source as any,
                 summaryStatus: row.summary_status as SummaryStatus | undefined,
+                isLive: (row.is_live ?? 0) === 1,
                 // We don't load full transcript/usage for list view to keep it light
                 transcript: [] as any[],
                 usage: [] as any[]
@@ -3134,6 +3173,9 @@ export class DatabaseManager {
 
     public getMeetingDetails(id: string): Meeting | null {
         if (!this.db) return null;
+
+        // The transient JIT scaffold is internal — never render it as a meeting.
+        if (id === JIT_LIVE_MEETING_ID) return null;
 
         const meetingStmt = this.db.prepare('SELECT * FROM meetings WHERE id = ?');
         const meetingRow = meetingStmt.get(id) as any;
@@ -3194,6 +3236,7 @@ export class DatabaseManager {
             calendarEventId: meetingRow.calendar_event_id,
             source: meetingRow.source,
             summaryStatus: meetingRow.summary_status as SummaryStatus | undefined,
+            isLive: (meetingRow.is_live ?? 0) === 1,
             transcript: transcript,
             usage: usage
         };
@@ -3296,11 +3339,11 @@ export class DatabaseManager {
         // is_processed = 0 means false
         const stmt = this.db.prepare(`
             SELECT * FROM meetings
-            WHERE is_processed = 0
+            WHERE is_processed = 0 AND id != ?
             ORDER BY created_at DESC
         `);
 
-        const rows = stmt.all() as any[];
+        const rows = stmt.all(JIT_LIVE_MEETING_ID) as any[];
 
         return rows.map(row => {
             // Reconstruct minimal meeting object for processing
@@ -3321,10 +3364,123 @@ export class DatabaseManager {
                 source: row.source,
                 isProcessed: false,
                 summaryStatus: row.summary_status as SummaryStatus | undefined,
+                isLive: (row.is_live ?? 0) === 1,
                 transcript: [] as any[], // Fetched separately via getMeetingDetails or manually if needed
                 usage: [] as any[]
             };
         });
+    }
+
+    // ─── Live meeting notes (v31) ───────────────────────────────────────────
+    // A meetings row is created at meeting Start (is_live=1) so the note exists
+    // immediately and survives a crash/quit mid-meeting. Every method here is
+    // guarded and returns a neutral value when the database is unavailable —
+    // live-note persistence must never be able to break the meeting itself.
+
+    /** All meetings currently marked live (rows created at Start, not yet finalized). */
+    public getLiveMeetings(): Meeting[] {
+        if (!this.db) return [];
+        try {
+            const rows = this.db.prepare('SELECT * FROM meetings WHERE is_live = 1 ORDER BY created_at DESC').all() as any[];
+            return rows.map((row) => {
+                const summaryData = JSON.parse(row.summary_json || '{}');
+                const minutes = Math.floor(row.duration_ms / 60000);
+                const seconds = Math.floor((row.duration_ms % 60000) / 1000);
+                return {
+                    id: row.id,
+                    title: row.title,
+                    date: row.created_at,
+                    duration: `${minutes}:${seconds.toString().padStart(2, '0')}`,
+                    summary: summaryData.legacySummary || '',
+                    detailedSummary: summaryData.detailedSummary,
+                    calendarEventId: row.calendar_event_id,
+                    source: row.source as any,
+                    isProcessed: (row.is_processed ?? 0) === 1,
+                    summaryStatus: row.summary_status as SummaryStatus | undefined,
+                    isLive: true,
+                    transcript: [] as any[],
+                    usage: [] as any[]
+                };
+            });
+        } catch (e) {
+            console.error('[DatabaseManager] getLiveMeetings failed:', e);
+            return [];
+        }
+    }
+
+    /**
+     * Flush the current in-memory transcript + usage into a live meeting row.
+     * Idempotent: children are cleared then re-inserted inside one transaction,
+     * exactly like saveMeeting's placeholder → final pattern, so re-running with
+     * the same meeting id never duplicates rows. FINAL transcript segments and
+     * usage entries only — the same persistence semantics as a stopped meeting.
+     */
+    public upsertLiveMeetingSnapshot(meetingId: string, transcript: Array<{ speaker: string; text: string; timestamp: number }>, usage: any[]): boolean {
+        if (!this.db) return false;
+        try {
+            const deleteTranscripts = this.db.prepare(`DELETE FROM transcripts WHERE meeting_id = ?`);
+            const deleteInteractions = this.db.prepare(`DELETE FROM ai_interactions WHERE meeting_id = ?`);
+            const insertTranscript = this.db.prepare(`
+                INSERT INTO transcripts (meeting_id, speaker, content, timestamp_ms)
+                VALUES (?, ?, ?, ?)
+            `);
+            const insertInteraction = this.db.prepare(`
+                INSERT INTO ai_interactions (meeting_id, type, timestamp, user_query, ai_response, metadata_json)
+                VALUES (?, ?, ?, ?, ?, ?)
+            `);
+            this.db.transaction(() => {
+                deleteTranscripts.run(meetingId);
+                if (transcript) {
+                    for (const segment of transcript) {
+                        insertTranscript.run(meetingId, segment.speaker, segment.text, segment.timestamp);
+                    }
+                }
+                deleteInteractions.run(meetingId);
+                if (usage) {
+                    for (const entry of usage) {
+                        let metadata = null;
+                        if (Array.isArray(entry.items)) {
+                            metadata = JSON.stringify(entry.items);
+                        } else if (entry.type === 'followup_questions' && Array.isArray(entry.answer)) {
+                            metadata = JSON.stringify(entry.answer);
+                        }
+                        const answerText = Array.isArray(entry.answer) ? null : (entry.answer || null);
+                        const queryText = entry.question || null;
+                        insertInteraction.run(meetingId, entry.type || 'chat', entry.timestamp || Date.now(), queryText, answerText, metadata);
+                    }
+                }
+            })();
+            return true;
+        } catch (e) {
+            console.error(`[DatabaseManager] upsertLiveMeetingSnapshot failed for ${meetingId}:`, e);
+            return false;
+        }
+    }
+
+    /**
+     * Adopt orphaned live rows left behind by an app quit/crash mid-meeting:
+     * the meeting is over (no live capture anymore), so the row becomes a
+     * normal unprocessed meeting that the existing recovery pipeline finalizes
+     * (title/summary generation). Duration is recomputed from start_time since
+     * duration_ms was never updated while live. Returns the number of rows
+     * adopted. Idempotent — a second call finds no is_live=1 rows.
+     */
+    public adoptOrphanedLiveMeetings(now: number = Date.now()): number {
+        if (!this.db) return 0;
+        try {
+            const info = this.db.prepare(`
+                UPDATE meetings
+                SET is_live = 0,
+                    is_processed = 0,
+                    summary_status = 'queued',
+                    duration_ms = MAX(1, ? - start_time)
+                WHERE is_live = 1
+            `).run(now);
+            return info.changes ?? 0;
+        } catch (e) {
+            console.error('[DatabaseManager] adoptOrphanedLiveMeetings failed:', e);
+            return 0;
+        }
     }
 
     public clearAllData(): boolean {

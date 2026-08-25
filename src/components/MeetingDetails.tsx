@@ -877,6 +877,7 @@ interface Meeting {
         answer?: string;
         items?: string[];
     }>;
+    isLive?: boolean; // Live meeting note (v31): row created at Start, not yet finalized
 }
 
 interface MeetingDetailsProps {
@@ -884,6 +885,33 @@ interface MeetingDetailsProps {
     onBack: () => void;
     onOpenSettings: () => void;
 }
+
+/**
+ * Live meeting note (v31): placeholder shown in the Summary/Usage tabs while
+ * the meeting is still running. The real content is generated only after Stop
+ * finalizes the note (MeetingPersistence.processAndSaveMeeting).
+ */
+const LiveNotePlaceholder: React.FC<{ kind: 'summary' | 'usage' }> = ({ kind }) => {
+    const t = useT();
+    return (
+        <motion.div
+            initial={{ opacity: 0 }}
+            animate={{ opacity: 1 }}
+            exit={{ opacity: 0 }}
+            className="flex flex-col items-center justify-center py-20 text-center"
+        >
+            <div className="w-10 h-10 rounded-full bg-emerald-500/15 flex items-center justify-center mb-4">
+                <span className="w-2.5 h-2.5 rounded-full bg-emerald-400 animate-pulse" />
+            </div>
+            <p className="text-sm font-medium text-text-primary mb-1">{t('Live meeting in progress')}</p>
+            <p className="text-xs text-text-tertiary max-w-[340px] leading-relaxed">
+                {kind === 'summary'
+                    ? t('Summary will be generated after the meeting ends')
+                    : t('Usage will appear after the meeting ends')}
+            </p>
+        </motion.div>
+    );
+};
 
 const MeetingDetails: React.FC<MeetingDetailsProps> = ({ meeting: initialMeeting }) => {
     const t = useT();
@@ -940,6 +968,33 @@ const MeetingDetails: React.FC<MeetingDetailsProps> = ({ meeting: initialMeeting
     const [speakerDraft, setSpeakerDraft] = useState('');
     const prefersReducedMotion = useReducedMotion();
 
+    // ─── LIVE MEETING NOTE (v31) ───────────────────────────────────────────
+    // While the note is live (meetings row created at Start, meeting still
+    // running), the Transcript tab shows the real-time stream: finals from the
+    // display IPC (native-audio-transcript) append instantly, and a 5s poll
+    // refetches the DB snapshot (the main-process flush cadence) so the view
+    // converges on exactly what will be persisted at Stop. Summary/Usage stay
+    // placeholders — they are generated only after Stop finalizes the note.
+    const isLive = meeting.isLive === true;
+    const [livePreview, setLivePreview] = useState<string | null>(null);
+    const liveMainRef = useRef<HTMLElement | null>(null);
+    const liveAtBottomRef = useRef(true);
+
+    // LIVE NOTE (v31): keep the transcript view pinned to the bottom while the
+    // user hasn't scrolled up (live mode only).
+    useEffect(() => {
+        if (!isLive) return;
+        const main = liveMainRef.current;
+        if (!main || !liveAtBottomRef.current) return;
+        main.scrollTop = main.scrollHeight;
+    }, [isLive, meeting.transcript]);
+
+    const handleLiveMainScroll = () => {
+        const main = liveMainRef.current;
+        if (!main) return;
+        liveAtBottomRef.current = main.scrollTop + main.clientHeight >= main.scrollHeight - 40;
+    };
+
     const copyRecipe = (text: string) => {
         navigator.clipboard?.writeText(text || '').catch(() => { /* swallow */ });
     };
@@ -983,6 +1038,63 @@ const MeetingDetails: React.FC<MeetingDetailsProps> = ({ meeting: initialMeeting
         setEditingSpeaker(null);
         try { await window.electronAPI?.updateMeetingSpeakerLabels?.(meeting.id, next); } catch { /* swallow */ }
     };
+
+    // LIVE NOTE (v31): real-time transcript + DB resync while the note is live.
+    // The IPC stream and the DB snapshot use timestamps from separate Date.now()
+    // calls (a few ms apart), so dedupe on speaker+text+time proximity instead
+    // of exact keys; the 5s poll replaces the list with the authoritative DB
+    // snapshot, so the view always converges on what will be persisted.
+    useEffect(() => {
+        if (!isLive) return;
+
+        const isNear = (a: number, b: number) => Math.abs(a - b) < 1500;
+        let stopped = false;
+        let pollTimer: ReturnType<typeof setInterval> | null = null;
+
+        const applyFinal = (seg: { speaker: string; text: string; timestamp: number }) => {
+            setMeeting(prev => {
+                const list = prev.transcript || [];
+                const dup = list.some(s =>
+                    s.speaker === seg.speaker && s.text === seg.text && isNear(s.timestamp || 0, seg.timestamp),
+                );
+                if (dup) return prev;
+                return { ...prev, transcript: [...list, seg] };
+            });
+        };
+
+        const removeTranscript = window.electronAPI.onNativeAudioTranscript((t) => {
+            if (stopped) return;
+            if (t.final) {
+                setLivePreview(null);
+                applyFinal({ speaker: t.speaker, text: t.text, timestamp: t.timestamp ?? Date.now() });
+            } else {
+                setLivePreview(t.text);
+            }
+        });
+
+        // Meeting ended (Stop clicked anywhere): leave live mode immediately and
+        // show the finalized note once the background save lands (reloadMeeting
+        // refetches title/summary/usage from the DB).
+        const removeState = window.electronAPI.onMeetingStateChanged(({ isActive }) => {
+            if (stopped || isActive) return;
+            stopped = true;
+            setLivePreview(null);
+            setMeeting(prev => ({ ...prev, isLive: false }));
+            void reloadMeeting();
+        });
+
+        pollTimer = setInterval(() => {
+            void reloadMeeting();
+        }, 5000);
+
+        return () => {
+            stopped = true;
+            removeTranscript();
+            removeState();
+            if (pollTimer) clearInterval(pollTimer);
+        };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, [isLive]);
 
     // Resolve a transcript segment's display name using saved speaker labels.
     const resolveSpeakerName = (rawSpeaker: string): string => {
@@ -1177,7 +1289,11 @@ ${meeting.detailedSummary.keyPoints?.map(item => `- ${item}`).join('\n') || 'Non
     return (
         <div className={`h-full w-full flex flex-col ${isLight ? 'bg-bg-secondary' : 'bg-bg-elevated'} text-text-secondary font-sans overflow-hidden`}>
             {/* Main Content */}
-            <main className="flex-1 min-h-0 overflow-y-auto custom-scrollbar">
+            <main
+                ref={liveMainRef}
+                onScroll={handleLiveMainScroll}
+                className="flex-1 min-h-0 overflow-y-auto custom-scrollbar"
+            >
                 {/* Pinned header — date, title and the tab row stay put; only tab content scrolls.
                     Kept inside <main> (rather than hoisted above it) so it shares the scroll box's
                     content width: a two-container split would offset this column from the one below
@@ -1264,7 +1380,9 @@ ${meeting.detailedSummary.keyPoints?.map(item => `- ${item}`).join('\n') || 'Non
                     {/* Tab Content */}
                     <div className="space-y-8">
                         {/* Using standard divs for content, framer motion for layout */}
-                        {activeTab === 'summary' && (
+                        {activeTab === 'summary' && (isLive ? (
+                            <LiveNotePlaceholder kind="summary" />
+                        ) : (
                             <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }}>
                                 {/* Overview - Rendered as Markdown */}
                                 {meeting.detailedSummary?.overview && (
@@ -1856,12 +1974,13 @@ ${meeting.detailedSummary.keyPoints?.map(item => `- ${item}`).join('\n') || 'Non
                                     </div>
                                 )}
                             </motion.div>
-                        )}
+                        ))}
 
                         {activeTab === 'transcript' && (
                             <motion.section initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }}>
-                                {/* Speaker rename row: distinct speakers + inline rename (Phase 9). */}
-                                {(() => {
+                                {/* Speaker rename row: distinct speakers + inline rename (Phase 9).
+                                    Hidden while the note is live (v31) — labels persist after Stop. */}
+                                {!isLive && (() => {
                                     const speakers = Array.from(new Set((meeting.transcript || [])
                                         .filter(e => !['system', 'ai', 'assistant', 'model'].includes((e.speaker || '').toLowerCase()))
                                         .map(e => e.speaker)));
@@ -1968,10 +2087,19 @@ ${meeting.detailedSummary.keyPoints?.map(item => `- ${item}`).join('\n') || 'Non
                                         ));
                                     })()}
                                 </div>
+                                {/* Live note (v31): latest interim (partial) transcript preview. */}
+                                {isLive && livePreview && (
+                                    <div className="mt-4 flex items-start gap-2">
+                                        <span className="text-[11px] font-semibold text-emerald-400/90 uppercase tracking-wide mt-[3px]">{t('Live')}</span>
+                                        <p className="text-text-tertiary text-[15px] leading-relaxed italic select-text cursor-text">{livePreview}</p>
+                                    </div>
+                                )}
                             </motion.section>
                         )}
 
-                        {activeTab === 'usage' && (
+                        {activeTab === 'usage' && (isLive ? (
+                            <LiveNotePlaceholder kind="usage" />
+                        ) : (
                             <section className="space-y-8 pb-10">
                                 {(() => {
                                     const items = meeting.usage ?? [];
@@ -1994,7 +2122,7 @@ ${meeting.detailedSummary.keyPoints?.map(item => `- ${item}`).join('\n') || 'Non
                                 })()}
                                 {!meeting.usage?.length && <p className="text-text-tertiary">{t('No usage history.')}</p>}
                             </section>
-                        )}
+                        ))}
                     </div>
                 </motion.div>
             </main>
