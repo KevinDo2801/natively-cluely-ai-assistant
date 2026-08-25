@@ -31,6 +31,11 @@ export const DEFAULT_KEYBINDS: KeybindConfig[] = [
     // from any focused app (including the Natively overlay), which the old
     // Chrome-owned hotkey could not. See natively-browser/README.md.
     { id: 'general:capture-dom', label: 'Capture Page / Screen (Browser)', accelerator: 'CommandOrControl+Y', isGlobal: true, defaultAccelerator: 'CommandOrControl+Y' },
+    // Toggle the live meeting on/off. Idle → start a real meeting (recording);
+    // recording → end it. Registered in both launcher and overlay modes so the
+    // user can start a meeting from anywhere and stop it from anywhere. The
+    // backslash key is escaped as `\\` in the accelerator string.
+    { id: 'general:toggle-meeting', label: 'Start / Stop Meeting', accelerator: 'CommandOrControl+Shift+\\', isGlobal: true, defaultAccelerator: 'CommandOrControl+Shift+\\' },
 
     // Chat - Global shortcuts (work even when app is not focused - stealth mode)
     { id: 'chat:whatToAnswer', label: 'What to Answer', accelerator: 'CommandOrControl+1', isGlobal: true, defaultAccelerator: 'CommandOrControl+1' },
@@ -120,6 +125,12 @@ export class KeybindManager {
         // Browser/page capture must work globally in both modes (same rationale
         // as the screenshot shortcuts — it's a global capture trigger).
         if (actionId === 'general:capture-dom') return true;
+
+        // Start / Stop Meeting must work globally in BOTH modes: in launcher
+        // mode (no meeting) it starts a meeting; in overlay mode it ends it.
+        // Without this the global shortcut is never registered with no meeting
+        // running and Ctrl/Cmd+Shift+\ would do nothing to start a meeting.
+        if (actionId === 'general:toggle-meeting') return true;
 
         // Process Screenshots (Ctrl/Cmd+Enter) and Toggle Stealth Typing
         // (Ctrl/Cmd+Shift+Space) act on the overlay chat, which is available

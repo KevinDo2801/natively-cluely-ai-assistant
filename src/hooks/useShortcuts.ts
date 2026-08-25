@@ -33,6 +33,7 @@ export interface ShortcutConfig {
     resetCancel: string[];
     takeScreenshot: string[];
     selectiveScreenshot: string[];
+    toggleMeeting: string[];
 }
 
 function buildDefaultShortcuts(): ShortcutConfig {
@@ -65,7 +66,8 @@ function buildDefaultShortcuts(): ShortcutConfig {
         capturePage: [mod, 'Y'],
         resetCancel: [mod, 'R'],
         takeScreenshot: [mod, 'H'],
-        selectiveScreenshot: [mod, shift, 'H']
+        selectiveScreenshot: [mod, shift, 'H'],
+        toggleMeeting: [mod, shift, '\\'],
     };
 }
 
@@ -117,6 +119,7 @@ const BACKEND_ID_TO_ACTION: Partial<Record<string, keyof ShortcutConfig>> = {
     'general:reset-cancel': 'resetCancel',
     'general:take-screenshot': 'takeScreenshot',
     'general:selective-screenshot': 'selectiveScreenshot',
+    'general:toggle-meeting': 'toggleMeeting',
 };
 
 export const useShortcuts = () => {
@@ -292,6 +295,7 @@ export const useShortcuts = () => {
             case 'resetCancel': backendId = 'general:reset-cancel'; break;
             case 'takeScreenshot': backendId = 'general:take-screenshot'; break;
             case 'selectiveScreenshot': backendId = 'general:selective-screenshot'; break;
+            case 'toggleMeeting': backendId = 'general:toggle-meeting'; break;
             default: break;
         }
 

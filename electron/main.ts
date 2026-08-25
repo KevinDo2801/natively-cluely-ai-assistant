@@ -2061,6 +2061,16 @@ export class AppState {
           this.sendToMeetingSurfaces('global-shortcut', { action: 'processScreenshots' });
         } else if (actionId === 'general:reset-cancel') {
           this.sendToMeetingSurfaces('global-shortcut', { action: 'resetCancel' });
+        } else if (actionId === 'general:toggle-meeting') {
+          // Global Start/Stop Meeting (Ctrl/Cmd+Shift+\). Idle → start a real
+          // meeting (recording); recording → end it. Uses the same public
+          // lifecycle entry points the mic button and calendar auto-start use,
+          // so the meeting-lifecycle queue coalesces any concurrent start/stop.
+          if (this.isMeetingActive) {
+            await this.endMeeting();
+          } else {
+            await this.startMeeting();
+          }
         }
       } catch (e: any) {
         if (e.message !== "Selection cancelled" && e.message !== "Screenshot capture already in progress") {

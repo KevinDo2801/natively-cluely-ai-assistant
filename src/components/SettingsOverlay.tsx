@@ -2761,6 +2761,19 @@ const SettingsOverlay: React.FC<SettingsOverlayProps> = ({
                                                         />
                                                     </div>
                                                 </div>
+                                                <div className="flex items-center justify-between py-1.5 group">
+                                                    <div className="flex items-center gap-3">
+                                                        <span className="text-text-tertiary group-hover:text-text-primary transition-colors w-5 flex justify-center"><Mic size={14} /></span>
+                                                        <span className="text-sm text-text-secondary font-medium group-hover:text-text-primary transition-colors">{t('Start / Stop Meeting')}</span>
+                                                    </div>
+                                                    <div className="flex items-center gap-2">
+                                                        {renderShortcutConflictBadge('toggleMeeting')}
+                                                        <KeyRecorder
+                                                            currentKeys={shortcuts.toggleMeeting}
+                                                            onSave={(keys) => updateShortcut('toggleMeeting', keys)}
+                                                        />
+                                                    </div>
+                                                </div>
                                             </div>
                                         </div>
 

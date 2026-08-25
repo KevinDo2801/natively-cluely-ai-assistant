@@ -116,6 +116,32 @@ test('capture-and-process is delivered to the overlay, not the launcher', () => 
   );
 });
 
+test('start/stop meeting keybind is registered globally and routes to the meeting lifecycle', () => {
+  // 1. The keybind exists with the documented default accelerator.
+  const defaultEntry = /id:\s*'general:toggle-meeting'[^}]*accelerator:\s*'CommandOrControl\+Shift\+\\\\'/.exec(keybindSource);
+  assert.ok(
+    defaultEntry,
+    'BUG: general:toggle-meeting must be a DEFAULT_KEYBIND with accelerator CommandOrControl+Shift+\\ (the Start/Stop Meeting hotkey).'
+  );
+  // 2. It must be registered in launcher mode (no meeting) so Ctrl/Cmd+Shift+\
+  //    can START a meeting from anywhere.
+  const gate = extractClassMethod(keybindSource, 'shouldRegister');
+  assert.ok(
+    /actionId\s*===\s*'general:toggle-meeting'\)\s*return true/.test(gate),
+    'BUG: general:toggle-meeting must be registered with no meeting running — otherwise Ctrl/Cmd+Shift+\\ cannot start a meeting from launcher mode.'
+  );
+  // 3. main routes it to the meeting lifecycle: end when active, start when not.
+  const region = extractRegionAround(mainSource, "'general:toggle-meeting'", 900);
+  assert.ok(
+    /if\s*\(\s*this\.isMeetingActive\s*\)\s*\{/.test(region) && /await\s+this\.endMeeting\s*\(\s*\)/.test(region),
+    'BUG: when a meeting is active, general:toggle-meeting must call endMeeting().'
+  );
+  assert.ok(
+    /await\s+this\.startMeeting\s*\(\s*\)/.test(region),
+    'BUG: when idle, general:toggle-meeting must call startMeeting().'
+  );
+});
+
 test('the reveal helper shows the overlay INACTIVE and only when hidden', () => {
   const body = extractClassMethod(mainSource, 'revealOverlayForGlobalShortcut');
   assert.ok(/!overlay\.isVisible\s*\(\s*\)/.test(body), 'reveal must no-op when the overlay is already visible.');
