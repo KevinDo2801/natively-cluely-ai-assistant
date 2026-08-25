@@ -23,7 +23,7 @@ export const DEFAULT_KEYBINDS: KeybindConfig[] = [
     { id: 'general:toggle-mouse-passthrough', label: 'Toggle Mouse Passthrough', accelerator: 'CommandOrControl+Shift+B', isGlobal: true, defaultAccelerator: 'CommandOrControl+Shift+B' },
     { id: 'general:process-screenshots', label: 'Process Screenshots', accelerator: 'CommandOrControl+Enter', isGlobal: true, defaultAccelerator: 'CommandOrControl+Enter' },
     { id: 'general:capture-and-process', label: 'Capture Screen & Ask AI (Global)', accelerator: 'CommandOrControl+Shift+Enter', isGlobal: true, defaultAccelerator: 'CommandOrControl+Shift+Enter' },
-    { id: 'general:reset-cancel', label: 'Reset / Cancel', accelerator: 'CommandOrControl+R', isGlobal: true, defaultAccelerator: 'CommandOrControl+R' },
+    { id: 'general:reset-cancel', label: 'New Chat', accelerator: 'CommandOrControl+R', isGlobal: true, defaultAccelerator: 'CommandOrControl+R' },
     { id: 'general:take-screenshot', label: 'Take Screenshot', accelerator: 'CommandOrControl+H', isGlobal: true, defaultAccelerator: 'CommandOrControl+H' },
     { id: 'general:selective-screenshot', label: 'Selective Screenshot', accelerator: 'CommandOrControl+Shift+H', isGlobal: true, defaultAccelerator: 'CommandOrControl+Shift+H' },
     // Capture the active browser tab's page context via the companion extension;
@@ -102,6 +102,12 @@ export class KeybindManager {
         if (actionId === 'general:toggle-visibility') return true;
         if (actionId === 'general:toggle-mouse-passthrough') return true;
         if (actionId.startsWith('window:move-')) return true;
+        // Ctrl+R = New Chat must work with NO meeting running too (the pill /
+        // overlay chat is available in launcher mode) — same rationale as
+        // toggle-visibility: without this, the global shortcut is never
+        // registered and Ctrl+R falls through to the app menu's reload
+        // accelerator (window reset) instead of creating a new chat.
+        if (actionId === 'general:reset-cancel') return true;
 
         // Screenshot & screen-analyze shortcuts must work globally in BOTH modes.
         // Without these, Cmd+H / Cmd+Shift+H / Cmd+Shift+Enter do nothing in
@@ -443,7 +449,11 @@ export class KeybindManager {
                 {
                     label: 'View',
                     submenu: [
-                        { role: 'reload' },
+                        // accelerator:'' disables the role's default Ctrl/Cmd+R —
+                        // that key is the global "New Chat" shortcut (general:reset-cancel),
+                        // which must not be stolen by the reload menu item when a
+                        // window has focus. Reload stays available via menu click.
+                        { role: 'reload', accelerator: '' },
                         { role: 'forceReload' },
                         { role: 'toggleDevTools' },
                         { type: 'separator' },
@@ -518,7 +528,10 @@ export class KeybindManager {
                         click: () => this.windowHelper?.moveWindowRight()
                     },
                     { type: 'separator' },
-                    { role: 'reload' },
+                    // accelerator:'' disables the role's default Cmd/Ctrl+R — that
+                    // key is the global "New Chat" shortcut, which must not be
+                    // stolen by the reload menu item when a window has focus.
+                    { role: 'reload', accelerator: '' },
                     { role: 'forceReload' },
                     { role: 'toggleDevTools' },
                     { type: 'separator' },

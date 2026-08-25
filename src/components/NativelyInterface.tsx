@@ -7268,14 +7268,26 @@ Provide only the answer, nothing else.`;
     toggleVisibility: () => window.electronAPI.toggleWindow(),
     processScreenshots: handleWhatToSay,
     resetCancel: async () => {
-      if (isProcessing) {
-        cancelActiveChatStream();
-      } else {
-        await window.electronAPI.resetIntelligence();
-        resetChatState();
-        setAttachedContext([]);
-        setInputValue('');
+      // Ctrl+R = New Chat: stop any in-flight AI reply, clear the
+      // conversation + attached context, then show the overlay chat and
+      // focus the input for a fresh question. Works with or without a
+      // meeting: a running meeting keeps recording (its transcript is
+      // persisted when the meeting ends); without a meeting the session is
+      // reset so the new chat starts clean — the OLD chat is discarded.
+      cancelActiveChatStream();
+      const meetingActive =
+        (await window.electronAPI?.getMeetingActive?.().catch(() => false)) ?? false;
+      if (!meetingActive) {
+        await window.electronAPI.resetIntelligence().catch(() => {});
       }
+      resetChatState();
+      setAttachedContext([]);
+      setInputValue('');
+      setIsExpanded(true);
+      window.electronAPI?.showOverlay?.().catch(() => {});
+      requestAnimationFrame(() => {
+        requestAnimationFrame(() => textInputRef.current?.focus());
+      });
     },
     toggleMousePassthrough: () => {
       const newState = !isMousePassthrough;
@@ -7309,14 +7321,26 @@ Provide only the answer, nothing else.`;
     toggleVisibility: () => window.electronAPI.toggleWindow(),
     processScreenshots: handleWhatToSay,
     resetCancel: async () => {
-      if (isProcessing) {
-        cancelActiveChatStream();
-      } else {
-        await window.electronAPI.resetIntelligence();
-        resetChatState();
-        setAttachedContext([]);
-        setInputValue('');
+      // Ctrl+R = New Chat: stop any in-flight AI reply, clear the
+      // conversation + attached context, then show the overlay chat and
+      // focus the input for a fresh question. Works with or without a
+      // meeting: a running meeting keeps recording (its transcript is
+      // persisted when the meeting ends); without a meeting the session is
+      // reset so the new chat starts clean — the OLD chat is discarded.
+      cancelActiveChatStream();
+      const meetingActive =
+        (await window.electronAPI?.getMeetingActive?.().catch(() => false)) ?? false;
+      if (!meetingActive) {
+        await window.electronAPI.resetIntelligence().catch(() => {});
       }
+      resetChatState();
+      setAttachedContext([]);
+      setInputValue('');
+      setIsExpanded(true);
+      window.electronAPI?.showOverlay?.().catch(() => {});
+      requestAnimationFrame(() => {
+        requestAnimationFrame(() => textInputRef.current?.focus());
+      });
     },
     toggleMousePassthrough: () => {
       const newState = !isMousePassthrough;
