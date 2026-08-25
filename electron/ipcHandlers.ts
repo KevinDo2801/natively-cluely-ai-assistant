@@ -5749,6 +5749,15 @@ export function initializeIpcHandlers(appState: AppState): void {
     return { success: true };
   });
 
+  safeHandle('get-hide-overlay-on-start', async () => {
+    return appState.getHideOverlayOnStart();
+  });
+
+  safeHandle('set-hide-overlay-on-start', async (_, enabled: boolean) => {
+    appState.setHideOverlayOnStart(Boolean(enabled));
+    return { success: true };
+  });
+
   safeHandle('get-auto-answer-enabled', async () => {
     return appState.getAutoAnswerEnabled();
   });

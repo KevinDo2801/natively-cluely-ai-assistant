@@ -1435,6 +1435,10 @@ export class AppState {
   // Keeps the overlay TopPill floating while the launcher is visible (no
   // meeting). Read by WindowHelper for standalone-pill visibility decisions.
   private _pillAlwaysVisible: boolean = false;
+  // When ON, Start does not auto-show the meeting overlay — the launcher stays
+  // visible and flips its CTA to "Meeting ongoing"; the user opens the overlay
+  // on demand. Read by startMeetingTransition (Settings > Overlay toggle).
+  private _hideOverlayOnStart: boolean = false;
   private _autoAnswerEnabled: boolean = false;
   // Tracks whether STT sample-rate has been applied for the current capture
   // session. Reset on every reconfigureAudio / new pipeline build so the next
@@ -1493,6 +1497,7 @@ export class AppState {
     this._ambientChatEnabled = settingsManager.get('ambientChatEnabled') ?? false;
     this._autoAnswerEnabled = settingsManager.get('autoAnswerEnabled') ?? false;
     this._pillAlwaysVisible = settingsManager.get('pillAlwaysVisible') ?? false;
+    this._hideOverlayOnStart = settingsManager.get('hideOverlayOnStart') ?? false;
     console.log(`[AppState] Initialized with isUndetectable=${this.isUndetectable}, disguiseMode=${this.disguiseMode}, verboseLogging=${this._verboseLogging}, ambientChatEnabled=${this._ambientChatEnabled}, autoAnswerEnabled=${this._autoAnswerEnabled}, pillAlwaysVisible=${this._pillAlwaysVisible}`);
 
     // Context Intelligence debug logging (Developer settings). Bind the level
@@ -5878,7 +5883,19 @@ export class AppState {
     // before the renderer's follow-up setWindowMode('overlay') hides it —
     // visible as a flash. Switching first means the launcher hides before
     // the state event arrives, so the user only ever sees the overlay.
-    this.windowHelper.setWindowMode('overlay');
+    //
+    // hideOverlayOnStart (Settings > Overlay): the user opted to keep the
+    // overlay closed when a meeting starts. We stay on the launcher — the
+    // broadcast below flips its CTA to "Meeting ongoing" (green), and the user
+    // opens the overlay on demand. Only force a switch if we're currently ON the
+    // overlay (e.g. a scheduled/auto-start while it was open).
+    if (this._hideOverlayOnStart) {
+      if (this.windowHelper.getCurrentWindowMode() === 'overlay') {
+        this.windowHelper.setWindowMode('launcher');
+      }
+    } else {
+      this.windowHelper.setWindowMode('overlay');
+    }
 
     const meetingGeneration = ++this._meetingGeneration;
     this.isMeetingActive = true;
@@ -7650,6 +7667,16 @@ export class AppState {
     // calling syncPillAlwaysVisibility directly here would consult the stale
     // flag and silently no-op ("toggle does nothing until restart").
     this.windowHelper?.setPillAlwaysVisible(enabled);
+  }
+
+  public getHideOverlayOnStart(): boolean {
+    return this._hideOverlayOnStart;
+  }
+
+  public setHideOverlayOnStart(enabled: boolean): void {
+    this._hideOverlayOnStart = enabled;
+    SettingsManager.getInstance().set('hideOverlayOnStart', enabled);
+    console.log(`[AppState] hideOverlayOnStart set to ${enabled}`);
   }
 
   public getAutoAnswerEnabled(): boolean {

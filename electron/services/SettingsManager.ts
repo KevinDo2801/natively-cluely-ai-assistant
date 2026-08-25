@@ -25,6 +25,12 @@ export interface AppSettings {
     // from Settings > Overlay. Ignored while undetectable mode is on (a
     // permanently floating pill would defeat the stealth promise).
     pillAlwaysVisible?: boolean;
+    // When ON, starting a meeting does NOT auto-show the always-on-top meeting
+    // overlay. The launcher stays visible and flips its CTA to "Meeting ongoing";
+    // the user opens the overlay on demand (launcher CTA / shortcut). Off by
+    // default — the overlay opens on Start exactly as before until the user opts
+    // in from Settings > Overlay.
+    hideOverlayOnStart?: boolean;
     // Automatic answers after the interviewer finishes a question. Off by
     // default: until the user opts in from Settings > General, an answer is
     // produced only by the What-to-Answer hotkey, exactly as before. The

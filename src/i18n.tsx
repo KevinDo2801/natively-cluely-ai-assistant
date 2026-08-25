@@ -259,6 +259,9 @@ const RU: Record<string, string> = {
     'Auto Scroll': 'Автопрокрутка',
     'Automatically scroll to the latest message as new responses arrive':
         'Автоматически прокручивать к последнему сообщению при новых ответах',
+    'Keep overlay closed when a meeting starts': 'Не открывать оверлей при начале встречи',
+    'Do not auto-open the meeting overlay on Start; open it from the launcher when you need it':
+        'Не открывать оверлей встречи автоматически при запуске; открывайте его из лончера, когда нужно',
 };
 
 // Chinese — ZH_GENERATED spread first, then hand-authored overrides on any collision.
@@ -280,6 +283,9 @@ const ZH: Record<string, string> = {
     'Live meeting in progress': '会议进行中',
     'Summary will be generated after the meeting ends': '摘要将在会议结束后生成',
     'Usage will appear after the meeting ends': '用量将在会议结束后显示',
+    'Keep overlay closed when a meeting starts': '会议开始时保持悬浮窗关闭',
+    'Do not auto-open the meeting overlay on Start; open it from the launcher when you need it':
+        '开始会议时不要自动打开悬浮窗；需要时从启动器打开',
 };
 
 // Japanese — JA_GENERATED (parallel-agent output) spread first, then hand-authored
@@ -302,6 +308,9 @@ const JA: Record<string, string> = {
     'Live meeting in progress': '会議が進行中です',
     'Summary will be generated after the meeting ends': '要約は会議終了後に生成されます',
     'Usage will appear after the meeting ends': '利用履歴は会議終了後に表示されます',
+    'Keep overlay closed when a meeting starts': '会議開始時にオーバーレイを開かない',
+    'Do not auto-open the meeting overlay on Start; open it from the launcher when you need it':
+        '開始時に会議オーバーレイを自動的に開きません。必要なときにランチャーから開きます',
 };
 
 // Spanish — ES_GENERATED spread first, then hand-authored overrides on any collision.
@@ -323,6 +332,9 @@ const ES: Record<string, string> = {
     'Live meeting in progress': 'Reunión en curso',
     'Summary will be generated after the meeting ends': 'El resumen se generará cuando termine la reunión',
     'Usage will appear after the meeting ends': 'El uso aparecerá cuando termine la reunión',
+    'Keep overlay closed when a meeting starts': 'Mantener la superposición cerrada al iniciar la reunión',
+    'Do not auto-open the meeting overlay on Start; open it from the launcher when you need it':
+        'No abrir automáticamente la superposición de la reunión al iniciar; ábrala desde el lanzador cuando la necesite',
 };
 
 // Per-language dictionary lookup. `en` always returns the source string (no

@@ -626,6 +626,9 @@ export interface ElectronAPI {
   // Always-visible TopPill — the overlay pill floats in launcher mode too
   getPillAlwaysVisible: () => Promise<boolean>;
   setPillAlwaysVisible: (enabled: boolean) => Promise<{ success: boolean }>;
+  // Keep the meeting overlay closed when a meeting starts (open on demand from the launcher)
+  getHideOverlayOnStart: () => Promise<boolean>;
+  setHideOverlayOnStart: (enabled: boolean) => Promise<{ success: boolean }>;
   getAutoAnswerEnabled: () => Promise<boolean>;
   setAutoAnswerEnabled: (enabled: boolean) => Promise<{ success: boolean; error?: string }>;
 
