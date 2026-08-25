@@ -116,7 +116,9 @@ describe('RC-7: the compiled DatabaseManager carries the guards (drift pins)', (
     assert.match(compiled, /title = CASE WHEN COALESCE\(user_titled, 0\) = 1 THEN title ELSE \? END/);
   });
   test('saveMeeting pre-reads the flag and writes the user_titled column', () => {
-    assert.match(compiled, /SELECT title, COALESCE\(user_titled, 0\) AS user_titled FROM meetings WHERE id = \?/);
+    // v32 folders: the pre-read also carries folder_id so INSERT OR REPLACE
+    // re-saves preserve the folder assignment (same RC-7 lesson).
+    assert.match(compiled, /SELECT title, COALESCE\(user_titled, 0\) AS user_titled, folder_id FROM meetings WHERE id = \?/);
     assert.match(compiled, /is_processed, summary_status, user_titled/);
   });
   test('the user_titled ALTER is applied UNCONDITIONALLY, not version-gated (live incident 2026-08-23)', () => {

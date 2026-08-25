@@ -450,8 +450,10 @@ interface ElectronAPI {
   debugInjectTranscript: (segments: Array<{ speaker?: string; text: string; timestamp?: number; confidence?: number }>)
     => Promise<{ success: boolean; injected?: number; error?: string }>;
   finalizeMicSTT: () => Promise<void>;
-  getRecentMeetings: () => Promise<
-    Array<{ id: string; title: string; date: string; duration: string; summary: string; isLive?: boolean }>
+  // Folders (v32): folderId === undefined → all meetings (global search);
+  // null → root only; string → that folder's meetings.
+  getRecentMeetings: (folderId?: string | null) => Promise<
+    Array<{ id: string; title: string; date: string; duration: string; summary: string; isLive?: boolean; folderId?: string | null }>
   >;
   getMeetingDetails: (id: string) => Promise<any>;
   searchGlobalMeetings: (query: string, filters?: any) => Promise<{ enabled: boolean; results: any[] }>;
@@ -480,6 +482,15 @@ interface ElectronAPI {
     },
   ) => Promise<boolean>;
   onMeetingsUpdated: (callback: () => void) => () => void;
+
+  // Meeting Folders (v32)
+  listFolders: () => Promise<Array<{ id: string; name: string; createdAt?: string; meetingCount?: number }>>;
+  createFolder: (name: string) => Promise<{ success: boolean; folder?: { id: string; name: string; createdAt?: string }; error?: string }>;
+  renameFolder: (id: string, name: string) => Promise<{ success: boolean }>;
+  // opts.deleteMeetings=true permanently deletes the meetings inside the folder too.
+  deleteFolder: (id: string, opts?: { deleteMeetings?: boolean }) => Promise<{ success: boolean }>;
+  moveMeetingToFolder: (meetingId: string, folderId: string | null) => Promise<{ success: boolean }>;
+  setCurrentFolder: (folderId: string | null) => Promise<{ success: boolean }>;
 
   // Intelligence Mode Events
   onIntelligenceAssistUpdate: (callback: (data: { insight: string }) => void) => () => void;
@@ -1798,7 +1809,8 @@ contextBridge.exposeInMainWorld('electronAPI', {
   debugInjectTranscript: (segments: Array<{ speaker?: string; text: string; timestamp?: number; confidence?: number }>) =>
     ipcRenderer.invoke('debug-inject-transcript', segments),
   finalizeMicSTT: () => ipcRenderer.invoke('finalize-mic-stt'),
-  getRecentMeetings: () => ipcRenderer.invoke('get-recent-meetings'),
+  // undefined → all meetings (global search); null → root only; string → folder.
+  getRecentMeetings: (folderId?: string | null) => ipcRenderer.invoke('get-recent-meetings', folderId),
   getMeetingDetails: (id: string) => ipcRenderer.invoke('get-meeting-details', id),
   searchGlobalMeetings: (query: string, filters?: any) => ipcRenderer.invoke('search:global-meetings', { query, filters }),
   searchInMeeting: (query: string) => ipcRenderer.invoke('search:in-meeting', { query }),
@@ -1833,6 +1845,15 @@ contextBridge.exposeInMainWorld('electronAPI', {
       ipcRenderer.removeListener('meetings-updated', subscription);
     };
   },
+
+  // Meeting Folders (v32)
+  listFolders: () => ipcRenderer.invoke('folders:list'),
+  createFolder: (name: string) => ipcRenderer.invoke('folders:create', name),
+  renameFolder: (id: string, name: string) => ipcRenderer.invoke('folders:rename', id, name),
+  deleteFolder: (id: string, opts?: { deleteMeetings?: boolean }) => ipcRenderer.invoke('folders:delete', id, opts),
+  moveMeetingToFolder: (meetingId: string, folderId: string | null) =>
+    ipcRenderer.invoke('meetings:move', meetingId, folderId),
+  setCurrentFolder: (folderId: string | null) => ipcRenderer.invoke('folders:set-current', folderId),
 
   // Window Mode
   setWindowMode: (mode: 'launcher' | 'overlay', inactive?: boolean) =>

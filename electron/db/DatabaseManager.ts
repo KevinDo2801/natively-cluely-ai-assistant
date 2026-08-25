@@ -63,6 +63,17 @@ export interface Meeting {
     summaryStatus?: SummaryStatus;
     /** Live meeting note: row created at meeting Start (is_live=1), finalized (0) at Stop. */
     isLive?: boolean;
+    /** Folder this meeting belongs to (folders feature v32). null/undefined = root (launcher main list). */
+    folderId?: string | null;
+}
+
+/** Meeting folder (folders feature v32). Single-level: every folder lives at root. */
+export interface Folder {
+    id: string;
+    name: string;
+    createdAt: string;
+    /** Number of meetings currently assigned to this folder (listFolders only). */
+    meetingCount?: number;
 }
 
 /**
@@ -1740,18 +1751,47 @@ export class DatabaseManager {
         // finalized (is_live → 0) and title/summary are generated into it.
         // Orphaned is_live rows (app quit before Stop) are adopted by
         // MeetingPersistence.recoverUnprocessedMeetings on the next launch.
-        //
-        // APPLIED UNCONDITIONALLY, NOT VERSION-GATED — same live-incident
-        // lesson as user_titled above (2026-08-23): an additive nullable column
-        // is idempotent by construction (the try/catch absorbs "duplicate
-        // column"), and a version counter that a parallel branch can race must
-        // never be able to suppress it — a missing is_live column makes EVERY
-        // saveMeeting INSERT throw and silently kills meeting persistence.
-        try { this.db.exec("ALTER TABLE meetings ADD COLUMN is_live INTEGER DEFAULT 0"); } catch (e) { /* Column already exists */ }
         if (version < 31) {
             console.log('[DatabaseManager] Applying migration v30 → v31: Add is_live to meetings');
             this.db.pragma('user_version = 31');
         }
+
+        // Version 31 → 32: Meeting folders (single-level, Google-Drive style).
+        // A `folders` table owns the folder rows; `meetings.folder_id` (nullable,
+        // NULL = root / main launcher list) assigns a meeting to a folder.
+        // ON DELETE SET NULL is a belt-and-suspenders integrity net — the
+        // deleteFolder() method already moves contained meetings to root
+        // explicitly inside a transaction, and this FK covers any future raw
+        // DELETE of a folder row. The folders table must be created BEFORE the
+        // ALTER so the REFERENCES target exists (see the unconditional section
+        // below).
+        if (version < 32) {
+            console.log('[DatabaseManager] Applying migration v31 → v32: Add folders table + meetings.folder_id');
+            this.db.pragma('user_version = 32');
+        }
+
+        // ── Unconditional additive schema (NOT version-gated) ─────────────
+        // is_live (v31) and folder_id (v32) are applied on EVERY launch — same
+        // live-incident lesson as user_titled above (2026-08-23): an additive
+        // nullable column is idempotent by construction (the try/catch absorbs
+        // "duplicate column"), and a version counter that a parallel branch can
+        // race must never be able to suppress it — a missing column here makes
+        // EVERY saveMeeting INSERT throw and silently kills meeting
+        // persistence. Kept AFTER the version-gated blocks so each gate's body
+        // stays self-contained (R-22 chain invariant — the chain-termination
+        // parser must see v30's `return` as its last catch). Ordering within
+        // this section matters: folders table BEFORE meetings.folder_id (the
+        // REFERENCES target).
+        this.db.exec(`
+            CREATE TABLE IF NOT EXISTS folders (
+                id TEXT PRIMARY KEY,
+                name TEXT NOT NULL,
+                created_at TEXT DEFAULT CURRENT_TIMESTAMP
+            );
+        `);
+        try { this.db.exec("ALTER TABLE meetings ADD COLUMN is_live INTEGER DEFAULT 0"); } catch (e) { /* Column already exists */ }
+        try { this.db.exec("ALTER TABLE meetings ADD COLUMN folder_id TEXT REFERENCES folders(id) ON DELETE SET NULL"); } catch (e) { /* Column already exists */ }
+        try { this.db.exec('CREATE INDEX IF NOT EXISTS idx_meetings_folder ON meetings(folder_id)'); } catch (e) { /* Index already exists */ }
 
         console.log('[DatabaseManager] Migrations completed.');
     }
@@ -2875,15 +2915,19 @@ export class DatabaseManager {
         }
 
         const insertMeeting = this.db.prepare(`
-            INSERT OR REPLACE INTO meetings (id, title, start_time, duration_ms, summary_json, created_at, calendar_event_id, source, is_processed, summary_status, user_titled, is_live)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            INSERT OR REPLACE INTO meetings (id, title, start_time, duration_ms, summary_json, created_at, calendar_event_id, source, is_processed, summary_status, user_titled, is_live, folder_id)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         `);
         // RC-7 (2026-08-21): INSERT OR REPLACE rewrites the whole row, so a
         // user rename made while the row still said "Processing…" (the
         // placeholder → final-save window can span a slow summary generation)
         // was clobbered by the final save's generated title AND lost its
         // user_titled stamp. Pre-read the flag and let the user's title win.
-        const readUserTitle = this.db.prepare(`SELECT title, COALESCE(user_titled, 0) AS user_titled FROM meetings WHERE id = ?`);
+        // Folders (v32) follow the same rule: every later save of a row that
+        // was created inside a folder (live-note flush, final save, RAG
+        // re-save) must NOT drop the folder assignment — the folder_id of the
+        // existing row wins unless the caller explicitly supplies one.
+        const readUserTitle = this.db.prepare(`SELECT title, COALESCE(user_titled, 0) AS user_titled, folder_id FROM meetings WHERE id = ?`);
 
         const insertTranscript = this.db.prepare(`
             INSERT INTO transcripts (meeting_id, speaker, content, timestamp_ms)
@@ -2913,8 +2957,13 @@ export class DatabaseManager {
 
         const runTransaction = this.db.transaction(() => {
             // 1. Insert Meeting (a user-renamed row keeps its title — RC-7)
-            const existing = readUserTitle.get(meeting.id) as { title: string; user_titled: number } | undefined;
+            const existing = readUserTitle.get(meeting.id) as { title: string; user_titled: number; folder_id: string | null } | undefined;
             const userTitled = existing?.user_titled === 1;
+            // Folders (v32): an explicit folderId on the incoming Meeting wins;
+            // otherwise preserve the row's existing assignment so idempotent
+            // re-saves (live-note flush → final save → RAG re-save) never orphan
+            // a meeting out of its folder.
+            const folderId = meeting.folderId !== undefined ? meeting.folderId : (existing?.folder_id ?? null);
             insertMeeting.run(
                 meeting.id,
                 userTitled && existing?.title ? existing.title : meeting.title,
@@ -2927,7 +2976,8 @@ export class DatabaseManager {
                 meeting.isProcessed ? 1 : 0,
                 meeting.summaryStatus || (meeting.isProcessed ? 'completed' : 'queued'),
                 userTitled ? 1 : 0,
-                meeting.isLive ? 1 : 0
+                meeting.isLive ? 1 : 0,
+                folderId
             );
 
             // 2. Insert Transcript
@@ -3129,20 +3179,40 @@ export class DatabaseManager {
         }
     }
 
-    public getRecentMeetings(limit: number = 50): Meeting[] {
+    /**
+     * Recent meetings list. Folders (v32):
+     *  - folderId === undefined → ALL meetings (used by global search and other
+     *    cross-folder consumers; legacy behavior).
+     *  - folderId === null → root only (folder_id IS NULL): the main launcher
+     *    list when no folder is open.
+     *  - folderId === '<id>' → only that folder's meetings.
+     */
+    public getRecentMeetings(limit: number = 50, folderId?: string | null): Meeting[] {
         if (!this.db) return [];
 
         // Exclude the transient JIT live-indexing scaffold (v31: the live-note
         // row is the user-facing "Live" entry; the JIT row is internal FK
         // scaffolding deleted at meeting end and must not appear in history).
-        const stmt = this.db.prepare(`
+        let sql = `
             SELECT * FROM meetings
             WHERE id != ?
+        `;
+        const params: any[] = [JIT_LIVE_MEETING_ID];
+        if (folderId === null) {
+            sql += ` AND folder_id IS NULL`;
+        } else if (typeof folderId === 'string') {
+            sql += ` AND folder_id = ?`;
+            params.push(folderId);
+        }
+        sql += `
             ORDER BY created_at DESC
             LIMIT ?
-        `);
+        `;
+        params.push(limit);
 
-        const rows = stmt.all(JIT_LIVE_MEETING_ID, limit) as any[];
+        const stmt = this.db.prepare(sql);
+
+        const rows = stmt.all(...params) as any[];
 
         return rows.map(row => {
             const summaryData = JSON.parse(row.summary_json || '{}');
@@ -3164,6 +3234,7 @@ export class DatabaseManager {
                 source: row.source as any,
                 summaryStatus: row.summary_status as SummaryStatus | undefined,
                 isLive: (row.is_live ?? 0) === 1,
+                folderId: row.folder_id ?? null,
                 // We don't load full transcript/usage for list view to keep it light
                 transcript: [] as any[],
                 usage: [] as any[]
@@ -3237,6 +3308,7 @@ export class DatabaseManager {
             source: meetingRow.source,
             summaryStatus: meetingRow.summary_status as SummaryStatus | undefined,
             isLive: (meetingRow.is_live ?? 0) === 1,
+            folderId: meetingRow.folder_id ?? null,
             transcript: transcript,
             usage: usage
         };
@@ -3483,6 +3555,128 @@ export class DatabaseManager {
         }
     }
 
+    // ============================================
+    // Meeting folders (v32) — single-level, Google-Drive style
+    // ============================================
+    //
+    // Every method is guarded and returns a neutral value when the database is
+    // unavailable. Folder operations never touch meeting content; deleting a
+    // folder moves its meetings back to root (folder_id = NULL) inside the same
+    // transaction — meetings are never deleted with their folder.
+
+    /** Create a folder. Returns null when the name is blank or the DB is unavailable. */
+    public createFolder(name: string): Folder | null {
+        if (!this.db) return null;
+        const trimmed = (name || '').trim();
+        if (!trimmed) return null;
+        try {
+            const id = crypto.randomUUID();
+            const createdAt = new Date().toISOString();
+            this.db.prepare('INSERT INTO folders (id, name, created_at) VALUES (?, ?, ?)').run(id, trimmed, createdAt);
+            console.log(`[DatabaseManager] Created folder ${id} ("${trimmed}")`);
+            return { id, name: trimmed, createdAt };
+        } catch (error) {
+            console.error('[DatabaseManager] Failed to create folder:', error);
+            return null;
+        }
+    }
+
+    /** All folders with their current meeting counts, name-sorted (case-insensitive). */
+    public listFolders(): Folder[] {
+        if (!this.db) return [];
+        try {
+            const rows = this.db.prepare(`
+                SELECT f.id, f.name, f.created_at AS createdAt, COUNT(m.id) AS meetingCount
+                FROM folders f
+                LEFT JOIN meetings m ON m.folder_id = f.id
+                GROUP BY f.id, f.name, f.created_at
+                ORDER BY f.name COLLATE NOCASE ASC
+            `).all() as Array<{ id: string; name: string; createdAt: string; meetingCount: number }>;
+            return rows.map(r => ({ id: r.id, name: r.name, createdAt: r.createdAt, meetingCount: r.meetingCount }));
+        } catch (error) {
+            console.error('[DatabaseManager] Failed to list folders:', error);
+            return [];
+        }
+    }
+
+    /** Rename a folder. Returns false for blank names, missing folders, or DB failures. */
+    public renameFolder(id: string, name: string): boolean {
+        if (!this.db) return false;
+        const trimmed = (name || '').trim();
+        if (!trimmed) return false;
+        try {
+            const info = this.db.prepare('UPDATE folders SET name = ? WHERE id = ?').run(trimmed, id);
+            if (info.changes > 0) console.log(`[DatabaseManager] Renamed folder ${id} → "${trimmed}"`);
+            return info.changes > 0;
+        } catch (error) {
+            console.error(`[DatabaseManager] Failed to rename folder ${id}:`, error);
+            return false;
+        }
+    }
+
+    /**
+     * Delete a folder.
+     *
+     * Default (opts.deleteMeetings === false): meetings inside it are moved
+     * back to root (folder_id → NULL) in the SAME transaction — contained
+     * meetings are never deleted.
+     *
+     * opts.deleteMeetings === true: contained meetings are deleted PERMANENTLY
+     * first (each through deleteMeeting, so vector rows are reaped and child
+     * transcript/usage/chunk rows cascade), then the folder row — all one
+     * transaction, so a failure halfway rolls the whole thing back.
+     *
+     * Returns false when the folder does not exist or the DB is unavailable.
+     */
+    public deleteFolder(id: string, opts?: { deleteMeetings?: boolean }): boolean {
+        if (!this.db) return false;
+        const deleteMeetings = opts?.deleteMeetings === true;
+        try {
+            const result = this.db.transaction(() => {
+                if (deleteMeetings) {
+                    const rows = this.db!.prepare('SELECT id FROM meetings WHERE folder_id = ?').all(id) as Array<{ id: string }>;
+                    for (const row of rows) {
+                        // deleteMeeting = vector reap (F-705) + parent DELETE
+                        // with FK cascade to transcripts/usage/chunks. Nested
+                        // transaction → savepoint, commits to the outer one.
+                        this.deleteMeeting(row.id);
+                    }
+                } else {
+                    this.db!.prepare('UPDATE meetings SET folder_id = NULL WHERE folder_id = ?').run(id);
+                }
+                return this.db!.prepare('DELETE FROM folders WHERE id = ?').run(id);
+            })();
+            if (result.changes > 0) {
+                console.log(`[DatabaseManager] Deleted folder ${id} (${deleteMeetings ? 'contained meetings deleted' : 'contained meetings moved to root'})`);
+            }
+            return result.changes > 0;
+        } catch (error) {
+            console.error(`[DatabaseManager] Failed to delete folder ${id}:`, error);
+            return false;
+        }
+    }
+
+    /**
+     * Move a meeting to a folder (folderId) or back to root (null).
+     * A non-null folderId must reference an existing folder — the FK would
+     * reject a dangling id anyway, but we fail cleanly with false instead.
+     */
+    public moveMeeting(meetingId: string, folderId: string | null): boolean {
+        if (!this.db) return false;
+        try {
+            if (folderId !== null) {
+                const folder = this.db.prepare('SELECT id FROM folders WHERE id = ?').get(folderId);
+                if (!folder) return false;
+            }
+            const info = this.db.prepare('UPDATE meetings SET folder_id = ? WHERE id = ?').run(folderId, meetingId);
+            if (info.changes > 0) console.log(`[DatabaseManager] Moved meeting ${meetingId} → folder ${folderId ?? 'root'}`);
+            return info.changes > 0;
+        } catch (error) {
+            console.error(`[DatabaseManager] Failed to move meeting ${meetingId}:`, error);
+            return false;
+        }
+    }
+
     public clearAllData(): boolean {
         if (!this.db) return false;
 
@@ -3504,6 +3698,7 @@ export class DatabaseManager {
                 this.db!.exec('DELETE FROM ai_interactions');
                 this.db!.exec('DELETE FROM transcripts');
                 this.db!.exec('DELETE FROM meetings');
+                this.db!.exec('DELETE FROM folders');
             })();
 
             console.log('[DatabaseManager] All data cleared from database.');

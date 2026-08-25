@@ -66,6 +66,22 @@ const RU: Record<string, string> = {
     'see upcoming events': 'видеть предстоящие события',
     'Connect calendar': 'Подключить календарь',
 
+    // ── Meeting folders (v32) ──
+    'Folders': 'Папки',
+    'New Folder': 'Новая папка',
+    'Folder name': 'Название папки',
+    'Create': 'Создать',
+    'Cancel': 'Отмена',
+    'Rename': 'Переименовать',
+    'Delete folder': 'Удалить папку',
+    'Move': 'Переместить',
+    'Move to root': 'Переместить в корень',
+    'No folders yet': 'Папок пока нет',
+    'No meetings in this folder.': 'В этой папке нет встреч.',
+    'Delete this folder? Meetings inside will move to root.': 'Удалить эту папку? Встречи внутри будут перемещены в корень.',
+    'This will permanently delete the folder and everything inside it.': 'Это навсегда удалит папку и всё, что в ней находится.',
+    'Also delete the meetings inside this folder': 'Также удалить встречи внутри этой папки',
+
     // ── AI Providers ──
     'Pick a default model and connect the cloud, local, or custom providers you want available.':
         'Выберите модель по умолчанию и подключите нужные облачные, локальные или свои провайдеры.',

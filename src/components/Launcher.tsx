@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { useT } from '../i18n';
-import { ToggleLeft, ToggleRight, Search, Calendar, ArrowRight, ArrowLeft, MoreHorizontal, Globe, Clock, ChevronRight, Settings, LayoutGrid, RefreshCw, Eye, EyeOff, Ghost, Plus, Mail, Link as LinkIcon, ChevronDown, Trash2, Bell, Download, DownloadCloud, CheckCircle, AlertCircle, User, UserSearch, Sparkles, ArrowUpRight } from 'lucide-react';
+import { ToggleLeft, ToggleRight, Search, Calendar, ArrowRight, ArrowLeft, MoreHorizontal, Globe, Clock, ChevronRight, Settings, LayoutGrid, RefreshCw, Eye, EyeOff, Ghost, Plus, Mail, Link as LinkIcon, ChevronDown, Trash2, Bell, Download, DownloadCloud, CheckCircle, AlertCircle, User, UserSearch, Sparkles, ArrowUpRight, Folder, FolderPlus, FolderOpen, Check, Pencil, X } from 'lucide-react';
 import { generateMeetingPDF } from '../utils/pdfGenerator';
 import icon from "./icon.png";
 import LinkCalendarPrompt from './ui/LinkCalendarPrompt';
@@ -42,6 +42,15 @@ interface Meeting {
     active?: boolean; // UI state
     isLive?: boolean; // Live meeting note (v31): row created at Start, not yet finalized
     time?: string; // Optional for compatibility
+    folderId?: string | null; // Meeting folders (v32): null = root / main launcher list
+}
+
+// Meeting folders (v32) — single-level, Google-Drive style.
+interface Folder {
+    id: string;
+    name: string;
+    createdAt?: string;
+    meetingCount?: number;
 }
 
 interface LauncherProps {
@@ -91,6 +100,25 @@ const Launcher: React.FC<LauncherProps> = ({ onStartMeeting, onOpenSettings, onO
     const [isRefreshing, setIsRefreshing] = useState(false);
     const [showNotification, setShowNotification] = useState(false);
 
+    // ── Meeting folders (v32) — Google-Drive style organization ──
+    const [folders, setFolders] = useState<Folder[]>([]);
+    const [currentFolderId, setCurrentFolderId] = useState<string | null>(null);
+    // Ref mirror of currentFolderId so the mount-only onMeetingsUpdated listener
+    // always refetches for the CURRENT folder, not the one from first render.
+    const currentFolderIdRef = useRef<string | null>(null);
+    // Global (all-folder) meeting list — feeds the header search pill so
+    // searching from inside a folder still finds meetings elsewhere.
+    const [allMeetings, setAllMeetings] = useState<Meeting[]>([]);
+    // Folder / move dialogs
+    const [folderDialog, setFolderDialog] = useState<{ mode: 'create' | 'rename'; folderId?: string } | null>(null);
+    const [folderNameInput, setFolderNameInput] = useState('');
+    const [deleteFolderId, setDeleteFolderId] = useState<string | null>(null);
+    // Delete-folder dialog: when checked, contained meetings are permanently
+    // deleted along with the folder (instead of moving back to root).
+    const [deleteMeetingsCheck, setDeleteMeetingsCheck] = useState(false);
+    const [moveMeetingId, setMoveMeetingId] = useState<string | null>(null);
+    const [folderMenuId, setFolderMenuId] = useState<string | null>(null);
+
     // Global search state (for AI chat overlay)
     const [isGlobalChatOpen, setIsGlobalChatOpen] = useState(false);
     const [submittedGlobalQuery, setSubmittedGlobalQuery] = useState('');
@@ -102,10 +130,31 @@ const Launcher: React.FC<LauncherProps> = ({ onStartMeeting, onOpenSettings, onO
     // intentionally double-invokes effects to surface this class of bug.
     const mountedOnceRef = useRef<boolean>(false);
 
-    const fetchMeetings = () => {
+    const fetchMeetings = (folderId: string | null) => {
         if (window.electronAPI && window.electronAPI.getRecentMeetings) {
-            window.electronAPI.getRecentMeetings().then(setMeetings).catch(err => console.error("Failed to fetch meetings:", err));
+            window.electronAPI.getRecentMeetings(folderId).then(setMeetings).catch(err => console.error("Failed to fetch meetings:", err));
         }
+    };
+
+    const fetchAllMeetings = () => {
+        if (window.electronAPI && window.electronAPI.getRecentMeetings) {
+            window.electronAPI.getRecentMeetings().then(setAllMeetings).catch(err => console.error("Failed to fetch all meetings:", err));
+        }
+    };
+
+    const fetchFolders = () => {
+        if (window.electronAPI && window.electronAPI.listFolders) {
+            window.electronAPI.listFolders().then(setFolders).catch(err => console.error("Failed to fetch folders:", err));
+        }
+    };
+
+    // Refetch folders + global search list + the folder-scoped meeting list.
+    // Used on mount and on every 'meetings-updated' broadcast (folder CRUD and
+    // meeting moves all broadcast it).
+    const refreshData = () => {
+        fetchFolders();
+        fetchAllMeetings();
+        fetchMeetings(currentFolderIdRef.current);
     };
 
     const fetchEvents = () => {
@@ -122,7 +171,7 @@ const Launcher: React.FC<LauncherProps> = ({ onStartMeeting, onOpenSettings, onO
                 setShowNotification(true);
                 await window.electronAPI.calendarRefresh();
                 fetchEvents();
-                fetchMeetings();
+                fetchMeetings(currentFolderIdRef.current);
                 setTimeout(() => {
                     setShowNotification(false);
                 }, 3000);
@@ -190,7 +239,7 @@ const Launcher: React.FC<LauncherProps> = ({ onStartMeeting, onOpenSettings, onO
             });
         }
 
-        fetchMeetings();
+        refreshData();
         fetchEvents();
 
         // Calendar link prompt visibility — drive off the persisted connection state
@@ -219,7 +268,7 @@ const Launcher: React.FC<LauncherProps> = ({ onStartMeeting, onOpenSettings, onO
         // Listen for background updates (e.g. after meeting processing finishes)
         const removeMeetingsListener = window.electronAPI.onMeetingsUpdated(() => {
             console.log("Received meetings-updated event");
-            fetchMeetings();
+            refreshData();
         });
 
         // Simple polling for events every minute (feeds the Upcoming Calendar card peek stack)
@@ -323,6 +372,11 @@ const Launcher: React.FC<LauncherProps> = ({ onStartMeeting, onOpenSettings, onO
         return new Date(b).getTime() - new Date(a).getTime();
     });
 
+    // Folders (v32): the folder currently open, for the breadcrumb header.
+    const currentFolder = folders.find(f => f.id === currentFolderId) ?? null;
+    // The folder pending deletion, for the delete-confirmation dialog.
+    const deleteTargetFolder = folders.find(f => f.id === deleteFolderId) ?? null;
+
 
     const [forwardMeeting, setForwardMeeting] = useState<Meeting | null>(null);
     const [activeMenuId, setActiveMenuId] = useState<string | null>(null);
@@ -334,7 +388,7 @@ const Launcher: React.FC<LauncherProps> = ({ onStartMeeting, onOpenSettings, onO
 
     // Global click listener to close menu
     useEffect(() => {
-        const handleClickOutside = () => setActiveMenuId(null);
+        const handleClickOutside = () => { setActiveMenuId(null); setFolderMenuId(null); };
         window.addEventListener('click', handleClickOutside);
         return () => window.removeEventListener('click', handleClickOutside);
     }, []);
@@ -392,6 +446,95 @@ const Launcher: React.FC<LauncherProps> = ({ onStartMeeting, onOpenSettings, onO
         }
     };
 
+    // ── Meeting folders (v32) ────────────────────────────────────────────
+    // Set the open folder in React state AND mirror it to the main process so
+    // meetings started from ANY surface (launcher CTA, pill mic, hotkey,
+    // calendar auto-start) land in this folder. IPC ordering guarantees the
+    // sync lands before a subsequent start-meeting invoke from this renderer.
+    const applyFolder = (folderId: string | null) => {
+        currentFolderIdRef.current = folderId;
+        setCurrentFolderId(folderId);
+        try {
+            window.electronAPI?.setCurrentFolder?.(folderId)?.catch(() => {});
+        } catch { /* non-fatal */ }
+    };
+
+    const handleOpenFolder = (folderId: string) => {
+        analytics.trackCommandExecuted('open_meeting_folder');
+        applyFolder(folderId);
+        fetchMeetings(folderId);
+        setActiveMenuId(null);
+        setFolderMenuId(null);
+    };
+
+    const handleGoToRoot = () => {
+        applyFolder(null);
+        fetchMeetings(null);
+    };
+
+    // If the currently-open folder disappears (deleted from this window's own
+    // confirm dialog, or from another window), drop back to the root view.
+    useEffect(() => {
+        if (currentFolderId && folders.length > 0 && !folders.some(f => f.id === currentFolderId)) {
+            applyFolder(null);
+            fetchMeetings(null);
+        }
+        // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, [folders, currentFolderId]);
+
+    // ── Folder dialogs (create / rename / delete / move) ────────────────
+    const openCreateFolderDialog = () => {
+        setFolderNameInput('');
+        setFolderDialog({ mode: 'create' });
+    };
+
+    const openRenameFolderDialog = (folder: Folder) => {
+        setFolderNameInput(folder.name);
+        setFolderDialog({ mode: 'rename', folderId: folder.id });
+    };
+
+    const handleFolderDialogSubmit = async () => {
+        const name = folderNameInput.trim();
+        if (!name || !folderDialog) return;
+        try {
+            if (folderDialog.mode === 'create') {
+                await window.electronAPI?.createFolder?.(name);
+            } else if (folderDialog.folderId) {
+                await window.electronAPI?.renameFolder?.(folderDialog.folderId, name);
+            }
+        } catch (err) {
+            console.error("[Launcher] Folder create/rename failed:", err);
+        }
+        setFolderDialog(null);
+        refreshData();
+    };
+
+    const handleDeleteFolder = async (folderId: string, deleteMeetings: boolean) => {
+        try {
+            await window.electronAPI?.deleteFolder?.(folderId, { deleteMeetings });
+        } catch (err) {
+            console.error("[Launcher] Folder delete failed:", err);
+        }
+        setDeleteFolderId(null);
+        setDeleteMeetingsCheck(false);
+        setFolderMenuId(null);
+        // Mirror main's current-folder reset when deleting the open folder.
+        if (currentFolderIdRef.current === folderId) applyFolder(null);
+        refreshData();
+    };
+
+    const handleMoveMeeting = async (meetingId: string, folderId: string | null) => {
+        let ok = false;
+        try {
+            const res = await window.electronAPI?.moveMeetingToFolder?.(meetingId, folderId);
+            ok = !!res?.success;
+        } catch (err) {
+            console.error("[Launcher] Move meeting failed:", err);
+        }
+        setMoveMeetingId(null);
+        if (ok) refreshData();
+    };
+
     // Helper to format duration to mm:ss or mmm:ss
     // Helper to format duration to mm:ss or mmm:ss
     const formatDurationPill = (durationStr: string) => {
@@ -422,13 +565,14 @@ const Launcher: React.FC<LauncherProps> = ({ onStartMeeting, onOpenSettings, onO
                 <div className="flex items-center gap-1 no-drag">
                     {isMac && <div className="w-[70px]" />} {/* Traffic Light Spacer (macOS only) */}
 
-                    {/* Back Button */}
+                    {/* Back Button — closes meeting details, or (folders v32)
+                        steps up from an open folder back to the root view */}
                     <button
-                        onClick={selectedMeeting ? handleBack : undefined}
-                        disabled={!selectedMeeting}
+                        onClick={selectedMeeting ? handleBack : (currentFolderId ? handleGoToRoot : undefined)}
+                        disabled={!selectedMeeting && !currentFolderId}
                         className={`
                             transition-all duration-300 p-1 flex items-center justify-center mt-1 ml-2
-                            ${selectedMeeting
+                            ${selectedMeeting || currentFolderId
                                 ? `text-text-secondary hover:text-text-primary ${isLight ? 'hover:drop-shadow-[0_0_6px_rgba(0,0,0,0.25)]' : 'hover:drop-shadow-[0_0_8px_rgba(255,255,255,0.5)]'}`
                                 : 'text-text-tertiary opacity-50 cursor-default'}
                         `}
@@ -454,7 +598,7 @@ const Launcher: React.FC<LauncherProps> = ({ onStartMeeting, onOpenSettings, onO
 
                 {/* Center: Spotlight-style Search Pill */}
                 <TopSearchPill
-                    meetings={meetings}
+                    meetings={allMeetings}
                     onAIQuery={(query) => {
                         analytics.trackCommandExecuted('ai_query_search');
                         emitOrchestratorEvent({ type: 'turn:done', surface: 'chat' });
@@ -481,7 +625,7 @@ const Launcher: React.FC<LauncherProps> = ({ onStartMeeting, onOpenSettings, onO
                                 const resp = await window.electronAPI.searchGlobalMeetings?.(query);
                                 if (resp?.enabled && Array.isArray(resp.results) && resp.results.length > 0) {
                                     const top = resp.results[0];
-                                    const meeting = meetings.find((m) => m.id === top.meetingId);
+                                    const meeting = allMeetings.find((m) => m.id === top.meetingId);
                                     if (meeting) {
                                         handleOpenMeeting(meeting);
                                         return;
@@ -492,7 +636,7 @@ const Launcher: React.FC<LauncherProps> = ({ onStartMeeting, onOpenSettings, onO
                         })();
                     }}
                     onOpenMeeting={(meetingId) => {
-                        const meeting = meetings.find(m => m.id === meetingId);
+                        const meeting = allMeetings.find(m => m.id === meetingId);
                         if (meeting) {
                             handleOpenMeeting(meeting);
                             analytics.trackCommandExecuted('open_meeting_from_search');
@@ -984,6 +1128,142 @@ const Launcher: React.FC<LauncherProps> = ({ onStartMeeting, onOpenSettings, onO
                                 <section className="px-8 py-8 min-h-full">
                                     <div className="max-w-4xl mx-auto space-y-8">
 
+                                        {/* Folder breadcrumb + actions (folders v32) — inside a folder */}
+                                        {currentFolderId && (
+                                            <div className="flex items-center gap-1.5 pl-1">
+                                                <button
+                                                    onClick={handleGoToRoot}
+                                                    className={`flex items-center gap-1 text-[13px] font-medium text-text-secondary hover:text-text-primary transition-colors px-2 py-1 rounded-lg ${isLight ? 'hover:bg-black/8' : 'hover:bg-white/10'}`}
+                                                >
+                                                    <ArrowLeft size={14} />
+                                                    {t('My Natively')}
+                                                </button>
+                                                <ChevronRight size={13} className="text-text-tertiary" />
+                                                <span className="text-[13px] font-medium text-text-primary flex items-center gap-1.5 px-1">
+                                                    <Folder size={14} className="text-accent-primary" />
+                                                    {currentFolder?.name ?? ''}
+                                                </span>
+
+                                                {/* Folder actions (rename / delete) */}
+                                                <div className="relative ml-auto">
+                                                    <button
+                                                        className="p-1.5 text-text-secondary hover:text-text-primary transition-colors rounded-lg"
+                                                        onClick={(e) => {
+                                                            e.stopPropagation();
+                                                            setFolderMenuId(folderMenuId === currentFolderId ? null : currentFolderId);
+                                                        }}
+                                                    >
+                                                        <MoreHorizontal size={16} />
+                                                    </button>
+                                                    <AnimatePresence>
+                                                        {folderMenuId === currentFolderId && currentFolder && (
+                                                            <motion.div
+                                                                key={`folder-menu-${currentFolder.id}`}
+                                                                initial={{ opacity: 0, scale: 0.95, y: 6 }}
+                                                                animate={{ opacity: 1, scale: 1, y: 0 }}
+                                                                exit={{ opacity: 0, scale: 0.95, y: 4 }}
+                                                                transition={{ duration: 0.1 }}
+                                                                className={`absolute right-0 top-full mt-1 w-[140px] backdrop-blur-xl rounded-lg shadow-2xl z-50 overflow-hidden border ${isLight ? 'bg-bg-elevated border-border-muted shadow-[0_8px_24px_rgba(0,0,0,0.12)]' : 'bg-[#1E1E1E]/80 border-white/10'}`}
+                                                                onClick={(e) => e.stopPropagation()}
+                                                            >
+                                                                <div className="p-1 flex flex-col gap-0.5">
+                                                                    <button
+                                                                        onClick={() => { openRenameFolderDialog(currentFolder); setFolderMenuId(null); }}
+                                                                        className={`w-full flex items-center gap-2 px-3 py-1.5 text-[12px] text-text-primary rounded-lg transition-colors text-left ${isLight ? 'hover:bg-bg-item-surface' : 'hover:bg-white/10'}`}
+                                                                    >
+                                                                        <Pencil size={13} />
+                                                                        {t('Rename')}
+                                                                    </button>
+                                                                    <button
+                                                                        onClick={() => { setDeleteMeetingsCheck(false); setDeleteFolderId(currentFolder.id); setFolderMenuId(null); }}
+                                                                        className="w-full flex items-center gap-2 px-3 py-1.5 text-[12px] text-red-400 hover:bg-red-500/10 hover:text-red-300 rounded-lg transition-colors text-left"
+                                                                    >
+                                                                        <Trash2 size={13} />
+                                                                        {t('Delete folder')}
+                                                                    </button>
+                                                                </div>
+                                                            </motion.div>
+                                                        )}
+                                                    </AnimatePresence>
+                                                </div>
+                                            </div>
+                                        )}
+
+                                        {/* Folders section (folders v32) — root view only */}
+                                        {!currentFolderId && (
+                                            <section>
+                                                <div className="flex items-center justify-between mb-3 pl-1">
+                                                    <h3 className="text-[13px] font-medium text-text-secondary flex items-center gap-1.5">
+                                                        <Folder size={13} />
+                                                        {t('Folders')}
+                                                    </h3>
+                                                    <button
+                                                        onClick={openCreateFolderDialog}
+                                                        className={`flex items-center gap-1.5 text-[12px] font-semibold px-3 py-1.5 rounded-full transition-all duration-200 active:scale-95 ${isLight ? 'bg-black/5 hover:bg-black/10 text-text-primary' : 'bg-white/10 hover:bg-white/15 text-text-primary'}`}
+                                                    >
+                                                        <FolderPlus size={13} />
+                                                        {t('New Folder')}
+                                                    </button>
+                                                </div>
+
+                                                {folders.length === 0 ? (
+                                                    <p className="pl-1 text-text-tertiary text-xs">{t('No folders yet')}</p>
+                                                ) : (
+                                                    <div className="grid grid-cols-2 sm:grid-cols-3 gap-2">
+                                                        {folders.map((f) => (
+                                                            <div
+                                                                key={f.id}
+                                                                onClick={() => handleOpenFolder(f.id)}
+                                                                className={`group relative flex items-center gap-2.5 px-3 py-2.5 rounded-xl cursor-pointer transition-colors select-none bg-accent-subtle hover:bg-accent-muted border border-accent-border`}
+                                                            >
+                                                                <Folder size={18} className="text-accent-primary shrink-0" />
+                                                                <div className="flex-1 min-w-0">
+                                                                    <div className="text-[13px] font-medium text-text-primary truncate">{f.name}</div>
+                                                                    <div className="text-[11px] text-text-tertiary">{f.meetingCount ?? 0}</div>
+                                                                </div>
+                                                                <button
+                                                                    className="p-1 text-text-tertiary hover:text-text-primary transition-colors opacity-0 group-hover:opacity-100"
+                                                                    onClick={(e) => { e.stopPropagation(); setFolderMenuId(folderMenuId === f.id ? null : f.id); }}
+                                                                >
+                                                                    <MoreHorizontal size={14} />
+                                                                </button>
+                                                                <AnimatePresence>
+                                                                    {folderMenuId === f.id && (
+                                                                        <motion.div
+                                                                            key={`folder-menu-${f.id}`}
+                                                                            initial={{ opacity: 0, scale: 0.95, y: 6 }}
+                                                                            animate={{ opacity: 1, scale: 1, y: 0 }}
+                                                                            exit={{ opacity: 0, scale: 0.95, y: 4 }}
+                                                                            transition={{ duration: 0.1 }}
+                                                                            className={`absolute right-0 top-full mt-1 w-[140px] backdrop-blur-xl rounded-lg shadow-2xl z-50 overflow-hidden border ${isLight ? 'bg-bg-elevated border-border-muted shadow-[0_8px_24px_rgba(0,0,0,0.12)]' : 'bg-[#1E1E1E]/80 border-white/10'}`}
+                                                                            onClick={(e) => e.stopPropagation()}
+                                                                        >
+                                                                            <div className="p-1 flex flex-col gap-0.5">
+                                                                                <button
+                                                                                    onClick={() => { openRenameFolderDialog(f); setFolderMenuId(null); }}
+                                                                                    className={`w-full flex items-center gap-2 px-3 py-1.5 text-[12px] text-text-primary rounded-lg transition-colors text-left ${isLight ? 'hover:bg-bg-item-surface' : 'hover:bg-white/10'}`}
+                                                                                >
+                                                                                    <Pencil size={13} />
+                                                                                    {t('Rename')}
+                                                                                </button>
+                                                                                <button
+                                                                                    onClick={() => { setDeleteMeetingsCheck(false); setDeleteFolderId(f.id); setFolderMenuId(null); }}
+                                                                                    className="w-full flex items-center gap-2 px-3 py-1.5 text-[12px] text-red-400 hover:bg-red-500/10 hover:text-red-300 rounded-lg transition-colors text-left"
+                                                                                >
+                                                                                    <Trash2 size={13} />
+                                                                                    {t('Delete folder')}
+                                                                                </button>
+                                                                            </div>
+                                                                        </motion.div>
+                                                                    )}
+                                                                </AnimatePresence>
+                                                            </div>
+                                                        ))}
+                                                    </div>
+                                                )}
+                                            </section>
+                                        )}
+
                                         {/* Iterating Date Groups */}
                                         {sortedGroups.map((label) => (
                                             <section key={label}>
@@ -1058,6 +1338,16 @@ const Launcher: React.FC<LauncherProps> = ({ onStartMeeting, onOpenSettings, onO
                                                                         <div className="p-1 flex flex-col gap-0.5">
                                                                             <button
                                                                                 className={`w-full flex items-center gap-2 px-3 py-1.5 text-[12px] text-text-primary rounded-lg transition-colors text-left ${isLight ? 'hover:bg-bg-item-surface' : 'hover:bg-white/10'}`}
+                                                                                onClick={() => {
+                                                                                    setActiveMenuId(null);
+                                                                                    setMoveMeetingId(m.id);
+                                                                                }}
+                                                                            >
+                                                                                <Folder size={13} />
+                                                                                {t('Move')}
+                                                                            </button>
+                                                                            <button
+                                                                                className={`w-full flex items-center gap-2 px-3 py-1.5 text-[12px] text-text-primary rounded-lg transition-colors text-left ${isLight ? 'hover:bg-bg-item-surface' : 'hover:bg-white/10'}`}
                                                                                 onClick={async () => {
                                                                                     setActiveMenuId(null);
                                                                                     analytics.trackPdfExported();
@@ -1109,7 +1399,7 @@ const Launcher: React.FC<LauncherProps> = ({ onStartMeeting, onOpenSettings, onO
                                         ))}
 
                                         {meetings.length === 0 && (
-                                            <div className="p-4 text-text-tertiary text-sm">{t('No recent meetings.')}</div>
+                                            <div className="p-4 text-text-tertiary text-sm">{currentFolderId ? t('No meetings in this folder.') : t('No recent meetings.')}</div>
                                         )}
 
                                     </div>
@@ -1160,6 +1450,197 @@ const Launcher: React.FC<LauncherProps> = ({ onStartMeeting, onOpenSettings, onO
                 }}
                 initialQuery={submittedGlobalQuery}
             />
+
+            {/* ── Folder dialogs (v32) ─────────────────────────────────────── */}
+
+            {/* Create / rename folder dialog */}
+            <AnimatePresence>
+                {folderDialog && (
+                    <motion.div
+                        key="folder-name-dialog"
+                        className="fixed inset-0 z-[3000] flex items-center justify-center bg-black/40 backdrop-blur-sm"
+                        initial={{ opacity: 0 }}
+                        animate={{ opacity: 1 }}
+                        exit={{ opacity: 0 }}
+                        onClick={() => setFolderDialog(null)}
+                    >
+                        <motion.div
+                            initial={{ opacity: 0, scale: 0.96, y: 12 }}
+                            animate={{ opacity: 1, scale: 1, y: 0 }}
+                            exit={{ opacity: 0, scale: 0.96, y: 8 }}
+                            transition={{ type: 'spring', stiffness: 380, damping: 30 }}
+                            onClick={(e) => e.stopPropagation()}
+                            className={`w-[320px] rounded-2xl p-5 backdrop-blur-xl border shadow-2xl ${isLight ? 'bg-bg-elevated border-border-muted shadow-[0_16px_48px_rgba(0,0,0,0.18)]' : 'bg-[#1E1E1E]/90 border-white/10 shadow-[0_16px_48px_rgba(0,0,0,0.6)]'}`}
+                        >
+                            <div className="flex items-center justify-between mb-4">
+                                <h3 className="text-[15px] font-semibold text-text-primary flex items-center gap-2">
+                                    <FolderPlus size={16} className="text-accent-primary" />
+                                    {folderDialog.mode === 'create' ? t('New Folder') : t('Rename')}
+                                </h3>
+                                <button onClick={() => setFolderDialog(null)} className="p-1 text-text-tertiary hover:text-text-primary transition-colors rounded-lg">
+                                    <X size={15} />
+                                </button>
+                            </div>
+                            <input
+                                autoFocus
+                                value={folderNameInput}
+                                onChange={(e) => setFolderNameInput(e.target.value)}
+                                onKeyDown={(e) => {
+                                    if (e.key === 'Enter') { e.preventDefault(); handleFolderDialogSubmit(); }
+                                    if (e.key === 'Escape') setFolderDialog(null);
+                                }}
+                                placeholder={t('Folder name')}
+                                className={`w-full px-3 py-2 rounded-xl text-[13px] outline-none border transition-colors ${isLight ? 'bg-bg-input border-border-muted text-text-primary placeholder:text-text-tertiary focus:border-accent-primary' : 'bg-white/5 border-white/10 text-text-primary placeholder:text-text-tertiary focus:border-accent-primary'}`}
+                            />
+                            <div className="flex justify-end gap-2 mt-4">
+                                <button
+                                    onClick={() => setFolderDialog(null)}
+                                    className="px-3.5 py-1.5 rounded-full text-[12px] font-medium text-text-secondary hover:text-text-primary transition-colors"
+                                >
+                                    {t('Cancel')}
+                                </button>
+                                <button
+                                    disabled={!folderNameInput.trim()}
+                                    onClick={handleFolderDialogSubmit}
+                                    className={`px-4 py-1.5 rounded-full text-[12px] font-semibold transition-all active:scale-95 ${folderNameInput.trim() ? 'bg-accent-primary text-white hover:brightness-110' : 'bg-bg-toggle-switch text-text-tertiary cursor-default'}`}
+                                >
+                                    {folderDialog.mode === 'create' ? t('Create') : t('Save')}
+                                </button>
+                            </div>
+                        </motion.div>
+                    </motion.div>
+                )}
+            </AnimatePresence>
+
+            {/* Delete folder confirmation dialog */}
+            <AnimatePresence>
+                {deleteFolderId && (
+                    <motion.div
+                        key="folder-delete-dialog"
+                        className="fixed inset-0 z-[3000] flex items-center justify-center bg-black/40 backdrop-blur-sm"
+                        initial={{ opacity: 0 }}
+                        animate={{ opacity: 1 }}
+                        exit={{ opacity: 0 }}
+                        onClick={() => { setDeleteFolderId(null); setDeleteMeetingsCheck(false); }}
+                    >
+                        <motion.div
+                            initial={{ opacity: 0, scale: 0.96, y: 12 }}
+                            animate={{ opacity: 1, scale: 1, y: 0 }}
+                            exit={{ opacity: 0, scale: 0.96, y: 8 }}
+                            transition={{ type: 'spring', stiffness: 380, damping: 30 }}
+                            onClick={(e) => e.stopPropagation()}
+                            className={`w-[340px] rounded-2xl p-5 backdrop-blur-xl border shadow-2xl ${isLight ? 'bg-bg-elevated border-border-muted shadow-[0_16px_48px_rgba(0,0,0,0.18)]' : 'bg-[#1E1E1E]/90 border-white/10 shadow-[0_16px_48px_rgba(0,0,0,0.6)]'}`}
+                        >
+                            <div className="flex items-center justify-between mb-3">
+                                <h3 className="text-[15px] font-semibold text-text-primary flex items-center gap-2">
+                                    <Trash2 size={16} className="text-red-400" />
+                                    {t('Delete folder')}
+                                </h3>
+                                <button onClick={() => { setDeleteFolderId(null); setDeleteMeetingsCheck(false); }} className="p-1 text-text-tertiary hover:text-text-primary transition-colors rounded-lg">
+                                    <X size={15} />
+                                </button>
+                            </div>
+                            <p className={`text-[12.5px] leading-relaxed mb-3 ${deleteMeetingsCheck ? 'text-red-400/90' : 'text-text-secondary'}`}>
+                                {deleteMeetingsCheck
+                                    ? t('This will permanently delete the folder and everything inside it.')
+                                    : t('Delete this folder? Meetings inside will move to root.')}
+                            </p>
+
+                            {/* Optional: also delete the contained meetings (Google-Drive style). */}
+                            {(deleteTargetFolder?.meetingCount ?? 0) > 0 && (
+                                <label
+                                    className={`flex items-start gap-2.5 px-3 py-2.5 rounded-xl cursor-pointer select-none mb-4 ${deleteMeetingsCheck ? (isLight ? 'bg-red-500/10' : 'bg-red-500/15') : isLight ? 'hover:bg-black/5' : 'hover:bg-white/10'}`}
+                                >
+                                    <input
+                                        type="checkbox"
+                                        checked={deleteMeetingsCheck}
+                                        onChange={(e) => setDeleteMeetingsCheck(e.target.checked)}
+                                        className="mt-0.5 accent-red-500 shrink-0"
+                                    />
+                                    <span className="text-[12.5px] leading-snug text-text-secondary">
+                                        {t('Also delete the meetings inside this folder')}
+                                    </span>
+                                </label>
+                            )}
+
+                            <div className="flex justify-end gap-2">
+                                <button
+                                    onClick={() => { setDeleteFolderId(null); setDeleteMeetingsCheck(false); }}
+                                    className="px-3.5 py-1.5 rounded-full text-[12px] font-medium text-text-secondary hover:text-text-primary transition-colors"
+                                >
+                                    {t('Cancel')}
+                                </button>
+                                <button
+                                    onClick={() => handleDeleteFolder(deleteFolderId, deleteMeetingsCheck)}
+                                    className="px-4 py-1.5 rounded-full text-[12px] font-semibold text-white bg-red-500 hover:bg-red-400 transition-all active:scale-95"
+                                >
+                                    {t('Delete')}
+                                </button>
+                            </div>
+                        </motion.div>
+                    </motion.div>
+                )}
+            </AnimatePresence>
+
+            {/* Move meeting to folder dialog */}
+            <AnimatePresence>
+                {moveMeetingId && (
+                    <motion.div
+                        key="move-meeting-dialog"
+                        className="fixed inset-0 z-[3000] flex items-center justify-center bg-black/40 backdrop-blur-sm"
+                        initial={{ opacity: 0 }}
+                        animate={{ opacity: 1 }}
+                        exit={{ opacity: 0 }}
+                        onClick={() => setMoveMeetingId(null)}
+                    >
+                        <motion.div
+                            initial={{ opacity: 0, scale: 0.96, y: 12 }}
+                            animate={{ opacity: 1, scale: 1, y: 0 }}
+                            exit={{ opacity: 0, scale: 0.96, y: 8 }}
+                            transition={{ type: 'spring', stiffness: 380, damping: 30 }}
+                            onClick={(e) => e.stopPropagation()}
+                            className={`w-[320px] rounded-2xl p-5 backdrop-blur-xl border shadow-2xl ${isLight ? 'bg-bg-elevated border-border-muted shadow-[0_16px_48px_rgba(0,0,0,0.18)]' : 'bg-[#1E1E1E]/90 border-white/10 shadow-[0_16px_48px_rgba(0,0,0,0.6)]'}`}
+                        >
+                            <div className="flex items-center justify-between mb-4">
+                                <h3 className="text-[15px] font-semibold text-text-primary flex items-center gap-2">
+                                    <Folder size={16} className="text-accent-primary" />
+                                    {t('Move')}
+                                </h3>
+                                <button onClick={() => setMoveMeetingId(null)} className="p-1 text-text-tertiary hover:text-text-primary transition-colors rounded-lg">
+                                    <X size={15} />
+                                </button>
+                            </div>
+                            <div className="flex flex-col gap-1 max-h-[280px] overflow-y-auto custom-scrollbar pr-1">
+                                <button
+                                    onClick={() => handleMoveMeeting(moveMeetingId, null)}
+                                    className={`flex items-center gap-2.5 px-3 py-2 rounded-xl text-[13px] text-text-primary transition-colors text-left ${isLight ? 'hover:bg-black/5' : 'hover:bg-white/10'}`}
+                                >
+                                    <FolderOpen size={15} className="text-text-secondary shrink-0" />
+                                    {t('Move to root')}
+                                </button>
+                                {folders.length === 0 && (
+                                    <p className="px-3 py-2 text-[12px] text-text-tertiary">{t('No folders yet')}</p>
+                                )}
+                                {folders.map((f) => {
+                                    const isCurrent = f.id === currentFolderId;
+                                    return (
+                                        <button
+                                            key={f.id}
+                                            disabled={isCurrent}
+                                            onClick={() => handleMoveMeeting(moveMeetingId, f.id)}
+                                            className={`flex items-center gap-2.5 px-3 py-2 rounded-xl text-[13px] transition-colors text-left ${isCurrent ? 'text-text-tertiary cursor-default' : isLight ? 'text-text-primary hover:bg-black/5' : 'text-text-primary hover:bg-white/10'}`}
+                                        >
+                                            <Folder size={15} className="text-accent-primary shrink-0" />
+                                            <span className="flex-1 truncate">{f.name}</span>
+                                            {isCurrent && <Check size={14} className="text-accent-primary shrink-0" />}
+                                        </button>
+                                    );
+                                })}
+                            </div>
+                        </motion.div>
+                    </motion.div>
+                )}
+            </AnimatePresence>
         </div >
     );
 };

@@ -1429,6 +1429,12 @@ export class AppState {
   private _liveMeetingId: string | null = null;
   private _liveFlushTimer: NodeJS.Timeout | null = null;
   private static readonly LIVE_NOTE_FLUSH_MS = 5000;
+  // MEETING FOLDERS (v32): the folder currently open in the launcher window.
+  // Any meeting start path (launcher CTA, pill mic button, global shortcut,
+  // calendar auto-start) without an explicit folderId lands here; null = root
+  // (the main launcher list). In-memory only — resets to root on app restart,
+  // matching "no folder open ⇒ meeting goes to the main launcher".
+  private _currentFolderId: string | null = null;
   private _isQuitting: boolean = false;
   private _verboseLogging: boolean = false;
   private _ambientChatEnabled: boolean = false;
@@ -5775,6 +5781,19 @@ export class AppState {
     return this._meetingLifecycle.start(() => this.startMeetingTransition(metadata));
   }
 
+  // ── Meeting folders (v32) ─────────────────────────────────────────────
+  // The launcher window reports which folder is open; every meeting start
+  // without an explicit folderId goes there. Single source of truth in the
+  // main process so pill/hotkey/calendar starts honor the open folder too.
+  public getCurrentFolderId(): string | null {
+    return this._currentFolderId;
+  }
+
+  public setCurrentFolderId(folderId: string | null): void {
+    this._currentFolderId = folderId;
+    console.log(`[Main] Current meeting folder set to ${folderId ?? 'root'}`);
+  }
+
   /**
    * One structured line per lifecycle boundary. Database availability is
    * included because a closed singleton is invisible at the call site —
@@ -6148,6 +6167,11 @@ export class AppState {
         isProcessed: false,
         summaryStatus: 'queued',
         isLive: true,
+        // MEETING FOLDERS (v32): an explicit metadata.folderId wins; otherwise
+        // the meeting lands in the folder currently open in the launcher
+        // (null = root / main launcher list). `!== undefined` (not `??`) so an
+        // explicit null is honored and never replaced by the stored folder.
+        folderId: metadata?.folderId !== undefined ? metadata.folderId : this.getCurrentFolderId(),
       }, startTime, 0);
 
       this._liveMeetingId = liveId;

@@ -356,7 +356,9 @@ export interface ElectronAPI {
   debugInjectTranscript: (segments: Array<{ speaker?: string; text: string; timestamp?: number; confidence?: number }>)
     => Promise<{ success: boolean; injected?: number; error?: string }>
   finalizeMicSTT: () => Promise<void>
-  getRecentMeetings: () => Promise<Array<{ id: string; title: string; date: string; duration: string; summary: string; isLive?: boolean }>>
+  // Folders (v32): folderId === undefined → all meetings (global search);
+  // null → root only; string → that folder's meetings.
+  getRecentMeetings: (folderId?: string | null) => Promise<Array<{ id: string; title: string; date: string; duration: string; summary: string; isLive?: boolean; folderId?: string | null }>>
   getMeetingDetails: (id: string) => Promise<any>
   searchGlobalMeetings: (query: string, filters?: any) => Promise<{ enabled: boolean; results: any[] }>
   searchInMeeting: (query: string) => Promise<{ enabled: boolean; results: any[] }>
@@ -378,6 +380,16 @@ export interface ElectronAPI {
   regenerateMeetingFollowUp: (id: string, tone?: 'professional' | 'warm' | 'concise' | 'friendly') => Promise<{ success: boolean; error?: string }>
   updateMeetingSpeakerLabels: (id: string, labels: Record<string, string>) => Promise<{ success: boolean; labels?: Record<string, string>; error?: string }>
   deleteMeeting: (id: string) => Promise<boolean>
+
+  // Meeting Folders (v32)
+  listFolders: () => Promise<Array<{ id: string; name: string; createdAt?: string; meetingCount?: number }>>
+  createFolder: (name: string) => Promise<{ success: boolean; folder?: { id: string; name: string; createdAt?: string }; error?: string }>
+  renameFolder: (id: string, name: string) => Promise<{ success: boolean }>
+  // opts.deleteMeetings=true permanently deletes the meetings inside the folder too.
+  deleteFolder: (id: string, opts?: { deleteMeetings?: boolean }) => Promise<{ success: boolean }>
+  moveMeetingToFolder: (meetingId: string, folderId: string | null) => Promise<{ success: boolean }>
+  setCurrentFolder: (folderId: string | null) => Promise<{ success: boolean }>
+
   setWindowMode: (mode: 'launcher' | 'overlay', inactive?: boolean) => Promise<void>
   setMeetingInterfaceTheme: (theme: string) => void
   onMeetingInterfaceThemeChanged: (callback: (theme: string) => void) => () => void

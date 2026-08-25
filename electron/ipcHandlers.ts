@@ -9268,14 +9268,75 @@ export function initializeIpcHandlers(appState: AppState): void {
     return { success: true, injected };
   });
 
-  safeHandle('get-recent-meetings', async () => {
-    // Fetch from SQLite (limit 50)
-    return DatabaseManager.getInstance().getRecentMeetings(50);
+  safeHandle('get-recent-meetings', async (_event, folderId?: string | null) => {
+    // Folders (v32): folderId === undefined → all meetings (legacy consumers
+    // like global search); null → root only; string → that folder's meetings.
+    return DatabaseManager.getInstance().getRecentMeetings(50, folderId);
   });
 
   safeHandle('get-meeting-details', async (event, id) => {
     // Helper to fetch full details
     return DatabaseManager.getInstance().getMeetingDetails(id);
+  });
+
+  // ==========================================
+  // Meeting Folders (v32) — single-level, Google-Drive style
+  // ==========================================
+  // Every mutating handler broadcasts 'meetings-updated' so the launcher
+  // refreshes its meeting list AND folder list in one shot (the renderer's
+  // onMeetingsUpdated handler refetches both).
+
+  safeHandle('folders:list', async () => {
+    return DatabaseManager.getInstance().listFolders();
+  });
+
+  safeHandle('folders:create', async (_event, name: string) => {
+    const folder = DatabaseManager.getInstance().createFolder(name);
+    if (folder) {
+      appState.broadcast('meetings-updated');
+      return { success: true, folder };
+    }
+    return { success: false };
+  });
+
+  safeHandle('folders:rename', async (_event, id: string, name: string) => {
+    const ok = DatabaseManager.getInstance().renameFolder(id, name);
+    if (ok) appState.broadcast('meetings-updated');
+    return { success: ok };
+  });
+
+  safeHandle('folders:delete', async (_event, id: string, opts?: { deleteMeetings?: boolean }) => {
+    const ok = DatabaseManager.getInstance().deleteFolder(id, opts);
+    if (ok) {
+      // Deleting the folder that is currently open drops the launcher back to
+      // the root view (main-side state mirrors the renderer).
+      if (appState.getCurrentFolderId?.() === id) appState.setCurrentFolderId(null);
+      appState.broadcast('meetings-updated');
+    }
+    return { success: ok };
+  });
+
+  // Move a meeting into a folder (folderId) or back to root (null).
+  safeHandle('meetings:move', async (_event, meetingId: string, folderId: string | null) => {
+    const ok = DatabaseManager.getInstance().moveMeeting(meetingId, folderId);
+    if (ok) appState.broadcast('meetings-updated');
+    return { success: ok };
+  });
+
+  // Launcher reports which folder is open so every meeting start (including
+  // pill / shortcut / calendar starts outside the launcher renderer) lands in
+  // that folder. null = root. Unknown folder ids are rejected with success:false.
+  safeHandle('folders:set-current', async (_event, folderId: string | null) => {
+    if (folderId !== null) {
+      const db = DatabaseManager.getInstance();
+      const exists = db.listFolders().some(f => f.id === folderId);
+      if (!exists) {
+        appState.setCurrentFolderId(null);
+        return { success: false };
+      }
+    }
+    appState.setCurrentFolderId(folderId);
+    return { success: true };
   });
 
   // GLOBAL MEETING SEARCH V2 (Phase 9 wiring, behind global_search_v2_enabled).
