@@ -8907,7 +8907,10 @@ Provide only the answer, nothing else.`;
               </div>
 
               {/* Input Area */}
-              <div className="p-3 pt-0">
+              {/* When a meeting is not active the quick-actions row above is
+                  hidden, so give the input area a little top margin to keep it
+                  clear of the content above it. */}
+              <div className={`p-3 pt-0 ${!meetingActive ? 'mt-[10px]' : ''}`}>
                 {/* Latent Context Preview (Attached Screenshot) */}
                 {attachedContext.length > 0 && (
                   <div
