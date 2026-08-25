@@ -2255,7 +2255,7 @@ export class WindowHelper {
 
   // Show overlay directly without going through full switchToOverlay flow.
   // Used by IPC handlers to show the overlay independently.
-  public showOverlay(): void {
+  public showOverlay(inactive: boolean = false): void {
     if (!this.overlayWindow || this.overlayWindow.isDestroyed()) return;
     // If the pill was floating standalone (Ask click from an always-visible
     // pill), open the overlay RIGHT where the pill is — centered under it —
@@ -2282,9 +2282,11 @@ export class WindowHelper {
       this.overlayWindow.setAlwaysOnTop(true, 'screen-saver');
     }
 
-    if (this.appState.getOverlayMousePassthrough()) {
-      // In passthrough/stealth mode: appear on screen without stealing OS focus.
-      // The underlying app (Zoom, browser, etc.) must keep focus.
+    if (inactive || this.appState.getOverlayMousePassthrough()) {
+      // Inactive reveal (global-shortcut delivery) and passthrough/stealth
+      // mode share one path: appear on screen WITHOUT stealing OS focus. The
+      // underlying app (Zoom, browser, etc.) must keep focus — the user can
+      // click the overlay if they want to interact with the result.
       this.overlayWindow.showInactive();
     } else {
       // Normal interactive mode: show and focus so the user can click/type.
@@ -2753,13 +2755,22 @@ export class WindowHelper {
     }
   }
 
-  // --- Window Movement (Applies to Overlay mostly, but generalized to active) ---
+  // --- Window Movement (always drives the overlay group) ---
   private moveActiveWindow(dx: number, dy: number): void {
-    const win = this.getMainWindow();
-    if (!win) return;
+    // The move keys always move the overlay group (overlay + pill + toggle),
+    // matching meeting-mode behavior even with no meeting running: in
+    // launcher mode the pill floats standalone and the overlay chat may be
+    // shown via Ctrl+B, so the group is the surface the user means. The
+    // launcher window is never the target.
+    const win = this.overlayWindow;
+    if (!win || win.isDestroyed()) return;
 
     const [x, y] = win.getPosition();
     win.setPosition(x + dx, y + dy);
+    // The overlay 'move' listener re-seats the pill/toggle, but hidden-window
+    // moves are not guaranteed to emit it on every platform — re-seat
+    // explicitly with the same guards (idempotent, 1px tolerance inside).
+    if (!this.overlayGroupWelded && !this.auxSyncing) this.positionOverlayAuxWindows();
   }
 
   public moveWindowRight(): void {

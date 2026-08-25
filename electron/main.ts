@@ -1846,11 +1846,21 @@ export class AppState {
           // fire-and-forget event could be missed if the listener registration had any
           // timing gap. The invoke path used by generalHandlers.takeScreenshot() is
           // already proven to work for UI-button screenshots; reuse it here.
-          const mainWindow = this.getMainWindow();
-          this.sendToWindow(mainWindow, 'global-shortcut', { action: 'takeScreenshot' });
+          //
+          // Target the OVERLAY explicitly: the takeScreenshot listener lives in
+          // NativelyInterface, which only mounts there — getMainWindow() returns
+          // the launcher in launcher mode, where the message was silently dropped
+          // (Ctrl+H did nothing with no meeting running).
+          const overlay = this.windowHelper?.getOverlayWindow?.() ?? this.getMainWindow();
+          this.revealOverlayForGlobalShortcut();
+          this.sendToWindow(overlay, 'global-shortcut', { action: 'takeScreenshot' });
         } else if (actionId === 'general:selective-screenshot') {
-          const mainWindow = this.getMainWindow();
-          this.sendToWindow(mainWindow, 'global-shortcut', { action: 'selectiveScreenshot' });
+          // Same overlay-only listener as takeScreenshot — the capture session
+          // hides the overlay again while the cropper is up, so revealing here
+          // cannot leak the chat into the captured region.
+          const overlay = this.windowHelper?.getOverlayWindow?.() ?? this.getMainWindow();
+          this.revealOverlayForGlobalShortcut();
+          this.sendToWindow(overlay, 'global-shortcut', { action: 'selectiveScreenshot' });
         } else if (actionId === 'general:capture-and-process') {
           // Single-trigger: capture current screen then immediately request AI analysis
           await this.captureScreenAndProcess();
@@ -1963,13 +1973,23 @@ export class AppState {
           // on Linux, or (win32) while a CJK IME is active.
           const { StealthKeyboardManager } = require('./services/StealthKeyboardManager');
           const mgr = StealthKeyboardManager.getInstance();
-          // Capture the engaged state BEFORE showMainWindow: in launcher mode
-          // showMainWindow routes through switchToLauncher, which stops stealth,
-          // so a toggle() afterward would ALWAYS see inactive and always start
-          // (never disengage, and re-engage with the overlay hidden). Branch on
-          // the pre-show state instead of relying on toggle().
+          // Capture the engaged state BEFORE any window show: showing the
+          // overlay could, on some paths, re-run interaction-policy sync that
+          // stops stealth, so a toggle() afterward would ALWAYS see inactive
+          // and always start (never disengage). Branch on the pre-show state
+          // instead of relying on toggle().
           const wasStealthActive = mgr.isAvailable() && mgr.isActive();
-          this.showMainWindow(true);
+          if (this.windowHelper.getCurrentWindowMode() === 'overlay') {
+            this.showMainWindow(true);
+          } else {
+            // Launcher mode (no meeting): surface the overlay CHAT, not the
+            // launcher — showMainWindow would route through switchToLauncher,
+            // which stops the stealth tap we are about to start (and showing
+            // the launcher was never the point of a typing shortcut).
+            // Inactive: the hook/tap is the input path, so the overlay must
+            // not steal foreground from the app the user is "typing into".
+            this.revealOverlayForGlobalShortcut();
+          }
           const overlay = this.windowHelper.getOverlayWindow();
           this.sendToWindow(overlay, 'ensure-expanded');
           if (mgr.isAvailable()) {
@@ -2035,6 +2055,9 @@ export class AppState {
 
         // General actions that are now global (stealth)
         } else if (actionId === 'general:process-screenshots') {
+          // Registered in launcher mode too — reveal the chat so the AI
+          // answer isn't streaming into a hidden window (no-op when visible).
+          this.revealOverlayForGlobalShortcut();
           this.sendToMeetingSurfaces('global-shortcut', { action: 'processScreenshots' });
         } else if (actionId === 'general:reset-cancel') {
           this.sendToMeetingSurfaces('global-shortcut', { action: 'resetCancel' });
@@ -2255,6 +2278,22 @@ export class AppState {
     };
     sendOnce(this.windowHelper.getLauncherWindow());
     sendOnce(this.windowHelper.getOverlayWindow());
+  }
+
+  /**
+   * Reveal the overlay chat (INACTIVE — never steals focus) when a global
+   * shortcut's result lands there but the window is hidden. Used by shortcut
+   * routes whose listener lives only in NativelyInterface (the overlay
+   * renderer): without this the action fires into a hidden window and the
+   * hotkey looks dead (screenshot attached to nothing visible, AI answer
+   * streaming into the void). No-op when the overlay is already visible, so
+   * meeting-mode focus is never disturbed.
+   */
+  private revealOverlayForGlobalShortcut(): void {
+    const overlay = this.windowHelper?.getOverlayWindow?.();
+    if (overlay && !overlay.isDestroyed() && !overlay.isVisible()) {
+      this.windowHelper.showOverlay(true); // inactive — see showOverlay()
+    }
   }
 
   private sendToSettingsSurfaces(channel: string, ...args: any[]): void {
@@ -7152,15 +7191,20 @@ export class AppState {
   private async captureScreenAndProcess(): Promise<void> {
     const screenshotPath = await this.takeScreenshot(false);
     const preview = await this.getImagePreview(screenshotPath);
-    // Ensure the window is visible so the user can see the response without stealing focus
-    this.showMainWindow(true);
+    // Ensure the overlay chat is visible so the user can see the response —
+    // INACTIVE, without stealing focus (same semantics the old
+    // showMainWindow(true) had in overlay mode). The onCaptureAndProcess
+    // listener lives only in NativelyInterface (overlay); getMainWindow()
+    // returns the launcher in launcher mode, where the payload was dropped
+    // (Ctrl+Shift+Enter did nothing with no meeting running).
+    this.revealOverlayForGlobalShortcut();
     // win.focus() can cause macOS to re-activate the app. Re-hide the dock
     // if we are in undetectable mode.
     if (process.platform === 'darwin' && this.isUndetectable) {
       if (app.dock) app.dock.hide();  // app.dock is macOS-only (undefined elsewhere); darwin+isUndetectable gated at 6599
     }
-    const mainWindow = this.getMainWindow();
-    this.sendToWindow(mainWindow, 'capture-and-process', {
+    const overlay = this.windowHelper?.getOverlayWindow?.() ?? this.getMainWindow();
+    this.sendToWindow(overlay, 'capture-and-process', {
       path: screenshotPath,
       preview,
     });

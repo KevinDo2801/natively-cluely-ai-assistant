@@ -121,6 +121,25 @@ export class KeybindManager {
         // as the screenshot shortcuts — it's a global capture trigger).
         if (actionId === 'general:capture-dom') return true;
 
+        // Process Screenshots (Ctrl/Cmd+Enter) and Toggle Stealth Typing
+        // (Ctrl/Cmd+Shift+Space) act on the overlay chat, which is available
+        // standalone in launcher mode (Ctrl+B / pill Ask) — so they must be
+        // registered with no meeting running too.
+        if (actionId === 'general:process-screenshots') return true;
+        if (actionId === 'chat:focusInput') return true;
+
+        // Chat scroll Up/Down (Ctrl/Cmd+Up/Down) must also work with no
+        // meeting: the standalone overlay chat is scrollable exactly like
+        // during a meeting. When the overlay is hidden the kick lands on an
+        // invisible window and simply has no visible effect — same as
+        // meeting-mode behavior with a hidden overlay.
+        // The remaining chat:* shortcuts (Ctrl+1..7, Ctrl+Alt+Arrows) stay
+        // overlay-only by design: registering them globally with no meeting
+        // would hijack browser tab-switching and editor word-jump keys in
+        // every other app.
+        if (actionId === 'chat:scrollUp') return true;
+        if (actionId === 'chat:scrollDown') return true;
+
         return false;
     }
 
