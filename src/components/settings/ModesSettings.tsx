@@ -267,6 +267,10 @@ export const ModesSettings: React.FC<ModesSettingsProps> = ({ onClose }) => {
     (id: string) => {
       setSelectedId(id);
       loadDetails(modes?.find((m) => m.id === id));
+      // Picking a mode in the sidebar must always leave the templates gallery
+      // and show that mode's details — otherwise clicking a mode while in the
+      // "Natively Templates" view appears to do nothing (the gallery stays).
+      setView('modes');
       setConfirmDeleteId(null);
       setContentMenuOpen(false);
       setError('');
