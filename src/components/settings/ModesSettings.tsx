@@ -34,7 +34,7 @@
  * Styles live in ./ModesSettings.css (scoped under .modes-manager-root).
  */
 
-import React, { useCallback, useEffect, useMemo, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   BookOpen,
   Briefcase,
@@ -207,6 +207,9 @@ export const ModesSettings: React.FC<ModesSettingsProps> = ({ onClose }) => {
     refreshTemplates();
   }, [refresh, refreshTemplates]);
 
+  /** Mode ids whose starter prompt was backfilled this session (once each). */
+  const seededPromptIds = useRef(new Set<string>());
+
   /** Fetch the selected mode's details + reset the editable drafts. */
   const loadDetails = useCallback((mode: ModeSummary | null | undefined) => {
     setPromptDraft(mode?.customContext ?? '');
@@ -223,19 +226,42 @@ export const ModesSettings: React.FC<ModesSettingsProps> = ({ onClose }) => {
       setRefFiles([]);
       return;
     }
+    // Backfill: a template mode (≠ general) created before prompt-seeding
+    // existed has an empty Real-time prompt. Seed its starter prompt once per
+    // session so it shows the prompt it was meant to ship with. Only touches
+    // non-locked, non-general template modes whose prompt is empty.
+    if (
+      !isGeneralLocked(mode) &&
+      mode.templateType !== 'general' &&
+      !(mode.customContext ?? '').trim() &&
+      !seededPromptIds.current.has(mode.id)
+    ) {
+      const tpl = templates?.find((tt) => tt.type === mode.templateType);
+      if (tpl?.starterPrompt) {
+        seededPromptIds.current.add(mode.id);
+        setPromptDraft(tpl.starterPrompt);
+        // Keep the local modes list in sync so the details effect (which may
+        // re-run right after selection) reads the seeded prompt instead of the
+        // stale empty customContext — otherwise the field blinks then clears.
+        setModes((prev) => prev?.map((m) => (m.id === mode.id ? { ...m, customContext: tpl.starterPrompt } : m)) ?? prev);
+        void window.electronAPI?.modesUpdate?.(mode.id, { customContext: tpl.starterPrompt });
+      }
+    }
     window.electronAPI?.modesGetNoteSections?.(mode.id)
       .then(setNoteSections)
       .catch(() => setNoteSections([]));
     window.electronAPI?.modesGetReferenceFiles?.(mode.id)
       .then(setRefFiles)
       .catch(() => setRefFiles([]));
-  }, []);
+  }, [templates]);
 
-  // Re-sync details whenever the selected mode changes (selection, refresh).
+  // Re-sync details whenever the selected mode changes (selection, refresh),
+  // or when the templates catalog loads (so the empty-template-prompt backfill
+  // can resolve the starter prompt).
   useEffect(() => {
     loadDetails(selected);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [selected?.id]);
+  }, [selected?.id, loadDetails]);
 
   const selectMode = useCallback(
     (id: string) => {
@@ -291,17 +317,10 @@ export const ModesSettings: React.FC<ModesSettingsProps> = ({ onClose }) => {
     if (busy) return;
     setError('');
     // The gallery only lists non-General templates (General is filtered out —
-    // blank modes come from "+ New Mode"), so every row creates a named mode
-    // and, for templates with one, seeds the starter "real-time prompt".
-    const created = await handleCreateMode(tpl.label, tpl.type);
-    if (created && tpl.starterPrompt) {
-      const upd = await window.electronAPI?.modesUpdate?.(created.id, { customContext: tpl.starterPrompt });
-      if (upd && !upd.success) {
-        setError(upd.error === 'pro_required' ? PRO_ERROR_TEXT : upd.error || 'Could not save mode prompt.');
-      } else {
-        await refresh();
-      }
-    }
+    // blank modes come from "+ New Mode"). Creating the mode selects it, and
+    // loadDetails' backfill seeds the template's starter "real-time prompt"
+    // (display + persist), so there is no separate seed step here.
+    await handleCreateMode(tpl.label, tpl.type);
     setView('modes');
   };
 
