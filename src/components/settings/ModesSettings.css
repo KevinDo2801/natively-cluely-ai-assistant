@@ -236,25 +236,6 @@
   flex-shrink: 0;
 }
 
-.ms-set-active {
-  width: 22px;
-  height: 22px;
-  border-radius: 50%;
-  border: 1.5px solid #c9c9cf;
-  color: #8a8f99;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  flex-shrink: 0;
-  padding: 0;
-}
-
-.ms-set-active:hover {
-  background: #e9e9ee;
-  border-color: #a1a1aa;
-  color: #111111;
-}
-
 .ms-mode-menu-wrap {
   position: relative;
   display: flex;
@@ -441,6 +422,13 @@
   margin-bottom: 28px;
 }
 
+.ms-content-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-shrink: 0;
+}
+
 .ms-page-title {
   margin: 0;
   font-size: 34px;
@@ -468,19 +456,21 @@
 .ms-set-active-pill {
   height: 36px;
   padding: 0 16px;
-  background: #08a6ec;
+  background: #ffffff;
+  border: 1px solid #dedede;
   border-radius: 999px;
   display: flex;
   align-items: center;
   gap: 7px;
-  color: #ffffff;
+  color: #111111;
   font-size: 14px;
   font-weight: 600;
   flex-shrink: 0;
+  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.05);
 }
 
 .ms-set-active-pill:hover {
-  background: #0795d4;
+  background: #f5f5f5;
 }
 
 /* ── Fields ───────────────────────────────────────────────────────────────── */

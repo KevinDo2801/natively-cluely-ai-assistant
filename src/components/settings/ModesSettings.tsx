@@ -19,11 +19,15 @@
  * Rules baked in here (mirror the product requirements):
  *   - A fresh user sees ONLY the built-in "General" default. Every other
  *     template is opt-in via the gallery (backend seeds only General now).
- *   - The built-in General mode is LOCKED: its Real-time prompt and Notes
- *     template show "Autofilled by Natively", are not editable, and the mode
- *     itself has no "..." delete menu. Other modes are fully editable and
- *     deletable.
- *   - Inactive modes show a "Set active" tick; active modes show a blue check.
+ *   - The built-in General mode is LOCKED: its Real-time prompt, Notes
+ *     template and Reference files all show "Autofilled by Natively", are not
+ *     editable or uploadable, and the mode itself has no "..." delete menu.
+ *     Other modes are fully editable and deletable.
+ *   - The sidebar shows a blue check on the ACTIVE mode only; activation
+ *     happens from the content header's "Set active" pill, and the "..." 
+ *     (delete) menu lives in the content header too (never in the sidebar).
+ *   - Opening the panel selects the ACTIVE mode, so what you see is what is
+ *     actually running.
  *   - Non-General creation/editing/deletion is Pro-gated at the backend
  *     ('pro_required'); this panel surfaces the backend error text.
  *
@@ -152,8 +156,8 @@ export const ModesSettings: React.FC<ModesSettingsProps> = ({ onClose }) => {
   const [newModeName, setNewModeName] = useState('');
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');
-  const [menuOpenId, setMenuOpenId] = useState<string | null>(null);
   const [confirmDeleteId, setConfirmDeleteId] = useState<string | null>(null);
+  const [contentMenuOpen, setContentMenuOpen] = useState(false);
 
   // Editable field state
   const [promptDraft, setPromptDraft] = useState('');
@@ -176,6 +180,10 @@ export const ModesSettings: React.FC<ModesSettingsProps> = ({ onClose }) => {
     try {
       const list = (await window.electronAPI?.modesGetAll?.()) ?? [];
       setModes(list);
+      // Default the selection to the ACTIVE mode so the panel opens on what is
+      // actually running (not the first row). Only applies while the user has
+      // not picked a mode yet (prev is null) — later refreshes keep the choice.
+      setSelectedId((prev) => prev ?? (list.find((m) => m.isActive)?.id ?? list[0]?.id ?? null));
       return list;
     } catch {
       setModes([]);
@@ -227,16 +235,16 @@ export const ModesSettings: React.FC<ModesSettingsProps> = ({ onClose }) => {
     (id: string) => {
       setSelectedId(id);
       loadDetails(modes?.find((m) => m.id === id));
-      setMenuOpenId(null);
       setConfirmDeleteId(null);
+      setContentMenuOpen(false);
       setError('');
     },
     [modes, loadDetails],
   );
 
   const closeMenus = useCallback(() => {
-    setMenuOpenId(null);
     setConfirmDeleteId(null);
+    setContentMenuOpen(false);
   }, []);
 
   // ── Mode actions ────────────────────────────────────────────────────────────
@@ -503,55 +511,10 @@ export const ModesSettings: React.FC<ModesSettingsProps> = ({ onClose }) => {
                 <FileText className="ms-file-icon" size={18} strokeWidth={1.8} />
                 <span className="ms-mode-label">{mode.name}</span>
 
-                {mode.isActive ? (
+                {mode.isActive && (
                   <span className="ms-selected-check" title={t('Active')}>
                     <Check size={13} strokeWidth={3} />
                   </span>
-                ) : (
-                  <button
-                    className="ms-set-active"
-                    title={t('Set active')}
-                    aria-label={t('Set active')}
-                    disabled={busy}
-                    onClick={(e) => {
-                      e.stopPropagation();
-                      void handleSetActive(mode.id);
-                    }}
-                  >
-                    <Check size={13} strokeWidth={3} />
-                  </button>
-                )}
-
-                {!isGeneralLocked(mode) && (
-                  <div className="ms-mode-menu-wrap" onClick={(e) => e.stopPropagation()}>
-                    <button
-                      className={`ms-more ${menuOpenId === mode.id ? 'open' : ''}`}
-                      aria-label={t('Mode actions')}
-                      onClick={() => setMenuOpenId(menuOpenId === mode.id ? null : mode.id)}
-                    >
-                      <MoreVertical size={16} />
-                    </button>
-                    {menuOpenId === mode.id && (
-                      <div className="ms-menu">
-                        {confirmDeleteId === mode.id ? (
-                          <div className="ms-menu-confirm">
-                            <span className="ms-menu-confirm-label">{t('Delete mode?')}</span>
-                            <div className="ms-menu-confirm-actions">
-                              <button className="ms-menu-danger" onClick={() => void handleDelete(mode.id)} disabled={busy}>
-                                {t('Delete')}
-                              </button>
-                              <button onClick={() => setConfirmDeleteId(null)}>{t('Cancel')}</button>
-                            </div>
-                          </div>
-                        ) : (
-                          <button className="ms-menu-item ms-menu-danger" onClick={() => setConfirmDeleteId(mode.id)}>
-                            <Trash2 size={14} />
-                            <span>{t('Delete mode')}</span>
-                          </button>
-                        )}
-                      </div>
-                    )}
-                  </div>
                 )}
               </div>
             ))
@@ -595,17 +558,53 @@ export const ModesSettings: React.FC<ModesSettingsProps> = ({ onClose }) => {
       <div className="ms-content-inner">
         <div className="ms-content-header">
           <h1 className="ms-page-title">{selected.name}</h1>
-          {selected.isActive ? (
-            <div className="ms-active-pill">
-              <Check size={16} strokeWidth={3} />
-              <span>{t('Active')}</span>
-            </div>
-          ) : (
-            <button className="ms-set-active-pill" onClick={() => void handleSetActive(selected.id)} disabled={busy}>
-              <Check size={16} strokeWidth={3} />
-              <span>{t('Set active')}</span>
-            </button>
-          )}
+          <div className="ms-content-actions">
+            {selected.isActive ? (
+              <div className="ms-active-pill">
+                <Check size={16} strokeWidth={3} />
+                <span>{t('Active')}</span>
+              </div>
+            ) : (
+              <button className="ms-set-active-pill" onClick={() => void handleSetActive(selected.id)} disabled={busy}>
+                <Check size={16} strokeWidth={3} />
+                <span>{t('Set active')}</span>
+              </button>
+            )}
+
+            {!locked && (
+              <div className="ms-mode-menu-wrap">
+                <button
+                  className={`ms-more ${contentMenuOpen ? 'open' : ''}`}
+                  aria-label={t('Mode actions')}
+                  onClick={() => {
+                    setContentMenuOpen(!contentMenuOpen);
+                  }}
+                >
+                  <MoreVertical size={16} />
+                </button>
+                {contentMenuOpen && (
+                  <div className="ms-menu">
+                    {confirmDeleteId === selected.id ? (
+                      <div className="ms-menu-confirm">
+                        <span className="ms-menu-confirm-label">{t('Delete mode?')}</span>
+                        <div className="ms-menu-confirm-actions">
+                          <button className="ms-menu-danger" onClick={() => void handleDelete(selected.id)} disabled={busy}>
+                            {t('Delete')}
+                          </button>
+                          <button onClick={() => setConfirmDeleteId(null)}>{t('Cancel')}</button>
+                        </div>
+                      </div>
+                    ) : (
+                      <button className="ms-menu-item ms-menu-danger" onClick={() => setConfirmDeleteId(selected.id)}>
+                        <Trash2 size={14} />
+                        <span>{t('Delete mode')}</span>
+                      </button>
+                    )}
+                  </div>
+                )}
+              </div>
+            )}
+          </div>
         </div>
 
         {/* Real-time prompt */}
@@ -726,31 +725,38 @@ export const ModesSettings: React.FC<ModesSettingsProps> = ({ onClose }) => {
         {/* Reference files */}
         <div className="ms-field">
           <label className="ms-field-label">{t('Reference files')}</label>
-          <div className="ms-ref-files">
-            {refFiles.length === 0 && (
-              <p className="ms-muted">
-                {t('No reference files yet. Upload documents the AI may use as context in this mode.')}
-              </p>
-            )}
-            {refFiles.map((file) => (
-              <div className="ms-ref-file" key={file.id}>
-                <FileText size={15} strokeWidth={1.8} />
-                <span className="ms-ref-name">{file.fileName}</span>
-                {file.pageCount ? <span className="ms-ref-pages">{file.pageCount}p</span> : null}
-                <button
-                  className="ms-ref-delete"
-                  title={t('Delete file')}
-                  onClick={() => void handleDeleteFile(file.id)}
-                >
-                  <Trash2 size={14} />
-                </button>
-              </div>
-            ))}
-            <button className="ms-upload" onClick={() => void handleUploadFile()} disabled={uploading}>
-              {uploading ? <Loader2 className="ms-spin" size={14} /> : <Upload size={14} />}
-              <span>{t('Upload file')}</span>
-            </button>
-          </div>
+          {locked ? (
+            <div className="ms-input-box">
+              <Lock size={15} />
+              <span>{t('Autofilled by Natively')}</span>
+            </div>
+          ) : (
+            <div className="ms-ref-files">
+              {refFiles.length === 0 && (
+                <p className="ms-muted">
+                  {t('No reference files yet. Upload documents the AI may use as context in this mode.')}
+                </p>
+              )}
+              {refFiles.map((file) => (
+                <div className="ms-ref-file" key={file.id}>
+                  <FileText size={15} strokeWidth={1.8} />
+                  <span className="ms-ref-name">{file.fileName}</span>
+                  {file.pageCount ? <span className="ms-ref-pages">{file.pageCount}p</span> : null}
+                  <button
+                    className="ms-ref-delete"
+                    title={t('Delete file')}
+                    onClick={() => void handleDeleteFile(file.id)}
+                  >
+                    <Trash2 size={14} />
+                  </button>
+                </div>
+              ))}
+              <button className="ms-upload" onClick={() => void handleUploadFile()} disabled={uploading}>
+                {uploading ? <Loader2 className="ms-spin" size={14} /> : <Upload size={14} />}
+                <span>{t('Upload file')}</span>
+              </button>
+            </div>
+          )}
         </div>
       </div>
     );
@@ -802,7 +808,7 @@ export const ModesSettings: React.FC<ModesSettingsProps> = ({ onClose }) => {
 
   return (
     <div className="modes-manager-root">
-      {menuOpenId && <div className="ms-backdrop" onClick={closeMenus} />}
+      {contentMenuOpen && <div className="ms-backdrop" onClick={closeMenus} />}
 
       {renderSidebar()}
 
