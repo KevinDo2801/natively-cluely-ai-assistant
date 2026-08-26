@@ -733,6 +733,118 @@
   align-self: center;
 }
 
+/* Two-choice row (Upload file / Add text) inside the reference-files field.
+   NOTE: scoped under .modes-manager-root so these beat the base reset
+   `.modes-manager-root button { background: transparent; border: 0 }` —
+   an unscoped .ms-* class (0,1,0) loses to that rule (0,1,1), which is why
+   the Save button rendered invisible until hover. */
+.modes-manager-root .ms-ref-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.modes-manager-root .ms-ref-files .ms-ref-actions {
+  align-self: flex-start;
+}
+
+.modes-manager-root .ms-empty-field .ms-ref-actions {
+  align-self: center;
+  justify-content: center;
+}
+
+.modes-manager-root .ms-ref-actions .ms-upload {
+  align-self: auto;
+  background: #ffffff;
+  border: 1px solid #dedede;
+}
+
+/* "Add text" (paste) inline editor. */
+.modes-manager-root .ms-text-editor {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  margin-top: 12px;
+  padding: 14px;
+  border: 1px solid #e7e7e7;
+  border-radius: 13px;
+  background: #ffffff;
+}
+
+.modes-manager-root .ms-text-name {
+  width: 100%;
+  padding: 8px 12px;
+  border: 1px solid #dedede;
+  border-radius: 10px;
+  background: #ffffff;
+  font-size: 13px;
+  color: #111827;
+  outline: none;
+}
+
+.modes-manager-root .ms-text-area {
+  width: 100%;
+  min-height: 120px;
+  padding: 10px 12px;
+  border: 1px solid #dedede;
+  border-radius: 10px;
+  background: #ffffff;
+  font-family: inherit;
+  font-size: 13px;
+  line-height: 1.5;
+  color: #111827;
+  resize: vertical;
+  outline: none;
+}
+
+.modes-manager-root .ms-text-name:focus,
+.modes-manager-root .ms-text-area:focus {
+  border-color: #08a6ec;
+  box-shadow: 0 0 0 3px rgba(8, 166, 236, 0.12);
+}
+
+.modes-manager-root .ms-text-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+}
+
+.modes-manager-root .ms-text-save {
+  height: 30px;
+  padding: 0 14px;
+  border-radius: 8px;
+  background: #08a6ec;
+  color: #ffffff;
+  font-size: 13px;
+  font-weight: 600;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.modes-manager-root .ms-text-save:hover {
+  background: #0795d4;
+}
+
+.modes-manager-root .ms-text-save:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+
+.modes-manager-root .ms-text-cancel {
+  height: 30px;
+  padding: 0 12px;
+  border-radius: 8px;
+  background: #f4f4f5;
+  color: #3f3f46;
+  font-size: 13px;
+  font-weight: 500;
+}
+
+.modes-manager-root .ms-text-cancel:hover {
+  background: #e9e9ee;
+}
+
 .ms-add-template {
   display: flex;
   align-items: center;

@@ -2721,6 +2721,8 @@ contextBridge.exposeInMainWorld('electronAPI', {
     ipcRenderer.invoke('modes:get-reference-files', modeId),
   modesUploadReferenceFile: (modeId: string) =>
     ipcRenderer.invoke('modes:upload-reference-file', modeId),
+  modesAddReferenceFile: (modeId: string, params: { fileName?: string; content: string }) =>
+    ipcRenderer.invoke('modes:add-reference-file', modeId, params),
   modesDeleteReferenceFile: (id: string) => ipcRenderer.invoke('modes:delete-reference-file', id),
   modesGetReferenceFileStatus: (modeId: string) =>
     ipcRenderer.invoke('modes:get-reference-file-status', modeId),

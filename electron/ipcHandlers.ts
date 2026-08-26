@@ -12228,6 +12228,35 @@ export function initializeIpcHandlers(appState: AppState): void {
     }
   });
 
+  // "Add text" reference ingestion (Modes Manager): paste/type raw text as a
+  // reference "file" without the native open dialog. Mirrors what
+  // modes:upload-reference-file does after parsing — hands the raw text to the
+  // REAL ingestion use case (which indexes + builds OKF packs if enabled), so
+  // pasted text is retrievable exactly like an uploaded file.
+  safeHandle('modes:add-reference-file', async (_, modeId: string, params: { fileName?: string; content: string }) => {
+    try {
+      if (!isProOrTrialActive()) return { success: false, error: 'pro_required' };
+      if (!params || typeof params.content !== 'string' || !params.content.trim()) {
+        return { success: false, error: 'Reference text is empty.' };
+      }
+      const { ingestModeReferenceFileContent } = require('./services/ModeReferenceFileIngestion') as typeof import('./services/ModeReferenceFileIngestion');
+      const file = await ingestModeReferenceFileContent({
+        modeId,
+        fileName: params.fileName,
+        content: params.content,
+        onIndexStatus: (status, fileId) => {
+          BrowserWindow.getAllWindows().forEach((win) => {
+            if (!win.isDestroyed()) win.webContents.send('mode-file-index-status', { modeId, fileId, phase: status });
+          });
+        },
+      });
+      return { success: true, file };
+    } catch (error: any) {
+      console.error('[IPC] modes:add-reference-file error:', error?.message || error);
+      return { success: false, error: error?.message || 'Could not add reference text.' };
+    }
+  });
+
   safeHandle('modes:delete-reference-file', async (_, id: string) => {
     try {
       if (!isProOrTrialActive()) return { success: false, error: 'pro_required' };
@@ -13250,25 +13279,22 @@ export function initializeIpcHandlers(appState: AppState): void {
     });
 
     // Content-based reference-file ingest (bypasses the native open dialog).
-    // Mirrors what modes:upload-reference-file does after parsing: hands raw
-    // text content to the REAL ModesManager.addReferenceFile (which indexes +
-    // builds OKF packs if enabled), so retrieval is exercised for real.
+    // Shares the production "Add text" use case (ingestModeReferenceFileContent)
+    // so benchmark parsing/persistence cannot silently drift from the
+    // user-facing path. awaitIndex: true keeps E2E first-retrieval warm.
     safeHandle('__e2e__:add-reference-file', async (
       _,
       params: { modeId: string; fileName: string; content: string; pageCount?: number },
     ) => {
       try {
-        const { ModesManager } = require('./services/ModesManager');
-        const file = ModesManager.getInstance().addReferenceFile({
+        const { ingestModeReferenceFileContent } = require('./services/ModeReferenceFileIngestion') as typeof import('./services/ModeReferenceFileIngestion');
+        const file = await ingestModeReferenceFileContent({
           modeId: params.modeId,
           fileName: params.fileName,
           content: params.content,
-          ...(typeof params.pageCount === 'number' ? { pageCount: params.pageCount, extractedPageCount: params.pageCount } : {}),
+          ...(typeof params.pageCount === 'number' ? { pageCount: params.pageCount } : {}),
+          awaitIndex: true,
         });
-        // Best-effort synchronous index so the first retrieval isn't cold.
-        try { await ModesManager.getInstance().indexReferenceFile?.(file); } catch (idxErr: any) {
-          console.warn('[E2E] indexReferenceFile failed (non-fatal):', idxErr?.message);
-        }
         return { success: true, file };
       } catch (e: any) {
         console.error('[E2E] add-reference-file error:', e);

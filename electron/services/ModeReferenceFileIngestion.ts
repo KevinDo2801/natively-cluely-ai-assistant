@@ -26,6 +26,12 @@ import {
 export const MODE_REFERENCE_FILE_EXTENSIONS = SAFE_DOCUMENT_EXTENSIONS;
 export const MODE_REFERENCE_FILE_MAX_BYTES = SAFE_DOCUMENT_MAX_BYTES;
 
+// Cap for pasted reference text ("Add text" in Modes Manager). Roughly 25K
+// tokens — plenty for notes/pasted material, well inside the retrieval caps
+// (12K chars/file inline, 40K total) while still allowing a pasted doc to be
+// chunked + embedded like an uploaded file.
+export const MODE_REFERENCE_FILE_MAX_CHARS = 100_000;
+
 export interface ModeReferenceFileIngestResult {
   id: string;
   fileName: string;
@@ -97,3 +103,75 @@ export const ingestModeReferenceFile = async (
     contentSha256,
   };
 };
+
+export interface ModeReferenceFileContentIngestOptions {
+  modeId: string;
+  /** Optional user-chosen name. When empty, a default "Pasted text N" is generated. */
+  fileName?: string;
+  content: string;
+  pageCount?: number;
+  extractedPageCount?: number;
+  onIndexStatus?: (status: 'indexing' | 'done', fileId: string) => void;
+  /** When true, await indexing before returning (E2E/benchmark use); production paste is fire-and-forget like uploads. */
+  awaitIndex?: boolean;
+}
+
+/**
+ * Persist + index raw reference text (the Modes Manager "Add text" path and the
+ * E2E content ingress). Same storage/indexing pipeline as ingestModeReferenceFile:
+ * rows go through ModesManager.addReferenceFile (chunk + OKF pack handling), then
+ * best-effort indexReferenceFile with the retriever degrading to lexical for any
+ * file that isn't 'ready' yet. Callers perform UI/authorization policy.
+ */
+export const ingestModeReferenceFileContent = async (
+  options: ModeReferenceFileContentIngestOptions,
+): Promise<ModeReferenceFileIngestResult> => {
+  const content = options.content?.trim() ?? '';
+  if (!content) throw new Error('Reference text is empty.');
+  if (content.length > MODE_REFERENCE_FILE_MAX_CHARS) {
+    throw new Error(`Reference text exceeds the ${MODE_REFERENCE_FILE_MAX_CHARS.toLocaleString()} character limit.`);
+  }
+  const manager = ModesManager.getInstance();
+  const fileName = (options.fileName ?? '').trim() || defaultPastedTextName(manager, options.modeId);
+  const file = manager.addReferenceFile({
+    modeId: options.modeId,
+    fileName,
+    content,
+    ...(typeof options.pageCount === 'number' ? { pageCount: options.pageCount } : {}),
+    ...(typeof options.extractedPageCount === 'number'
+      ? { extractedPageCount: options.extractedPageCount }
+      : typeof options.pageCount === 'number'
+        ? { extractedPageCount: options.pageCount }
+        : {}),
+  });
+  const contentSha256 = crypto.createHash('sha256').update(content).digest('hex');
+  const index = async (): Promise<void> => {
+    try {
+      await manager.indexReferenceFile(file);
+    } catch (error: any) {
+      console.warn('[ModeReferenceFileIngestion] pasted-text index failed (lexical fallback remains):', error?.message);
+    } finally {
+      options.onIndexStatus?.('done', file.id);
+    }
+  };
+  options.onIndexStatus?.('indexing', file.id);
+  if (options.awaitIndex) await index();
+  else void index();
+  return {
+    id: file.id,
+    fileName: file.fileName,
+    content: file.content,
+    pageCount: file.pageCount,
+    extractedPageCount: file.extractedPageCount,
+    binarySha256: '',
+    contentSha256,
+  };
+};
+
+/** "Pasted text 1", "Pasted text 2", … — first unused number among the mode's files. */
+function defaultPastedTextName(manager: ModesManager, modeId: string): string {
+  const existing = new Set(manager.getReferenceFiles(modeId).map((f) => f.fileName));
+  let n = 1;
+  while (existing.has(`Pasted text ${n}`)) n += 1;
+  return `Pasted text ${n}`;
+}

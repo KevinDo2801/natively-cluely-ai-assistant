@@ -332,6 +332,7 @@ export interface ElectronAPI {
   modesSetActive: (id: string | null) => Promise<{ success: boolean; error?: string }>
   modesGetReferenceFiles: (modeId: string) => Promise<Array<{ id: string; modeId: string; fileName: string; content: string; createdAt: string }>>
   modesUploadReferenceFile: (modeId: string) => Promise<{ success: boolean; file?: any; cancelled?: boolean; error?: string }>
+  modesAddReferenceFile: (modeId: string, params: { fileName?: string; content: string }) => Promise<{ success: boolean; file?: any; error?: string }>
   modesDeleteReferenceFile: (id: string) => Promise<{ success: boolean; error?: string }>
   modesGetReferenceFileStatus: (modeId: string) => Promise<{ success: boolean; statuses?: Array<{ fileId: string; fileName: string; status: string; chunkCount: number }>; error?: string }>
   onModeFileIndexStatus: (callback: (data: { modeId: string; fileId: string; phase: 'indexing' | 'done' }) => void) => () => void

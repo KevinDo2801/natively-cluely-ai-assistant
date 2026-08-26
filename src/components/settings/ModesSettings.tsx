@@ -14,7 +14,7 @@
  *   modes:get-all / get-templates / create / update / delete / set-active /
  *   get-note-sections / add-note-section / update-note-section /
  *   delete-note-section / get-reference-files / upload-reference-file /
- *   delete-reference-file
+ *   add-reference-file (paste text) / delete-reference-file
  *
  * Rules baked in here (mirror the product requirements):
  *   - A fresh user sees ONLY the built-in "General" default. Every other
@@ -40,6 +40,7 @@ import {
   Briefcase,
   Check,
   ChevronRight,
+  ClipboardPaste,
   Code2,
   FileText,
   FolderOpen,
@@ -169,6 +170,11 @@ export const ModesSettings: React.FC<ModesSettingsProps> = ({ onClose }) => {
   const [addingSection, setAddingSection] = useState(false);
   const [newSection, setNewSection] = useState({ title: '', description: '' });
   const [uploading, setUploading] = useState(false);
+  // "Add text" (paste) reference editor state.
+  const [addingText, setAddingText] = useState(false);
+  const [textDraft, setTextDraft] = useState('');
+  const [textNameDraft, setTextNameDraft] = useState('');
+  const [textSaving, setTextSaving] = useState(false);
 
   const selected = useMemo(
     () => modes?.find((m) => m.id === selectedId) ?? modes?.[0] ?? null,
@@ -217,6 +223,10 @@ export const ModesSettings: React.FC<ModesSettingsProps> = ({ onClose }) => {
     setSectionDrafts({});
     setAddingSection(false);
     setNewSection({ title: '', description: '' });
+    // Reset the "Add text" reference editor when switching modes.
+    setAddingText(false);
+    setTextDraft('');
+    setTextNameDraft('');
     // An unnamed "Untitled Mode" opens straight into the rename field; every
     // other (non-locked) mode shows the pencil button instead.
     setRenaming(mode?.name === 'Untitled Mode' && !isGeneralLocked(mode));
@@ -471,6 +481,35 @@ export const ModesSettings: React.FC<ModesSettingsProps> = ({ onClose }) => {
     }
   };
 
+  /** Paste/type raw text as a reference "file" — same list, same retrieval pipeline. */
+  const handleAddText = async () => {
+    if (!selected || textSaving) return;
+    const content = textDraft.trim();
+    if (!content) return;
+    setTextSaving(true);
+    setError('');
+    try {
+      const res = await window.electronAPI?.modesAddReferenceFile?.(selected.id, {
+        fileName: textNameDraft.trim() || undefined,
+        content,
+      });
+      if (res?.success) {
+        const files = (await window.electronAPI?.modesGetReferenceFiles?.(selected.id)) ?? [];
+        setRefFiles(files);
+        await refresh(); // update sidebar referenceFileCount badges
+        setAddingText(false);
+        setTextDraft('');
+        setTextNameDraft('');
+      } else {
+        setError(res?.error === 'pro_required' ? PRO_ERROR_TEXT : res?.error || 'Could not add reference text.');
+      }
+    } catch {
+      setError('Could not add reference text.');
+    } finally {
+      setTextSaving(false);
+    }
+  };
+
   const handleDeleteFile = async (id: string) => {
     const res = await window.electronAPI?.modesDeleteReferenceFile?.(id);
     if (res?.success) {
@@ -679,35 +718,89 @@ export const ModesSettings: React.FC<ModesSettingsProps> = ({ onClose }) => {
               <Lock size={15} />
               <span>{t('Autofilled by Natively')}</span>
             </div>
-          ) : refFiles.length === 0 ? (
-            <div className="ms-empty-field">
-              <span className="ms-empty-text">{t('Add files as real-time context.')}</span>
-              <button className="ms-upload" onClick={() => void handleUploadFile()} disabled={uploading}>
-                {uploading ? <Loader2 className="ms-spin" size={14} /> : <Upload size={14} />}
-                <span>{t('Upload file')}</span>
-              </button>
-            </div>
           ) : (
-            <div className="ms-ref-files">
-              {refFiles.map((file) => (
-                <div className="ms-ref-file" key={file.id}>
-                  <FileText size={15} strokeWidth={1.8} />
-                  <span className="ms-ref-name">{file.fileName}</span>
-                  {file.pageCount ? <span className="ms-ref-pages">{file.pageCount}p</span> : null}
-                  <button
-                    className="ms-ref-delete"
-                    title={t('Delete file')}
-                    onClick={() => void handleDeleteFile(file.id)}
-                  >
-                    <Trash2 size={14} />
-                  </button>
+            <>
+              {refFiles.length === 0 ? (
+                <div className="ms-empty-field">
+                  <span className="ms-empty-text">{t('Add files as real-time context.')}</span>
+                  <div className="ms-ref-actions">
+                    <button className="ms-upload" onClick={() => void handleUploadFile()} disabled={uploading}>
+                      {uploading ? <Loader2 className="ms-spin" size={14} /> : <Upload size={14} />}
+                      <span>{t('Upload file')}</span>
+                    </button>
+                    <button className="ms-upload" onClick={() => setAddingText(true)} disabled={addingText}>
+                      <ClipboardPaste size={14} />
+                      <span>{t('Add text')}</span>
+                    </button>
+                  </div>
                 </div>
-              ))}
-              <button className="ms-upload" onClick={() => void handleUploadFile()} disabled={uploading}>
-                {uploading ? <Loader2 className="ms-spin" size={14} /> : <Upload size={14} />}
-                <span>{t('Upload file')}</span>
-              </button>
-            </div>
+              ) : (
+                <div className="ms-ref-files">
+                  {refFiles.map((file) => (
+                    <div className="ms-ref-file" key={file.id}>
+                      <FileText size={15} strokeWidth={1.8} />
+                      <span className="ms-ref-name">{file.fileName}</span>
+                      {file.pageCount ? <span className="ms-ref-pages">{file.pageCount}p</span> : null}
+                      <button
+                        className="ms-ref-delete"
+                        title={t('Delete file')}
+                        onClick={() => void handleDeleteFile(file.id)}
+                      >
+                        <Trash2 size={14} />
+                      </button>
+                    </div>
+                  ))}
+                  <div className="ms-ref-actions">
+                    <button className="ms-upload" onClick={() => void handleUploadFile()} disabled={uploading}>
+                      {uploading ? <Loader2 className="ms-spin" size={14} /> : <Upload size={14} />}
+                      <span>{t('Upload file')}</span>
+                    </button>
+                    <button className="ms-upload" onClick={() => setAddingText(true)} disabled={addingText}>
+                      <ClipboardPaste size={14} />
+                      <span>{t('Add text')}</span>
+                    </button>
+                  </div>
+                </div>
+              )}
+              {addingText && (
+                <div className="ms-text-editor">
+                  <input
+                    className="ms-text-name"
+                    value={textNameDraft}
+                    onChange={(e) => setTextNameDraft(e.target.value)}
+                    placeholder={t('Name (optional)')}
+                  />
+                  <textarea
+                    autoFocus
+                    className="ms-text-area"
+                    value={textDraft}
+                    onChange={(e) => setTextDraft(e.target.value)}
+                    placeholder={t('Paste or type reference text…')}
+                    rows={6}
+                  />
+                  <div className="ms-text-actions">
+                    <button
+                      className="ms-text-save"
+                      onClick={() => void handleAddText()}
+                      disabled={textSaving || !textDraft.trim()}
+                    >
+                      {textSaving ? <Loader2 className="ms-spin" size={14} /> : null}
+                      {t('Save')}
+                    </button>
+                    <button
+                      className="ms-text-cancel"
+                      onClick={() => {
+                        setAddingText(false);
+                        setTextDraft('');
+                        setTextNameDraft('');
+                      }}
+                    >
+                      {t('Cancel')}
+                    </button>
+                  </div>
+                </div>
+              )}
+            </>
           )}
         </div>
 
