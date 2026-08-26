@@ -70,6 +70,19 @@ module.exports = {
           subtle: 'var(--border-subtle)',
           muted: 'var(--border-muted)',
         },
+        /* Reusable folder-card surface + icon tokens (see index.css) */
+        folder: {
+          card: 'var(--folder-card-bg)',
+          'card-hover': 'var(--folder-card-bg-hover)',
+          border: 'var(--folder-card-border)',
+          icon: 'var(--folder-icon)',
+        },
+        /* Meeting row selection state */
+        selection: {
+          bg: 'var(--selection-bg)',
+          'check-bg': 'var(--selection-check-bg)',
+          'check-fg': 'var(--selection-check-fg)',
+        },
       },
       fontFamily: {
         sans: ["Inter", "-apple-system", "BlinkMacSystemFont", "Segoe UI", "Roboto", "Helvetica", "Arial", "sans-serif"],

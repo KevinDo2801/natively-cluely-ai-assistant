@@ -165,6 +165,19 @@
   --border-subtle: transparent;
   --border-muted: #333333;
 
+  /* Folder card surface + icon (reusable semantic tokens, both themes).
+     #79808C (icon) is the light-mode value; dark mode uses a lighter gray-blue
+     for visibility on dark surfaces. */
+  --folder-card-bg: #1C1C1F;
+  --folder-card-bg-hover: #242428;
+  --folder-card-border: rgba(255, 255, 255, 0.25);
+  --folder-icon: #A6ADB8;
+
+  /* Meeting row selection state (matches folder-icon palette). */
+  --selection-bg: rgba(166, 173, 184, 0.16);
+  --selection-check-bg: #A6ADB8;
+  --selection-check-fg: #1C1C1F;
+
   /* Promoted from Settings-only to the app-wide default (Phase 2). */
   --accent-primary: var(--periwinkle-300);
   --accent-muted: color-mix(in srgb, var(--periwinkle-300) 15%, transparent);
@@ -316,6 +329,17 @@
   /* ── Borders — barely-there structural lines ── */
   --border-subtle:     rgba(0, 0, 0, 0.07);   /* card outlines, dividers          */
   --border-muted:      rgba(0, 0, 0, 0.11);   /* inputs, tables                   */
+
+  /* ── Folder card surface + icon (matches dark-mode tokens) ── */
+  --folder-card-bg: #F5F5F5;
+  --folder-card-bg-hover: #EDEDED;
+  --folder-card-border: rgba(0, 0, 0, 0.20);
+  --folder-icon: #79808C;
+
+  /* Meeting row selection state (matches folder-icon palette). */
+  --selection-bg: rgba(121, 128, 140, 0.16);
+  --selection-check-bg: #79808C;
+  --selection-check-fg: #F5F5F5;
 
   /* ── Accent — promoted from Settings-only to the app-wide default (Phase 2) ── */
   --accent-primary:    var(--periwinkle-600);

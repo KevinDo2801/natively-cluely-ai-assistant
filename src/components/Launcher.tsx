@@ -1181,7 +1181,6 @@ const Launcher: React.FC<LauncherProps> = ({ onStartMeeting, onOpenSettings, onO
                                                     onClick={handleGoToRoot}
                                                     className={`flex items-center gap-1 text-[13px] font-medium text-text-secondary hover:text-text-primary transition-colors px-2 py-1 rounded-lg ${isLight ? 'hover:bg-black/8' : 'hover:bg-white/10'}`}
                                                 >
-                                                    <ArrowLeft size={14} />
                                                     {t('My Natively')}
                                                 </button>
                                                 <ChevronRight size={13} className="text-text-tertiary" />
@@ -1257,12 +1256,11 @@ const Launcher: React.FC<LauncherProps> = ({ onStartMeeting, onOpenSettings, onO
                                                             <div
                                                                 key={f.id}
                                                                 onClick={() => handleOpenFolder(f.id)}
-                                                                className={`group relative flex items-center gap-2.5 px-3 py-2.5 rounded-xl cursor-pointer transition-colors select-none bg-accent-subtle hover:bg-accent-muted border border-accent-border`}
+                                                                className={`group relative flex items-center gap-2.5 px-3 py-2.5 rounded-xl cursor-pointer transition-colors select-none border bg-folder-card hover:bg-folder-card-hover border-folder-border`}
                                                             >
-                                                                <Folder size={18} className="text-accent-primary shrink-0" />
+                                                                <Folder size={18} className="text-folder-icon shrink-0" />
                                                                 <div className="flex-1 min-w-0">
                                                                     <div className="text-[13px] font-medium text-text-primary truncate">{f.name}</div>
-                                                                    <div className="text-[11px] text-text-tertiary">{f.meetingCount ?? 0}</div>
                                                                 </div>
                                                                 <button
                                                                     className="p-1 text-text-tertiary hover:text-text-primary transition-colors opacity-0 group-hover:opacity-100"
@@ -1375,7 +1373,7 @@ const Launcher: React.FC<LauncherProps> = ({ onStartMeeting, onOpenSettings, onO
                                                         <motion.div
                                                             key={m.id}
                                                             layoutId={`meeting-${m.id}`}
-                                                            className={`group relative flex items-center justify-between px-3 py-2 rounded-lg transition-colors cursor-pointer ${isSelected ? 'bg-accent-subtle' : 'bg-transparent hover:bg-bg-elevated'}`}
+                                                            className={`group relative flex items-center justify-between px-3 py-2 rounded-lg transition-colors cursor-pointer ${isSelected ? 'bg-selection-bg' : 'bg-transparent hover:bg-bg-elevated'}`}
                                                             onClick={() => selectionMode ? toggleSelect(m.id, !!m.isLive) : handleOpenMeeting(m)}
                                                         >
                                                             {/* Selection checkbox (v32) — in-flow on the far left; shifting the
@@ -1384,11 +1382,11 @@ const Launcher: React.FC<LauncherProps> = ({ onStartMeeting, onOpenSettings, onO
                                                                 <button
                                                                     disabled={!!m.isLive}
                                                                     onClick={(e) => { e.stopPropagation(); toggleSelect(m.id, !!m.isLive); }}
-                                                                    className={`mr-2 shrink-0 flex items-center justify-center w-4 h-4 rounded-[5px] border transition-colors ${m.isLive ? 'opacity-30 cursor-default' : 'cursor-pointer'} ${isSelected ? 'bg-accent-primary border-accent-primary' : 'border-text-tertiary/40 hover:border-text-secondary'}`}
+                                                                    className={`mr-2 shrink-0 flex items-center justify-center w-4 h-4 rounded-[5px] border transition-colors ${m.isLive ? 'opacity-30 cursor-default' : 'cursor-pointer'} ${isSelected ? 'bg-selection-check-bg border-selection-check-bg' : 'border-text-tertiary/40 hover:border-text-secondary'}`}
                                                                     aria-checked={isSelected}
                                                                     role="checkbox"
                                                                 >
-                                                                    {isSelected && <Check size={11} strokeWidth={3} className="text-white" />}
+                                                                    {isSelected && <Check size={11} strokeWidth={3} className="text-selection-check-fg" />}
                                                                 </button>
                                                             )}
 
