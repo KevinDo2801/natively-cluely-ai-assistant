@@ -1736,7 +1736,7 @@ const SettingsOverlay: React.FC<SettingsOverlayProps> = ({
                     exit={{ opacity: 0 }}
                     transition={{ duration: 0.2 }}
                     id="settings-backdrop"
-                    className={`fixed inset-0 z-50 flex items-center justify-center p-8 transition-colors duration-150 ${isPreviewingOpacity ? 'bg-transparent backdrop-blur-none pointer-events-none' : 'bg-black/60 backdrop-blur-sm'}`}
+                    className={`fixed inset-0 z-[3000] flex items-center justify-center p-8 transition-colors duration-150 ${isPreviewingOpacity ? 'bg-transparent backdrop-blur-none pointer-events-none' : 'bg-black/60 backdrop-blur-sm'}`}
                     onClick={(e) => {
                         // Mirror Modes/Profile (App.tsx) close-on-outside-click.
                         // Skip when opacity slider preview is active — backdrop is
