@@ -639,7 +639,8 @@ export interface ElectronAPI {
   // Ambient AI Chat — when enabled, meetings run without mic/system audio capture
   getAmbientChatEnabled: () => Promise<boolean>;
   setAmbientChatEnabled: (enabled: boolean) => Promise<{ success: boolean }>;
-  // Always-visible TopPill — the overlay pill floats in launcher mode too
+  // Always-visible TopPill — shown at all times (meetings and between them)
+  // when on; never shown when off. Ctrl+B only toggles the overlay chat.
   getPillAlwaysVisible: () => Promise<boolean>;
   setPillAlwaysVisible: (enabled: boolean) => Promise<{ success: boolean }>;
   // Keep the meeting overlay closed when a meeting starts (open on demand from the launcher)

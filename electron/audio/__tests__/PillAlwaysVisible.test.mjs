@@ -1,18 +1,21 @@
 // Source-contract regression tests for the "always-visible TopPill" feature.
 //
-// Requirement (Settings > Overlay → "Always Show TopPill"): with the setting
-// on, the overlay TopPill stays floating while the LAUNCHER is visible — even
-// with no meeting running — so it is always there to summon the no-audio AI
-// chatbox. Clicking the pill's expand/toggle while idle opens (or closes) the
-// overlay WITHOUT starting a meeting; its stop button returns to the launcher.
+// Requirement (Settings > Overlay → "Always Show TopPill"): the setting owns
+// the TopPill's visibility ENTIRELY:
+//   • ON  → the pill is shown at all times — during meetings AND between
+//     them (launcher visible, tray-hidden, overlay closed mid-meeting).
+//   • OFF → the pill never appears — not even while a meeting overlay is up.
+// Ctrl+B (and the pill's own Ask/Hide button) only ever toggles the OVERLAY
+// chat; it never decides pill visibility.
 //
 // Load-bearing details these tests pin:
 //   1. The setting is persistent (AppSettings) and lives in AppState.
 //   2. WindowHelper keeps the pill up standalone in launcher mode, and on
 //      macOS UN-WELDS it (parent.hide() drags children down with the shell),
 //      re-welding it the moment a meeting starts (switchToOverlay).
-//   3. The overlay-mirroring paths are untouched when the setting is off —
-//      every pre-existing visibility invariant (see
+//   3. The overlay-mirroring paths are gated on the setting: with it OFF the
+//      pill is never shown even while the overlay is up (a meeting); with it
+//      ON every pre-existing visibility invariant (see
 //      OverlayAuxVisibilityOrdering.test.mjs) must keep holding.
 //   4. Standalone drags move the pill alone (the shell is hidden), clamped
 //      into the work area.
@@ -121,7 +124,7 @@ test('WindowHelper seeds the flag and re-evaluates standalone visibility', () =>
   );
 });
 
-test('syncPillAlwaysVisibility hides the standalone pill when off or undetectable', () => {
+test('syncPillAlwaysVisibility hides the pill when off or undetectable', () => {
   const sync = extractMethodBody(windowHelper, 'syncPillAlwaysVisibility');
   assert.match(
     sync,
@@ -132,6 +135,15 @@ test('syncPillAlwaysVisibility hides the standalone pill when off or undetectabl
     sync,
     /this\.setPillStandalone\(false\);/,
     'setting off (or stealth on) must never leave the pill floating standalone',
+  );
+  // Setting OFF also means the pill must never be on screen AT ALL — not even
+  // while a meeting overlay is up. Toggling the setting off mid-meeting must
+  // take down a pill that was visible in the group (the mirror path no longer
+  // shows it, but the leftover window needs an explicit hide here).
+  assert.match(
+    sync,
+    /if \(!this\.pillAlwaysVisible\) \{\s*\n\s*const pill = this\.pillWindow;[\s\S]{0,140}pill\.isVisible\(\)\) pill\.hide\(\);/,
+    'toggling the setting OFF must explicitly hide a still-visible pill (group or standalone)',
   );
   // With the setting on, the pill floats whenever the overlay is NOT the
   // visible surface — including when the whole UI is hidden (tray).
@@ -145,6 +157,32 @@ test('syncPillAlwaysVisibility hides the standalone pill when off or undetectabl
     /else \{\s*\n\s*\/\/ Launcher visible OR the whole UI hidden[\s\S]{0,160}this\.setPillStandalone\(true\);/,
     'with the setting on, the pill must float whenever the overlay is not the ' +
       'visible surface — INCLUDING when the whole UI is hidden (tray)',
+  );
+});
+
+test('applyOverlayAuxVisibility gates the pill on the setting — OFF never shows it', () => {
+  // The load-bearing change: the pill used to mirror the overlay, so with the
+  // setting OFF it still appeared while a meeting overlay was up. The pill's
+  // group show must now be gated on pillAlwaysVisible: OFF → the overlay can
+  // be visible (meeting) while the pill stays hidden; ON → it rides the group.
+  const apply = extractMethodBody(windowHelper, 'applyOverlayAuxVisibility');
+  assert.match(
+    apply,
+    /const pillShow = want && this\.pillAlwaysVisible;/,
+    'the pill must only join the group show when the setting is ON — a meeting ' +
+      'overlay alone can no longer bring it up',
+  );
+  assert.match(
+    apply,
+    /apply\(this\.pillWindow, pillShow\);/,
+    'the pill must be driven by the setting-gated pillShow, not the raw want',
+  );
+  // The toggle window still follows the body unconditionally (gated on
+  // hasContent) — only the pill is setting-gated.
+  assert.match(
+    apply,
+    /apply\(this\.toggleWindow, want && this\.toggleHasContent\);/,
+    'the resize toggle must keep mirroring the body regardless of the setting',
   );
 });
 

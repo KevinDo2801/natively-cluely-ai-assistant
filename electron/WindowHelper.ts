@@ -153,14 +153,20 @@ export class WindowHelper {
   // once there is content (mirrors the old `messages.length > 0` gate).
   private toggleHasContent = false;
   // ── Always-visible pill (standalone mode) ────────────────────────────────
-  // When pillAlwaysVisible is on, the TopPill floats on its own while the
-  // launcher is visible — even with no meeting running (the "always appear"
-  // mode). The pill is then NOT an AppKit child of the overlay on macOS:
-  // parent.hide() drags children down with the shell, so the pill is
-  // un-welded for the duration and re-welded the moment a meeting starts.
-  // Windows never welds (owner semantics), so there it is purely a
-  // visibility decision. Suppressed while undetectable mode is on — a
-  // permanently floating pill would defeat the stealth promise.
+  // The TopPill's on-screen presence is controlled ENTIRELY by the "Always
+  // Show TopPill" setting (pillAlwaysVisible):
+  //   • OFF (default): the pill NEVER appears — not even while a meeting
+  //     overlay is up. applyOverlayAuxVisibility gates the group show on the
+  //     setting, so the overlay-mirroring path can no longer bring it up.
+  //   • ON: the pill is always there — welded to the shell while the overlay
+  //     is visible, and floating on its own (un-welded on macOS) while it is
+  //     not (launcher visible, tray-hidden, meeting running with the overlay
+  //     closed). parent.hide() drags AppKit children down with the shell, so
+  //     the floating pill must be un-welded for the duration and re-welded
+  //     the moment a meeting starts. Windows never welds (owner semantics),
+  //     so there it is purely a visibility decision. The standalone float is
+  //     suppressed while undetectable mode is on — a permanently floating
+  //     pill would defeat the stealth promise.
   private pillAlwaysVisible = false;
   // True while the pill floats without the overlay (launcher visible, no
   // meeting). Drives drag anchoring and re-welding on the next overlay show.
@@ -2064,7 +2070,15 @@ export class WindowHelper {
         win.hide();
       }
     };
-    apply(this.pillWindow, want);
+    // The TopPill's visibility is governed by the "Always Show TopPill"
+    // setting, NOT by the overlay body: with the setting OFF it must never
+    // appear — not even while a meeting overlay is up (previously the pill
+    // mirrored the overlay, so OFF still showed it during meetings). With the
+    // setting ON it rides the group whenever the shell is visible and floats
+    // standalone whenever it is not (see syncPillAlwaysVisibility). Only the
+    // toggle window follows the body unconditionally.
+    const pillShow = want && this.pillAlwaysVisible;
+    apply(this.pillWindow, pillShow);
     apply(this.toggleWindow, want && this.toggleHasContent);
     // Re-assert exact geometry AFTER the show, not just before it.
     //
@@ -2109,12 +2123,13 @@ export class WindowHelper {
   }
 
   // ── Always-visible pill (standalone mode) ────────────────────────────────
-  // The pill normally mirrors the overlay (see applyOverlayAuxVisibility).
-  // With pillAlwaysVisible on, the pill additionally survives launcher mode:
-  // it floats on its own while the launcher is visible so it is always there
-  // to summon the AI chatbox — no meeting required. The overlay-mirroring
-  // paths stay untouched when the setting is off (default) so existing
-  // behavior is byte-for-byte preserved.
+  // The TopPill's visibility is driven ENTIRELY by the "Always Show TopPill"
+  // setting: with it OFF the pill never appears (applyOverlayAuxVisibility
+  // gates the group show, so even a meeting overlay cannot bring it up);
+  // with it ON the pill floats on its own while the launcher is visible /
+  // the whole UI is hidden, so it is always there to summon the AI chatbox —
+  // no meeting required. The standalone float is suppressed while
+  // undetectable mode is on (stealth wins over a floating pill).
 
   /** Seeded from AppState at construction; updated live by the settings IPC. */
   public setPillAlwaysVisible(enabled: boolean): void {
@@ -2124,9 +2139,10 @@ export class WindowHelper {
 
   /**
    * Re-evaluate the standalone pill from the current window state. Called
-   * after the setting changes and after every window swap settles. No-op when
-   * the setting is off (the overlay-mirroring path owns the pill then) or
-   * while undetectable mode is on (stealth wins over a floating pill).
+   * after the setting changes and after every window swap settles. With the
+   * setting off (or undetectable on) the pill is never left floating
+   * standalone, and OFF additionally takes down any pill that was visible in
+   * the group (e.g. a meeting overlay) when the toggle was flipped.
    *
    * When the setting is on, the pill floats whenever the overlay is NOT the
    * visible surface — including when the whole UI is hidden (tray): it is the
@@ -2137,6 +2153,15 @@ export class WindowHelper {
       // Setting off (or stealth on): the pill belongs to the overlay-mirroring
       // path — never leave it floating standalone.
       this.setPillStandalone(false);
+      // Setting OFF also means the pill must never be on screen AT ALL — not
+      // even while a meeting overlay is up. The mirror path no longer shows
+      // it (applyOverlayAuxVisibility gates the group show on the setting),
+      // but a pill that was visible before the toggle flipped (e.g. toggling
+      // the setting off mid-meeting) needs an explicit take-down here.
+      if (!this.pillAlwaysVisible) {
+        const pill = this.pillWindow;
+        if (pill && !pill.isDestroyed() && pill.isVisible()) pill.hide();
+      }
       return;
     }
     const overlayVisible =
@@ -2313,7 +2338,8 @@ export class WindowHelper {
     // on Windows, cannot type into any other app). Stop it here and on every
     // overlay→launcher switch. No-op when not engaged.
     this.stopStealthTyping();
-    // ALWAYS-VISIBLE PILL: the pill must SURVIVE this hide AND stay visible the
+    // The TopPill's visibility is owned by the setting, not by this hide: with
+    // the setting ON the pill must SURVIVE this hide AND stay visible the
     // whole time — hiding it and re-showing it in the same click is the
     // Ask/Hide blink users see (the pill is its own OS window; a hide→show
     // flashes). Promote it to standalone FIRST so the overlay's parent.hide()
@@ -2324,8 +2350,10 @@ export class WindowHelper {
       const toggle = this.toggleWindow;
       if (toggle && !toggle.isDestroyed() && toggle.isVisible()) toggle.hide();
     } else {
-      // Setting off (or stealth on): the pill belongs to the overlay-mirroring
-      // path and goes down with the body, exactly as before this feature.
+      // Setting off (or stealth on): the pill goes down with the body — with
+      // the setting OFF it must never be on screen at all, and in stealth
+      // mode it only rides the group while the overlay is up (never floating
+      // standalone).
       this.setPillStandalone(false);
       this.applyOverlayAuxVisibility(false);
     }
@@ -2739,8 +2767,9 @@ export class WindowHelper {
     // ─── ALWAYS-VISIBLE PILL ────────────────────────────────────────────────
     // With pillAlwaysVisible on (and stealth off), the overlay is down but the
     // launcher is up — float the pill standalone so it is always there, even
-    // with no meeting running. No-op when the setting is off (the pill stays
-    // down with the overlay, exactly as before this feature).
+    // with no meeting running. No-op when the setting is off: the pill never
+    // appears at all (applyOverlayAuxVisibility gates the group show on the
+    // setting), so even a meeting overlay cannot bring it up.
     this.syncPillAlwaysVisibility();
     // Refresh the aux windows' overlay/meeting state (Ask/Hide label, mic/stop
     // icon) after the swap settles.

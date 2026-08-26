@@ -376,7 +376,7 @@ test('welded geometry is re-asserted at settle points, not only before a show', 
     'children must be placed BEFORE the show (so their first painted frame is ' +
       'right) and AGAIN after it (so a constrained parent frame self-corrects)',
   );
-  const showCall = apply.indexOf('apply(this.pillWindow, want)');
+  const showCall = apply.indexOf('apply(this.pillWindow, pillShow)');
   assert.ok(
     placements[0].index < showCall && placements[1].index > showCall,
     'one placement must straddle each side of the show',

@@ -2182,7 +2182,7 @@ const SettingsOverlay: React.FC<SettingsOverlayProps> = ({
                                                         </div>
                                                         <div>
                                                             <h3 className="text-sm font-bold text-text-primary">{t('Always Show TopPill')}</h3>
-                                                            <p className="text-xs text-text-secondary mt-0.5">{t('TopPill stays on screen even when no meeting is active')}</p>
+                                                            <p className="text-xs text-text-secondary mt-0.5">{t('Shown at all times — during and between meetings. Turn off to hide it completely')}</p>
                                                         </div>
                                                     </div>
                                                     <SettingsToggle
