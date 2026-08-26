@@ -530,11 +530,12 @@ export class WindowHelper {
       // translucent material by default.
       transparent: true,
       hasShadow: true,
-      // The launcher starts with the black logo splash. Use a black native
-      // background too so the OS doesn't show a grey/white transparent-window
-      // flash before the renderer paints (applies on macOS and Windows, both
-      // of which now create the window with `transparent: true`).
-      backgroundColor: '#000000',
+      // The launcher starts with the black logo splash. Use a transparent native
+      // background so the 4 corners cut off by the CSS border-radius stay
+      // see-through to the desktop instead of painting black squares. A very
+      // short pre-paint transparent flash is acceptable (and already handled by
+      // `ready-to-show`); macOS + Windows both create the window transparent.
+      backgroundColor: '#00000000',
       focusable: true,
       resizable: true,
       movable: true,
@@ -2421,7 +2422,7 @@ export class WindowHelper {
     } else {
       // Must match the values createWindow() applies at construction.
       if (isMac) this.launcherWindow.setVibrancy('under-window');
-      this.launcherWindow.setBackgroundColor('#000000');
+      this.launcherWindow.setBackgroundColor('#00000000');
       this.launcherWindow.setHasShadow(true);
     }
     this.launcherOpacityPreviewActive = active;
