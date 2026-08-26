@@ -1314,7 +1314,7 @@ const Launcher: React.FC<LauncherProps> = ({ onStartMeeting, onOpenSettings, onO
                                                     <>
                                                         {/* Floating action-bar pill (Google-Drive style):
                                                             [✓ N selected] | [Move] [🗑] [Cancel] */}
-                                                        <div className={`flex items-center gap-1 px-1.5 py-1 rounded-xl border ${isLight ? 'bg-[#EDEDED] border-black/[0.04] shadow-[0_1px_2px_rgba(0,0,0,0.03),0_3px_8px_rgba(0,0,0,0.025)]' : 'bg-[#2A2A2E] border-white/10 shadow-[0_1px_2px_rgba(0,0,0,0.4),0_3px_8px_rgba(0,0,0,0.25)]'}`}>
+                                                        <div className={`flex items-center gap-1 px-1.5 py-1 rounded-full border ${isLight ? 'bg-[#EDEDED] border-black/[0.04] shadow-[0_1px_2px_rgba(0,0,0,0.03),0_3px_8px_rgba(0,0,0,0.025)]' : 'bg-[#2A2A2E] border-white/10 shadow-[0_1px_2px_rgba(0,0,0,0.4),0_3px_8px_rgba(0,0,0,0.25)]'}`}>
                                                             {/* Selected count */}
                                                             <span className="h-8 flex items-center gap-1.5 px-2.5 text-[12px] font-medium text-text-secondary whitespace-nowrap">
                                                                 <Check size={13} className="text-accent-primary" />
@@ -1328,7 +1328,7 @@ const Launcher: React.FC<LauncherProps> = ({ onStartMeeting, onOpenSettings, onO
                                                             <button
                                                                 disabled={selectedIds.size === 0}
                                                                 onClick={() => setMoveMeetingIds(Array.from(selectedIds))}
-                                                                className={`h-8 flex items-center gap-1.5 px-2.5 rounded-lg text-[12px] font-medium transition-all active:scale-95 ${selectedIds.size > 0 ? (isLight ? 'text-text-primary hover:bg-white/[0.65]' : 'text-text-primary hover:bg-white/10') : 'text-text-tertiary cursor-default'}`}
+                                                                className={`h-8 flex items-center gap-1.5 px-2.5 rounded-full text-[12px] font-medium transition-all active:scale-95 ${selectedIds.size > 0 ? (isLight ? 'text-text-primary hover:bg-white/[0.65]' : 'text-text-primary hover:bg-white/10') : 'text-text-tertiary cursor-default'}`}
                                                             >
                                                                 <Folder size={14} />
                                                                 <span>{t('Move')}</span>
@@ -1339,7 +1339,7 @@ const Launcher: React.FC<LauncherProps> = ({ onStartMeeting, onOpenSettings, onO
                                                                 disabled={selectedIds.size === 0}
                                                                 onClick={() => setConfirmBulkDelete(true)}
                                                                 title={t('Delete')}
-                                                                className={`w-8 h-8 flex items-center justify-center rounded-lg transition-all active:scale-95 ${selectedIds.size > 0 ? (isLight ? 'text-text-secondary hover:text-red-500 hover:bg-red-50' : 'text-text-secondary hover:text-red-400 hover:bg-red-500/10') : 'text-text-tertiary cursor-default'}`}
+                                                                className={`w-8 h-8 flex items-center justify-center rounded-full transition-all active:scale-95 ${selectedIds.size > 0 ? (isLight ? 'text-text-secondary hover:text-red-500 hover:bg-red-50' : 'text-text-secondary hover:text-red-400 hover:bg-red-500/10') : 'text-text-tertiary cursor-default'}`}
                                                             >
                                                                 <Trash2 size={14} />
                                                             </button>
@@ -1347,7 +1347,7 @@ const Launcher: React.FC<LauncherProps> = ({ onStartMeeting, onOpenSettings, onO
                                                             {/* Cancel — exits selection mode (renamed from Done) */}
                                                             <button
                                                                 onClick={exitSelection}
-                                                                className={`h-8 px-2.5 rounded-lg text-[12px] font-medium transition-all active:scale-95 ${isLight ? 'text-text-secondary hover:text-text-primary hover:bg-white/[0.65]' : 'text-text-secondary hover:text-text-primary hover:bg-white/10'}`}
+                                                                className={`h-8 px-2.5 rounded-full text-[12px] font-medium transition-all active:scale-95 ${isLight ? 'text-text-secondary hover:text-text-primary hover:bg-white/[0.65]' : 'text-text-secondary hover:text-text-primary hover:bg-white/10'}`}
                                                             >
                                                                 {t('Cancel')}
                                                             </button>
