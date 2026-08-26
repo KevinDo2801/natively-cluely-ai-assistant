@@ -935,7 +935,7 @@ const App: React.FC = () => {
                       initial="initial"
                       animate="animate"
                       exit="exit"
-                      className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-sm"
+                      className="fixed inset-0 z-[3000] flex items-center justify-center bg-black/60 backdrop-blur-sm"
                       onClick={(event) => {
                         if (event.target !== event.currentTarget) return;
                         closeManagerPanel();
