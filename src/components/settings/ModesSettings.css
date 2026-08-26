@@ -387,6 +387,44 @@
   word-break: break-word;
 }
 
+/* Read-state title that opens inline rename. Hover gives a subtle highlight and
+   a text cursor so it reads as editable, without a loud tooltip. */
+.ms-title-clickable {
+  cursor: text;
+  position: relative;
+  padding: 4px 6px;
+  margin: -4px -6px;
+  border-radius: 12px;
+  transition: background 0.14s ease;
+}
+
+.ms-title-clickable:hover {
+  background: #f2f2f4;
+}
+
+/* Inline rename field — a clean, rounded box that looks like a text-field,
+   not a bare underline (matches the reference edit state). */
+.ms-page-title-input {
+  font-size: 28px;
+  line-height: 1.2;
+  font-weight: 600;
+  letter-spacing: -1px;
+  color: #050505;
+  border: 1px solid #e3e3e6;
+  border-radius: 12px;
+  background: #fafafa;
+  outline: none;
+  padding: 12px 18px;
+  width: min(100%, 520px);
+  min-width: 0;
+}
+
+.ms-page-title-input:focus {
+  border-color: #08a6ec;
+  background: #ffffff;
+  box-shadow: 0 0 0 3px rgba(8, 166, 236, 0.12);
+}
+
 .ms-active-pill {
   height: 36px;
   padding: 0 16px;

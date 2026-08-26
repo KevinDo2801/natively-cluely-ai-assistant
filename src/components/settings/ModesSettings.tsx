@@ -44,7 +44,6 @@ import {
   FileText,
   FolderOpen,
   Headphones,
-  LayoutGrid,
   Loader2,
   Lock,
   MonitorPlay,
@@ -157,6 +156,11 @@ export const ModesSettings: React.FC<ModesSettingsProps> = ({ onClose }) => {
   const [confirmDeleteId, setConfirmDeleteId] = useState<string | null>(null);
   const [contentMenuOpen, setContentMenuOpen] = useState(false);
 
+  // Mode-name editing ("Untitled Mode" is auto-editable so the user can name
+  // it right after New Mode; other modes get a pencil button).
+  const [renaming, setRenaming] = useState(false);
+  const [nameDraft, setNameDraft] = useState('');
+
   // Editable field state
   const [promptDraft, setPromptDraft] = useState('');
   const [promptSaving, setPromptSaving] = useState(false);
@@ -210,6 +214,10 @@ export const ModesSettings: React.FC<ModesSettingsProps> = ({ onClose }) => {
     setSectionDrafts({});
     setAddingSection(false);
     setNewSection({ title: '', description: '' });
+    // An unnamed "Untitled Mode" opens straight into the rename field; every
+    // other (non-locked) mode shows the pencil button instead.
+    setRenaming(mode?.name === 'Untitled Mode' && !isGeneralLocked(mode));
+    setNameDraft(mode?.name ?? '');
     if (!mode) {
       setNoteSections([]);
       setRefFiles([]);
@@ -282,12 +290,11 @@ export const ModesSettings: React.FC<ModesSettingsProps> = ({ onClose }) => {
   const handleTemplatePick = async (tpl: ModeTemplate) => {
     if (busy) return;
     setError('');
-    // The "General" row means "start from an empty mode": create "Untitled
-    // Mode" (blank), exactly like the sidebar New Mode button.
-    const isGeneral = tpl.type === 'general';
-    const created = await handleCreateMode(isGeneral ? 'Untitled Mode' : tpl.label, tpl.type);
-    if (created && tpl.starterPrompt && !isGeneral) {
-      // Seed the template's starter "real-time prompt" (backend source of truth).
+    // The gallery only lists non-General templates (General is filtered out —
+    // blank modes come from "+ New Mode"), so every row creates a named mode
+    // and, for templates with one, seeds the starter "real-time prompt".
+    const created = await handleCreateMode(tpl.label, tpl.type);
+    if (created && tpl.starterPrompt) {
       const upd = await window.electronAPI?.modesUpdate?.(created.id, { customContext: tpl.starterPrompt });
       if (upd && !upd.success) {
         setError(upd.error === 'pro_required' ? PRO_ERROR_TEXT : upd.error || 'Could not save mode prompt.');
@@ -339,6 +346,25 @@ export const ModesSettings: React.FC<ModesSettingsProps> = ({ onClose }) => {
   };
 
   // ── Field saves (Real-time prompt, Notes template sections) ─────────────────
+
+  /** Persist a rename from the editable title (Enter / blur); Escape cancels. */
+  const handleNameSave = async () => {
+    if (!selected || locked) return;
+    const name = nameDraft.trim();
+    if (!name || name === selected.name) {
+      // Empty or unchanged — drop the edit and keep the existing name.
+      setRenaming(false);
+      setNameDraft(selected.name);
+      return;
+    }
+    const res = await window.electronAPI?.modesUpdate?.(selected.id, { name });
+    if (res?.success) {
+      setRenaming(false);
+      await refresh();
+    } else {
+      setError(res?.error === 'pro_required' ? PRO_ERROR_TEXT : res?.error || 'Could not rename mode.');
+    }
+  };
 
   const handlePromptBlur = async () => {
     if (!selected) return;
@@ -478,7 +504,12 @@ export const ModesSettings: React.FC<ModesSettingsProps> = ({ onClose }) => {
           className={`ms-templates-button ${view === 'templates' ? 'active' : ''}`}
           onClick={() => setView(view === 'templates' ? 'modes' : 'templates')}
         >
-          <LayoutGrid size={18} strokeWidth={1.8} />
+          <svg width={18} height={18} viewBox="0 0 14 14" fill="none">
+            <rect x="1" y="1" width="5.5" height="5.5" rx="1.5" fill="currentColor" opacity="0.9" />
+            <rect x="7.5" y="1" width="5.5" height="5.5" rx="1.5" fill="currentColor" opacity="0.9" />
+            <rect x="1" y="7.5" width="5.5" height="5.5" rx="1.5" fill="currentColor" opacity="0.9" />
+            <rect x="7.5" y="7.5" width="5.5" height="5.5" rx="1.5" fill="currentColor" opacity="0.35" />
+          </svg>
           <span>{t('Natively Templates')}</span>
         </button>
       </div>
@@ -508,7 +539,38 @@ export const ModesSettings: React.FC<ModesSettingsProps> = ({ onClose }) => {
     return (
       <div className="ms-content-inner">
         <div className="ms-content-header">
-          <h1 className="ms-page-title">{selected.name}</h1>
+          {!locked && (renaming || selected.name === 'Untitled Mode') ? (
+            <input
+              autoFocus
+              className="ms-page-title-input"
+              value={nameDraft}
+              placeholder={t('Name your mode…')}
+              onChange={(e) => setNameDraft(e.target.value)}
+              onFocus={(e) => e.target.select()}
+              onBlur={() => void handleNameSave()}
+              onKeyDown={(e) => {
+                if (e.key === 'Enter') void handleNameSave();
+                if (e.key === 'Escape') {
+                  setRenaming(false);
+                  setNameDraft(selected.name);
+                }
+              }}
+            />
+          ) : (
+            <h1
+              className={`ms-page-title ${!locked ? 'ms-title-clickable' : ''}`}
+              onClick={
+                !locked
+                  ? () => {
+                      setRenaming(true);
+                      setNameDraft(selected.name);
+                    }
+                  : undefined
+              }
+            >
+              {selected.name}
+            </h1>
+          )}
           <div className="ms-content-actions">
             {selected.isActive ? (
               <div className="ms-active-pill">
@@ -738,26 +800,30 @@ export const ModesSettings: React.FC<ModesSettingsProps> = ({ onClose }) => {
         ) : templates.length === 0 ? (
           <p className="ms-muted">{t('No templates available.')}</p>
         ) : (
-          templates.map((tpl) => (
-            <div
-              key={tpl.type}
-              className={`ms-template-row ${tpl.type === 'general' ? 'general' : ''}`}
-              onClick={() => void handleTemplatePick(tpl)}
-            >
-              <div className={`ms-template-icon-box ${TEMPLATE_COLORS[tpl.type] ?? 'general'}`}>
-                {TEMPLATE_ICONS[tpl.type] ?? <Sparkles size={30} strokeWidth={1.8} />}
-              </div>
-              <div className="ms-template-info">
-                <div className="ms-template-name-row">
-                  <span className="ms-template-name">{tpl.label}</span>
-                  <span className="ms-chevron">
-                    <ChevronRight size={16} strokeWidth={2.2} />
-                  </span>
+          // The General template is not listed — a blank mode comes from the
+          // sidebar "+ New Mode" (an "Untitled Mode"), not from the gallery.
+          templates
+            .filter((tpl) => tpl.type !== 'general')
+            .map((tpl) => (
+              <div
+                key={tpl.type}
+                className="ms-template-row"
+                onClick={() => void handleTemplatePick(tpl)}
+              >
+                <div className={`ms-template-icon-box ${TEMPLATE_COLORS[tpl.type] ?? 'general'}`}>
+                  {TEMPLATE_ICONS[tpl.type] ?? <Sparkles size={30} strokeWidth={1.8} />}
                 </div>
-                <p className="ms-template-description">{tpl.description}</p>
+                <div className="ms-template-info">
+                  <div className="ms-template-name-row">
+                    <span className="ms-template-name">{tpl.label}</span>
+                    <span className="ms-chevron">
+                      <ChevronRight size={16} strokeWidth={2.2} />
+                    </span>
+                  </div>
+                  <p className="ms-template-description">{tpl.description}</p>
+                </div>
               </div>
-            </div>
-          ))
+            ))
         )}
       </div>
     </div>
