@@ -60,7 +60,7 @@ export const KeyRecorder: React.FC<KeyRecorderProps> = ({ currentKeys, onSave, c
 
     return (
         <div
-            className={`relative flex items-center gap-1.5 group ${className || ''}`}
+            className={`relative flex items-center gap-1.5 group cursor-pointer ${className || ''}`}
             onClick={() => setIsRecording(true)}
         >
             {isRecording ? (

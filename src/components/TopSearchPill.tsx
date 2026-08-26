@@ -285,7 +285,7 @@ const TopSearchPill: React.FC<TopSearchPillProps> = ({
                             >
                                 {/* Input Row */}
                                 <div
-                                    className="relative flex items-center"
+                                    className="relative flex items-center cursor-pointer"
                                     onClick={() => state === 'idle' && open()}
                                 >
                                     <div className="absolute left-3 flex items-center pointer-events-none">

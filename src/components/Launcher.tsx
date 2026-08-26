@@ -118,6 +118,10 @@ const Launcher: React.FC<LauncherProps> = ({ onStartMeeting, onOpenSettings, onO
     const [deleteMeetingsCheck, setDeleteMeetingsCheck] = useState(false);
     const [moveMeetingId, setMoveMeetingId] = useState<string | null>(null);
     const [folderMenuId, setFolderMenuId] = useState<string | null>(null);
+    // Multi-select bulk delete (v32): Google-Drive style checkboxes.
+    const [selectionMode, setSelectionMode] = useState(false);
+    const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
+    const [confirmBulkDelete, setConfirmBulkDelete] = useState(false);
 
     // Global search state (for AI chat overlay)
     const [isGlobalChatOpen, setIsGlobalChatOpen] = useState(false);
@@ -461,6 +465,7 @@ const Launcher: React.FC<LauncherProps> = ({ onStartMeeting, onOpenSettings, onO
 
     const handleOpenFolder = (folderId: string) => {
         analytics.trackCommandExecuted('open_meeting_folder');
+        exitSelection();
         applyFolder(folderId);
         fetchMeetings(folderId);
         setActiveMenuId(null);
@@ -533,6 +538,42 @@ const Launcher: React.FC<LauncherProps> = ({ onStartMeeting, onOpenSettings, onO
         }
         setMoveMeetingId(null);
         if (ok) refreshData();
+    };
+
+    // ── Multi-select bulk delete (v32) ──────────────────────────────────
+    const enterSelection = () => {
+        setActiveMenuId(null);
+        setFolderMenuId(null);
+        setSelectedIds(new Set());
+        setSelectionMode(true);
+    };
+
+    const exitSelection = () => {
+        setSelectionMode(false);
+        setSelectedIds(new Set());
+    };
+
+    const toggleSelect = (id: string, isLive: boolean) => {
+        if (isLive) return; // live note rows belong to the running meeting — never selectable
+        setSelectedIds(prev => {
+            const next = new Set(prev);
+            if (next.has(id)) next.delete(id);
+            else next.add(id);
+            return next;
+        });
+    };
+
+    const handleBulkDelete = async () => {
+        const ids = Array.from(selectedIds);
+        setConfirmBulkDelete(false);
+        exitSelection();
+        if (ids.length === 0) return;
+        try {
+            await window.electronAPI?.deleteMeetings?.(ids);
+        } catch (err) {
+            console.error("[Launcher] Bulk delete failed:", err);
+        }
+        refreshData();
     };
 
     // Helper to format duration to mm:ss or mmm:ss
@@ -1193,16 +1234,13 @@ const Launcher: React.FC<LauncherProps> = ({ onStartMeeting, onOpenSettings, onO
                                         {!currentFolderId && (
                                             <section>
                                                 <div className="flex items-center justify-between mb-3 pl-1">
-                                                    <h3 className="text-[13px] font-medium text-text-secondary flex items-center gap-1.5">
-                                                        <Folder size={13} />
-                                                        {t('Folders')}
-                                                    </h3>
+                                                    <h3 className="text-[13px] font-medium text-text-secondary">{t('My Folder')}</h3>
                                                     <button
                                                         onClick={openCreateFolderDialog}
-                                                        className={`flex items-center gap-1.5 text-[12px] font-semibold px-3 py-1.5 rounded-full transition-all duration-200 active:scale-95 ${isLight ? 'bg-black/5 hover:bg-black/10 text-text-primary' : 'bg-white/10 hover:bg-white/15 text-text-primary'}`}
+                                                        title={t('New Folder')}
+                                                        className={`flex items-center gap-1.5 text-[12px] font-semibold px-2.5 py-2 rounded-full transition-all duration-200 active:scale-95 ${isLight ? 'bg-black/5 hover:bg-black/10 text-text-primary' : 'bg-white/10 hover:bg-white/15 text-text-primary'}`}
                                                     >
-                                                        <FolderPlus size={13} />
-                                                        {t('New Folder')}
+                                                        <FolderPlus size={18} />
                                                     </button>
                                                 </div>
 
@@ -1264,19 +1302,72 @@ const Launcher: React.FC<LauncherProps> = ({ onStartMeeting, onOpenSettings, onO
                                             </section>
                                         )}
 
+                                        {/* Multi-select toolbar (bulk delete, v32) — only when there are meetings */}
+                                        {meetings.length > 0 && (
+                                            <div className="flex items-center justify-end pl-1">
+                                                {selectionMode ? (
+                                                    <>
+                                                        <span className="text-[13px] font-medium text-text-secondary flex items-center gap-1.5">
+                                                            <Check size={13} className="text-accent-primary" />
+                                                            {selectedIds.size} {t('selected')}
+                                                        </span>
+                                                        <div className="flex items-center gap-2">
+                                                            <button
+                                                                onClick={exitSelection}
+                                                                className={`px-3 py-1.5 rounded-full text-[12px] font-medium text-text-secondary hover:text-text-primary transition-colors ${isLight ? 'hover:bg-black/8' : 'hover:bg-white/10'}`}
+                                                            >
+                                                                {t('Done')}
+                                                            </button>
+                                                            <button
+                                                                disabled={selectedIds.size === 0}
+                                                                onClick={() => setConfirmBulkDelete(true)}
+                                                                className={`flex items-center gap-1.5 px-3.5 py-1.5 rounded-full text-[12px] font-semibold transition-all active:scale-95 ${selectedIds.size > 0 ? 'text-white bg-red-500 hover:bg-red-400' : 'bg-bg-toggle-switch text-text-tertiary cursor-default'}`}
+                                                            >
+                                                                <Trash2 size={13} />
+                                                                {t('Delete')}
+                                                            </button>
+                                                        </div>
+                                                    </>
+                                                ) : (
+                                                    <button
+                                                        onClick={enterSelection}
+                                                        className={`flex items-center gap-1.5 px-3 py-1.5 rounded-full text-[12px] font-semibold transition-all duration-200 active:scale-95 ${isLight ? 'bg-black/5 hover:bg-black/10 text-text-primary' : 'bg-white/10 hover:bg-white/15 text-text-primary'}`}
+                                                    >
+                                                        {t('Select')}
+                                                    </button>
+                                                )}
+                                            </div>
+                                        )}
+
                                         {/* Iterating Date Groups */}
                                         {sortedGroups.map((label) => (
                                             <section key={label}>
                                                 <h3 className="text-[13px] font-medium text-text-secondary mb-3 pl-1">{label}</h3>
                                                 <div className="space-y-1">
-                                                    {groupedMeetings[label].map((m) => (
+                                                    {groupedMeetings[label].map((m) => {
+                                                        const isSelected = selectionMode && selectedIds.has(m.id);
+                                                        return (
                                                         <motion.div
                                                             key={m.id}
                                                             layoutId={`meeting-${m.id}`}
-                                                            className="group relative flex items-center justify-between px-3 py-2 rounded-lg bg-transparent hover:bg-bg-elevated transition-colors"
-                                                            onClick={() => handleOpenMeeting(m)}
+                                                            className={`group relative flex items-center justify-between px-3 py-2 rounded-lg transition-colors cursor-pointer ${isSelected ? 'bg-accent-subtle' : 'bg-transparent hover:bg-bg-elevated'}`}
+                                                            onClick={() => selectionMode ? toggleSelect(m.id, !!m.isLive) : handleOpenMeeting(m)}
                                                         >
-                                                            <div className={`font-medium text-[14px] max-w-[60%] truncate ${m.title === 'Processing...' ? 'text-blue-400 italic animate-pulse' : 'text-text-primary'}`}>
+                                                            {/* Selection checkbox (v32) — absolutely positioned so it never
+                                                                shifts the meeting title/time right when selection mode toggles. */}
+                                                            {selectionMode && (
+                                                                <button
+                                                                    disabled={!!m.isLive}
+                                                                    onClick={(e) => { e.stopPropagation(); toggleSelect(m.id, !!m.isLive); }}
+                                                                    className={`absolute left-2 top-1/2 -translate-y-1/2 z-10 shrink-0 flex items-center justify-center w-4 h-4 rounded-[5px] border transition-colors ${m.isLive ? 'opacity-30 cursor-default' : 'cursor-pointer'} ${isSelected ? 'bg-accent-primary border-accent-primary' : 'border-text-tertiary/40 hover:border-text-secondary'}`}
+                                                                    aria-checked={isSelected}
+                                                                    role="checkbox"
+                                                                >
+                                                                    {isSelected && <Check size={11} strokeWidth={3} className="text-white" />}
+                                                                </button>
+                                                            )}
+
+                                                            <div className={`pl-5 font-medium text-[14px] max-w-[60%] truncate ${m.title === 'Processing...' ? 'text-blue-400 italic animate-pulse' : 'text-text-primary'}`}>
                                                                 {m.title}
                                                             </div>
 
@@ -1306,18 +1397,20 @@ const Launcher: React.FC<LauncherProps> = ({ onStartMeeting, onOpenSettings, onO
                                                                 )}
                                                             </div>
 
-                                                            {/* Context Menu Trigger (Slides in on hover) */}
-                                                            <div className="absolute right-3 top-1/2 -translate-y-1/2 opacity-0 translate-x-4 transition-all duration-300 ease-out group-hover:opacity-100 group-hover:translate-x-0">
-                                                                <button
-                                                                    className="p-1.5 text-text-secondary hover:text-text-primary transition-colors"
-                                                                    onClick={(e) => {
-                                                                        e.stopPropagation();
-                                                                        setActiveMenuId(activeMenuId === m.id ? null : m.id);
-                                                                    }}
-                                                                >
-                                                                    <MoreHorizontal size={16} />
-                                                                </button>
-                                                            </div>
+                                                            {/* Context Menu Trigger (Slides in on hover) — hidden in selection mode */}
+                                                            {!selectionMode && (
+                                                                <div className="absolute right-3 top-1/2 -translate-y-1/2 opacity-0 translate-x-4 transition-all duration-300 ease-out group-hover:opacity-100 group-hover:translate-x-0">
+                                                                    <button
+                                                                        className="p-1.5 text-text-secondary hover:text-text-primary transition-colors"
+                                                                        onClick={(e) => {
+                                                                            e.stopPropagation();
+                                                                            setActiveMenuId(activeMenuId === m.id ? null : m.id);
+                                                                        }}
+                                                                    >
+                                                                        <MoreHorizontal size={16} />
+                                                                    </button>
+                                                                </div>
+                                                            )}
 
                                                             {/* Dropdown Menu */}
                                                             <AnimatePresence>
@@ -1393,7 +1486,8 @@ const Launcher: React.FC<LauncherProps> = ({ onStartMeeting, onOpenSettings, onO
                                                                 )}
                                                             </AnimatePresence>
                                                         </motion.div>
-                                                    ))}
+                                                        );
+                                                    })}
                                                 </div>
                                             </section>
                                         ))}
@@ -1636,6 +1730,56 @@ const Launcher: React.FC<LauncherProps> = ({ onStartMeeting, onOpenSettings, onO
                                         </button>
                                     );
                                 })}
+                            </div>
+                        </motion.div>
+                    </motion.div>
+                )}
+            </AnimatePresence>
+
+            {/* Bulk-delete confirmation dialog (multi-select, v32) */}
+            <AnimatePresence>
+                {confirmBulkDelete && (
+                    <motion.div
+                        key="bulk-delete-dialog"
+                        className="fixed inset-0 z-[3000] flex items-center justify-center bg-black/40 backdrop-blur-sm"
+                        initial={{ opacity: 0 }}
+                        animate={{ opacity: 1 }}
+                        exit={{ opacity: 0 }}
+                        onClick={() => setConfirmBulkDelete(false)}
+                    >
+                        <motion.div
+                            initial={{ opacity: 0, scale: 0.96, y: 12 }}
+                            animate={{ opacity: 1, scale: 1, y: 0 }}
+                            exit={{ opacity: 0, scale: 0.96, y: 8 }}
+                            transition={{ type: 'spring', stiffness: 380, damping: 30 }}
+                            onClick={(e) => e.stopPropagation()}
+                            className={`w-[340px] rounded-2xl p-5 backdrop-blur-xl border shadow-2xl ${isLight ? 'bg-bg-elevated border-border-muted shadow-[0_16px_48px_rgba(0,0,0,0.18)]' : 'bg-[#1E1E1E]/90 border-white/10 shadow-[0_16px_48px_rgba(0,0,0,0.6)]'}`}
+                        >
+                            <div className="flex items-center justify-between mb-3">
+                                <h3 className="text-[15px] font-semibold text-text-primary flex items-center gap-2">
+                                    <Trash2 size={16} className="text-red-400" />
+                                    {t('Delete')}
+                                </h3>
+                                <button onClick={() => setConfirmBulkDelete(false)} className="p-1 text-text-tertiary hover:text-text-primary transition-colors rounded-lg">
+                                    <X size={15} />
+                                </button>
+                            </div>
+                            <p className="text-[12.5px] text-text-secondary leading-relaxed mb-5">
+                                {t('Delete the selected meetings? This cannot be undone.')}
+                            </p>
+                            <div className="flex justify-end gap-2">
+                                <button
+                                    onClick={() => setConfirmBulkDelete(false)}
+                                    className="px-3.5 py-1.5 rounded-full text-[12px] font-medium text-text-secondary hover:text-text-primary transition-colors"
+                                >
+                                    {t('Cancel')}
+                                </button>
+                                <button
+                                    onClick={handleBulkDelete}
+                                    className="px-4 py-1.5 rounded-full text-[12px] font-semibold text-white bg-red-500 hover:bg-red-400 transition-all active:scale-95"
+                                >
+                                    {t('Delete')}
+                                </button>
                             </div>
                         </motion.div>
                     </motion.div>

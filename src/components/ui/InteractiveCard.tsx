@@ -136,7 +136,7 @@ export function InteractiveCard({
     return (
         <motion.div
             ref={cardRef}
-            className={`${className} perspective-1000`}
+            className={`${className} ${onClick ? 'cursor-pointer' : ''} perspective-1000`}
             onMouseMove={handleMouseMove}
             onMouseEnter={handleMouseEnter}
             onMouseLeave={handleMouseLeave}

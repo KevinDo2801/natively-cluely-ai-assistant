@@ -289,7 +289,7 @@ const AnswerCopyButton: React.FC<{ text: string }> = ({ text }) => {
             type="button"
             onClick={handle}
             aria-label={copied ? t('Copied answer') : t('Copy answer')}
-            className="inline-flex items-center gap-1 h-6 px-1.5 rounded-md cursor-default select-none text-[11px] font-medium text-text-tertiary hover:text-text-secondary hover:bg-white/[0.05] transition-[color,background-color,transform] duration-[120ms] ease-out active:scale-[0.97] focus:outline-none focus-visible:ring-2 focus-visible:ring-white/25"
+            className="inline-flex items-center gap-1 h-6 px-1.5 rounded-md cursor-pointer select-none text-[11px] font-medium text-text-tertiary hover:text-text-secondary hover:bg-white/[0.05] transition-[color,background-color,transform] duration-[120ms] ease-out active:scale-[0.97] focus:outline-none focus-visible:ring-2 focus-visible:ring-white/25"
         >
             {copied ? <Check className="w-3 h-3 text-emerald-400" strokeWidth={2.5} /> : <Copy className="w-3 h-3" strokeWidth={2} />}
             <span>{copied ? t('Copied') : t('Copy')}</span>
@@ -595,7 +595,7 @@ const CodingAnswerBlock: React.FC<{ sections: CodingSection[]; firstView?: boole
                                         tabIndex={isTabStop ? 0 : -1}
                                         onClick={() => setActiveDetail(prev => prev === pill.kind ? null : pill.kind)}
                                         className={[
-                                            'relative inline-flex items-center gap-1 px-2.5 py-1 rounded-full text-[12.5px] font-medium select-none cursor-default',
+                                            'relative inline-flex items-center gap-1 px-2.5 py-1 rounded-full text-[12.5px] font-medium select-none cursor-pointer',
                                             'transition-[color,background-color,transform] duration-150 ease-out active:scale-[0.97]',
                                             'focus:outline-none focus-visible:ring-2 focus-visible:ring-white/25',
                                             isActive ? 'text-text-primary' : 'text-white/35 hover:text-text-tertiary hover:bg-white/[0.04]',

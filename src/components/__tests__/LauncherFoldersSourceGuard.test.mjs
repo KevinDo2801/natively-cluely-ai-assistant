@@ -75,4 +75,13 @@ describe('Launcher meeting folders (v32)', () => {
     assert.match(source, /currentFolderId \? handleGoToRoot : undefined/,
       'the back button must leave an open folder when no meeting is selected');
   });
+
+  test('the launcher offers multi-select bulk delete', () => {
+    assert.match(source, /\{t\('Select'\)\}/, 'a Select button must exist when meetings are listed');
+    assert.match(source, /toggleSelect\(m\.id, !!m\.isLive\)/,
+      'rows must toggle selection and live-note rows must be excluded');
+    assert.match(source, /deleteMeetings\?\.\(ids\)/, 'bulk delete must call the delete-many IPC');
+    assert.match(source, /\{t\('Delete the selected meetings\? This cannot be undone\.'\)\}/,
+      'a confirmation dialog must precede bulk delete');
+  });
 });

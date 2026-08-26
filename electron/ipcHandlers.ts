@@ -9323,6 +9323,20 @@ export function initializeIpcHandlers(appState: AppState): void {
     return { success: ok };
   });
 
+  // Bulk-delete meetings (launcher multi-select, v32). Input validated before
+  // touching the DB: must be a non-empty array of non-empty strings, capped so
+  // a hostile/buggy renderer cannot trigger an unbounded loop.
+  safeHandle('meetings:delete-many', async (_event, ids: unknown) => {
+    const MAX = 500;
+    const clean = Array.isArray(ids)
+      ? ids.filter((id): id is string => typeof id === 'string' && id.length > 0).slice(0, MAX)
+      : [];
+    if (clean.length === 0) return { success: true, deleted: 0 };
+    const deleted = DatabaseManager.getInstance().deleteMeetings(clean);
+    if (deleted > 0) appState.broadcast('meetings-updated');
+    return { success: true, deleted };
+  });
+
   // Launcher reports which folder is open so every meeting start (including
   // pill / shortcut / calendar starts outside the launcher renderer) lands in
   // that folder. null = root. Unknown folder ids are rejected with success:false.

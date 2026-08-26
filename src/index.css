@@ -18,6 +18,42 @@
 @tailwind components;
 @tailwind utilities;
 
+/* App-wide interactive cursor — every clickable control shows a pointer.
+   Native interactive elements (buttons, links, form controls, role-based
+   widgets) get the pointer cursor by default. Overrides are applied below
+   (cursor-default on non-interactive affordances, cursor-not-allowed on
+   disabled controls). */
+:where(
+  button,
+  [role="button"],
+  [role="checkbox"],
+  [role="radio"],
+  [role="switch"],
+  [role="tab"],
+  [role="menuitem"],
+  [role="option"],
+  a,
+  label,
+  select,
+  summary,
+  details[open] summary,
+  input[type="checkbox"],
+  input[type="radio"],
+  input[type="range"],
+  input[type="submit"],
+  input[type="button"],
+  input[type="reset"],
+  [data-cursor-pointer]
+) {
+  cursor: pointer;
+}
+
+:where(button:disabled, button[disabled],
+  input:disabled, select:disabled, textarea:disabled,
+  a[aria-disabled="true"], [aria-disabled="true"], *[disabled]) {
+  cursor: not-allowed;
+}
+
 :root {
   /* System Fonts - SF Pro */
   --font-system: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif, "Apple Color Emoji", "Segoe UI Emoji", "Segoe UI Symbol";
@@ -2780,7 +2816,10 @@ body {
   -webkit-app-region: no-drag;
 }
 
-/* Make sure buttons and interactive elements are not draggable */
+/* Make sure buttons and interactive elements are not draggable.
+   (The `cursor: default !important` previously here is removed — see the
+   cursor-lock note above; interactive elements should keep their normal
+   pointer/I-beam cursors while staying non-draggable.) */
 button,
 input,
 select,
@@ -2790,36 +2829,15 @@ textarea,
 [role="button"],
 a {
   -webkit-app-region: no-drag;
-  cursor: default !important;
 }
 
-/* ─── Global cursor lock ─────────────────────────────────────────────────
-   This is a desktop Electron app — the only cursor we ever show is the
-   default arrow. No I-beam on inputs, no pointer on buttons, no resize
-   handles, no text-select carets. This rule overrides:
-     - Browser UA defaults (input → text, button → pointer, link → pointer)
-     - Tailwind `cursor-*` utility classes used throughout the codebase
-     - Any inline `style="cursor: …"` set by libraries/components
-   Keep `!important` and the universal selectors — they're load-bearing. */
-*,
-*::before,
-*::after,
-*:hover,
-*:focus,
-*:active,
-*:focus-within,
-*:focus-visible,
-*[class*="cursor-"],
-input,
-textarea,
-select,
-button,
-a,
-[role="button"],
-[contenteditable],
-[contenteditable="true"] {
-  cursor: default !important;
-}
+/* Cursor lock removed — the app now shows standard interactive cursors
+   (pointer on clickable controls, text on inputs, etc.) instead of forcing
+   the default arrow everywhere. The interactive-cursor rule near the top of
+   this file supplies pointer on clickable elements; individual elements may
+   still opt out via a `cursor-*` utility (e.g. cursor-default on decorative
+   but non-clickable text). */
+
 
 /* Restore keyboard focus rings that Tailwind preflight removes */
 *:focus-visible {

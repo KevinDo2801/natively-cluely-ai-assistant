@@ -491,6 +491,8 @@ interface ElectronAPI {
   deleteFolder: (id: string, opts?: { deleteMeetings?: boolean }) => Promise<{ success: boolean }>;
   moveMeetingToFolder: (meetingId: string, folderId: string | null) => Promise<{ success: boolean }>;
   setCurrentFolder: (folderId: string | null) => Promise<{ success: boolean }>;
+  // Bulk delete (launcher multi-select, v32). Atomic in main — all or nothing.
+  deleteMeetings: (ids: string[]) => Promise<{ success: boolean; deleted?: number }>;
 
   // Intelligence Mode Events
   onIntelligenceAssistUpdate: (callback: (data: { insight: string }) => void) => () => void;
@@ -1837,6 +1839,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
   updateMeetingSpeakerLabels: (id: string, labels: Record<string, string>) =>
     ipcRenderer.invoke('update-meeting-speaker-labels', { id, labels }),
   deleteMeeting: (id: string) => ipcRenderer.invoke('delete-meeting', id),
+  deleteMeetings: (ids: string[]) => ipcRenderer.invoke('meetings:delete-many', ids),
 
   onMeetingsUpdated: (callback: () => void) => {
     const subscription = () => callback();

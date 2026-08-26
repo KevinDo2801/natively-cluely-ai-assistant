@@ -3677,6 +3677,40 @@ export class DatabaseManager {
         }
     }
 
+    /**
+     * Bulk-delete meetings (launcher multi-select, v32). Runs inside ONE
+     * transaction so a failure midway rolls the whole batch back — no partial
+     * deletion. Each meeting is reaped the same way deleteMeeting does it:
+     * vec0 rows first (F-705: virtual tables ignore FK cascades), then the
+     * parent DELETE which cascades to transcripts/usage/chunks. Unlike
+     * deleteMeeting this path does NOT swallow per-row errors — a real DB
+     * failure propagates and aborts the batch.
+     *
+     * Returns the number of meetings actually deleted (0 on failure/invalid
+     * input). Unknown ids are skipped (changes === 0 for them).
+     */
+    public deleteMeetings(ids: string[]): number {
+        if (!this.db) return 0;
+        const cleanIds = (Array.isArray(ids) ? ids : []).filter((id) => typeof id === 'string' && id.length > 0);
+        if (cleanIds.length === 0) return 0;
+        try {
+            const deleted = this.db.transaction(() => {
+                let count = 0;
+                for (const id of cleanIds) {
+                    this.deleteVectorsForMeeting(id);
+                    const info = this.db!.prepare('DELETE FROM meetings WHERE id = ?').run(id);
+                    if (info.changes > 0) count++;
+                }
+                return count;
+            })();
+            if (deleted > 0) console.log(`[DatabaseManager] Bulk-deleted ${deleted} meeting(s) (${cleanIds.length} requested)`);
+            return deleted;
+        } catch (error) {
+            console.error('[DatabaseManager] Failed to bulk-delete meetings:', error);
+            return 0;
+        }
+    }
+
     public clearAllData(): boolean {
         if (!this.db) return false;
 

@@ -233,6 +233,29 @@ describe('DatabaseManager — meeting folders (v32)', () => {
     assert.equal(dbMgr.getMeetingDetails('m-details').folderId, f.id);
   });
 
+  test('deleteMeetings bulk-deletes atomically and returns the deleted count', () => {
+    if (!dbMgr.isAvailable()) return;
+    dbMgr.saveMeeting(makeMeeting('b1'), Date.now() - 3000, 0);
+    dbMgr.saveMeeting(makeMeeting('b2'), Date.now() - 2000, 0);
+    dbMgr.saveMeeting(makeMeeting('b3'), Date.now() - 1000, 0);
+    dbMgr.saveMeeting(makeMeeting('b-keep'), Date.now(), 0);
+
+    // Children of b1 must cascade with the bulk delete.
+    const db = dbMgr.getDb();
+    db.prepare('INSERT INTO transcripts (meeting_id, speaker, content, timestamp_ms) VALUES (?, ?, ?, ?)')
+      .run('b1', 'user', 'hello', Date.now());
+
+    const deleted = dbMgr.deleteMeetings(['b1', 'b2', 'missing-id', 'b3']);
+    assert.equal(deleted, 3, 'existing ids deleted, unknown id skipped');
+    const remaining = dbMgr.getRecentMeetings(50).map((m) => m.id);
+    assert.deepEqual(remaining, ['b-keep']);
+    const childCount = db.prepare('SELECT COUNT(*) AS n FROM transcripts WHERE meeting_id = ?').get('b1').n;
+    assert.equal(childCount, 0, 'children cascade with the bulk delete');
+
+    assert.equal(dbMgr.deleteMeetings([]), 0, 'empty input is a no-op');
+    assert.equal(dbMgr.deleteMeetings(['nope']), 0, 'unknown-only input deletes nothing');
+  });
+
   test('clearAllData wipes folders too', () => {
     if (!dbMgr.isAvailable()) return;
     const f = dbMgr.createFolder('Wipe');

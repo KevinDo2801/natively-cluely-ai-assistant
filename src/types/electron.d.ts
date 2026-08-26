@@ -380,6 +380,8 @@ export interface ElectronAPI {
   regenerateMeetingFollowUp: (id: string, tone?: 'professional' | 'warm' | 'concise' | 'friendly') => Promise<{ success: boolean; error?: string }>
   updateMeetingSpeakerLabels: (id: string, labels: Record<string, string>) => Promise<{ success: boolean; labels?: Record<string, string>; error?: string }>
   deleteMeeting: (id: string) => Promise<boolean>
+  // Bulk delete (launcher multi-select, v32). Atomic in main — all or nothing.
+  deleteMeetings: (ids: string[]) => Promise<{ success: boolean; deleted?: number }>
 
   // Meeting Folders (v32)
   listFolders: () => Promise<Array<{ id: string; name: string; createdAt?: string; meetingCount?: number }>>

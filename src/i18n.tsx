@@ -68,6 +68,7 @@ const RU: Record<string, string> = {
 
     // ── Meeting folders (v32) ──
     'Folders': 'Папки',
+    'My Folder': 'Мои папки',
     'New Folder': 'Новая папка',
     'Folder name': 'Название папки',
     'Create': 'Создать',
@@ -81,6 +82,12 @@ const RU: Record<string, string> = {
     'Delete this folder? Meetings inside will move to root.': 'Удалить эту папку? Встречи внутри будут перемещены в корень.',
     'This will permanently delete the folder and everything inside it.': 'Это навсегда удалит папку и всё, что в ней находится.',
     'Also delete the meetings inside this folder': 'Также удалить встречи внутри этой папки',
+
+    // ── Multi-select bulk delete (v32) ──
+    'Select': 'Выбрать',
+    'Done': 'Готово',
+    'selected': 'выбрано',
+    'Delete the selected meetings? This cannot be undone.': 'Удалить выбранные встречи? Это действие нельзя отменить.',
 
     // ── AI Providers ──
     'Pick a default model and connect the cloud, local, or custom providers you want available.':
