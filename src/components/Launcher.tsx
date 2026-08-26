@@ -1353,13 +1353,13 @@ const Launcher: React.FC<LauncherProps> = ({ onStartMeeting, onOpenSettings, onO
                                                             className={`group relative flex items-center justify-between px-3 py-2 rounded-lg transition-colors cursor-pointer ${isSelected ? 'bg-accent-subtle' : 'bg-transparent hover:bg-bg-elevated'}`}
                                                             onClick={() => selectionMode ? toggleSelect(m.id, !!m.isLive) : handleOpenMeeting(m)}
                                                         >
-                                                            {/* Selection checkbox (v32) — absolutely positioned so it never
-                                                                shifts the meeting title/time right when selection mode toggles. */}
+                                                            {/* Selection checkbox (v32) — in-flow on the far left; shifting the
+                                                                title right by its width when selecting is the standard pattern. */}
                                                             {selectionMode && (
                                                                 <button
                                                                     disabled={!!m.isLive}
                                                                     onClick={(e) => { e.stopPropagation(); toggleSelect(m.id, !!m.isLive); }}
-                                                                    className={`absolute left-2 top-1/2 -translate-y-1/2 z-10 shrink-0 flex items-center justify-center w-4 h-4 rounded-[5px] border transition-colors ${m.isLive ? 'opacity-30 cursor-default' : 'cursor-pointer'} ${isSelected ? 'bg-accent-primary border-accent-primary' : 'border-text-tertiary/40 hover:border-text-secondary'}`}
+                                                                    className={`mr-2 shrink-0 flex items-center justify-center w-4 h-4 rounded-[5px] border transition-colors ${m.isLive ? 'opacity-30 cursor-default' : 'cursor-pointer'} ${isSelected ? 'bg-accent-primary border-accent-primary' : 'border-text-tertiary/40 hover:border-text-secondary'}`}
                                                                     aria-checked={isSelected}
                                                                     role="checkbox"
                                                                 >
@@ -1367,7 +1367,7 @@ const Launcher: React.FC<LauncherProps> = ({ onStartMeeting, onOpenSettings, onO
                                                                 </button>
                                                             )}
 
-                                                            <div className={`pl-5 font-medium text-[14px] max-w-[60%] truncate ${m.title === 'Processing...' ? 'text-blue-400 italic animate-pulse' : 'text-text-primary'}`}>
+                                                            <div className={`flex-1 min-w-0 font-medium text-[14px] text-left truncate ${m.title === 'Processing...' ? 'text-blue-400 italic animate-pulse' : 'text-text-primary'}`}>
                                                                 {m.title}
                                                             </div>
 
