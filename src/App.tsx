@@ -954,7 +954,11 @@ const App: React.FC = () => {
                           willChange: 'transform, opacity',
                           transformOrigin: 'center',
                         }}
-                        className="manager-panel-shell w-[820px] h-[600px] max-w-[95vw] max-h-[90vh] rounded-2xl overflow-hidden border border-border-muted bg-bg-elevated"
+                        className={`manager-panel-shell rounded-2xl overflow-hidden border border-border-muted bg-bg-elevated ${
+                          activeManagerPanel === 'modes'
+                            ? 'w-[1128px] h-[758px] max-w-[96vw] max-h-[94vh]'
+                            : 'w-[820px] h-[600px] max-w-[95vw] max-h-[90vh]'
+                        }`}
                       >
                         <AnimatePresence mode="wait" initial={false}>
                         <motion.div

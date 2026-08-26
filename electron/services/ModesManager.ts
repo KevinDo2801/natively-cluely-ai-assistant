@@ -258,6 +258,25 @@ export const TEMPLATE_SYSTEM_PROMPTS: Record<ModeTemplateType, string> = {
     'call-center': MODE_CALL_CENTER_PROMPT,
 };
 
+// Short, user-facing "real-time prompt" lines seeded into a CUSTOM mode's
+// customContext when the user creates it from the Natively Templates gallery
+// (Modes Manager). Deliberately distinct from TEMPLATE_SYSTEM_PROMPTS: those
+// are the full system prompts that shape behavior per template; these are the
+// brief persona lines the Modes Manager shows in the "Real-time prompt" field
+// and that the user can edit afterwards. General stays empty — the default
+// mode's prompt is autofilled/locked, and custom empty modes start blank.
+export const TEMPLATE_STARTER_PROMPTS: Record<ModeTemplateType, string> = {
+    general: '',
+    sales: 'I am a salesperson selling to prospective buyers. Help me ask quality discovery questions, handle objections, and close the sale.',
+    recruiting: 'I am interviewing a candidate for a role. Help me run a structured, fair interview and evaluate their fit with evidence.',
+    'team-meet': 'I am in a team meeting. Help me understand what is going on and contribute to the conversation if applicable.',
+    'looking-for-work': 'I am looking for work. Help me answer interview questions with confidence and clarity, grounded in my background.',
+    'technical-interview': 'I am in a technical interview. Help me think through problems aloud, structure my solutions, and explain tradeoffs.',
+    lecture: 'I am attending a lecture. Help me capture the key concepts and understand the material as it is presented.',
+    seminar: 'I am at a seminar or presentation. Help me follow the argument and ask grounded questions based on the material.',
+    'call-center': "I am handling a support call. Help me resolve the customer's issue and track the path to resolution.",
+};
+
 // Startup invariant: every MODE_*_PROMPT must begin with one of the two shared
 // prefixes so getActiveModeSystemPromptSuffix() can strip duplicated tokens.
 // If a future template diverges, we silently regress to shipping ~1.6K duplicate
@@ -444,9 +463,14 @@ export class ModesManager {
         // Always enforce 'general' at the very top of the list.
         // L1: id is the secondary sort key for stable ordering when two modes
         // share createdAt to the millisecond.
+        // NOTE: the group comparison must be a strict weak ordering — the old
+        // `if (a.templateType === 'general') return -1` returned -1 whenever `a`
+        // was general, regardless of `b`, so two general modes compared
+        // inconsistently (a<b and b<a) and the resulting order was arbitrary.
         modes.sort((a, b) => {
-            if (a.templateType === 'general') return -1;
-            if (b.templateType === 'general') return 1;
+            const ag = a.templateType === 'general' ? 0 : 1;
+            const bg = b.templateType === 'general' ? 0 : 1;
+            if (ag !== bg) return ag - bg;
             const ta = new Date(a.createdAt).getTime();
             const tb = new Date(b.createdAt).getTime();
             if (ta !== tb) return ta - tb;
@@ -623,13 +647,45 @@ export class ModesManager {
         let complete = true;
         try {
             const db = DatabaseManager.getInstance();
-            const rows = db.getModes().map((r: any) => ({
+            let rows = db.getModes().map((r: any) => ({
                 id: r.id,
                 name: r.name,
                 templateType: r.template_type,
                 createdAt: r.created_at,
                 isBuiltin: r.is_builtin === 1,
             }));
+
+            // Modes Manager redesign cleanup: built-in rows for non-General
+            // templates are app defaults auto-seeded by pre-redesign versions.
+            // Templates are now opt-in via the "Natively Templates" gallery
+            // (they create CUSTOM modes), so these stale rows are removed —
+            // only isBuiltin rows are touched, never user-created custom modes.
+            // Idempotent: fresh installs have nothing to remove.
+            const staleBuiltins = rows.filter((r) => r.isBuiltin && r.templateType !== 'general');
+            if (staleBuiltins.length > 0) {
+                for (const s of staleBuiltins) {
+                    try {
+                        this.deleteMode(s.id);
+                        console.log(`[ModesManager] removed stale built-in template mode "${s.name}" (${s.templateType}) — templates are now opt-in via the Templates gallery`);
+                    } catch (e) {
+                        complete = false;
+                        console.error(`[ModesManager] remove stale built-in ${s.id} failed:`, e);
+                    }
+                }
+                rows = db.getModes().map((r: any) => ({
+                    id: r.id,
+                    name: r.name,
+                    templateType: r.template_type,
+                    createdAt: r.created_at,
+                    isBuiltin: r.is_builtin === 1,
+                }));
+                // If the removed row was the active mode, fall back to General.
+                if (!db.getActiveMode()) {
+                    const generalRow = db.getModes().find((r: any) => r.template_type === 'general' && r.is_builtin === 1);
+                    if (generalRow) db.setActiveMode(generalRow.id);
+                }
+            }
+
             const plan = planBuiltinAdoption(rows);
 
             // Ambiguity is the one thing adoption can get wrong (see AdoptionPlan

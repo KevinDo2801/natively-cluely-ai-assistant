@@ -18,6 +18,18 @@
 // prevents the identity confusion, and locking anything more would take away
 // choices users have already made.
 //
+// BUILT-IN SCOPE (2026-08-XX, Modes Manager redesign): ONLY the General
+// default is a built-in mode. Every other template is opt-in — a user picks it
+// from the "Natively Templates" gallery, which creates a CUSTOM (never
+// built-in) mode. Consequences, enforced here:
+//   - non-general rows are NEVER adopted (their template stays editable), and
+//     never auto-seeded;
+//   - adoption below only ever touches a row named exactly "General" on the
+//     'general' template — the identity-confusion bug is still prevented for
+//     the one mode that is a true app default;
+//   - stale built-in rows for non-General templates (auto-seeded by
+//     pre-redesign versions) are removed by ModesManager.ensureBuiltinModes.
+//
 // This module is deliberately free of database and Electron imports so the
 // adoption rule — which RECLASSIFIES USER DATA — can be read and tested on its
 // own.
@@ -49,9 +61,9 @@ export interface AdoptionCandidate {
 }
 
 export interface AdoptionPlan {
-  /** Existing rows to mark built-in. */
+  /** Existing rows to mark built-in (only ever the General default now). */
   adopt: string[];
-  /** Templates with no existing row to adopt — seed a fresh one. */
+  /** Templates with no existing row to adopt — seed a fresh one (General only). */
   seed: BuiltinModeTemplate[];
   /**
    * Templates where MORE THAN ONE row qualified and the oldest was taken.
@@ -77,8 +89,9 @@ export interface AdoptionPlan {
 /**
  * Decide which existing modes become built-ins, and which templates need one.
  *
- * ADOPT requires the row's name to be EXACTLY the canonical label FOR ITS OWN
- * template. Two clauses, both load-bearing:
+ * ONLY 'general' participates (see the module header). ADOPT requires the
+ * row's name to be EXACTLY "General" on the 'general' template — the app's one
+ * true default. Two clauses, both load-bearing:
  *
  *   - name match alone is not enough. A row named "Technical Interview" that is
  *     running as `general` is the reported bug; adopting it would freeze the
@@ -87,11 +100,12 @@ export interface AdoptionPlan {
  *     named "Lecture" is their own construction, and locking it would remove a
  *     choice they made.
  *
- * ONE per template, the OLDEST, because duplicates exist in real tables and two
- * immutable modes with the same name are indistinguishable in the UI.
+ * ONE per template (i.e. for 'general'), the OLDEST, because duplicates exist
+ * in real tables and two immutable modes with the same name are
+ * indistinguishable in the UI.
  *
  * Idempotent: rows already marked built-in are skipped rather than re-adopted,
- * and they still satisfy their template so it is not seeded again.
+ * and they still satisfy the template so it is not seeded again.
  */
 export function planBuiltinAdoption(rows: readonly AdoptionCandidate[]): AdoptionPlan {
   const adopt: string[] = [];
@@ -100,22 +114,22 @@ export function planBuiltinAdoption(rows: readonly AdoptionCandidate[]): Adoptio
 
   const ordered = [...rows].sort((a, b) => String(a.createdAt).localeCompare(String(b.createdAt)));
 
-  // Already-migrated rows cover their template without being re-adopted.
+  // Already-migrated built-in rows cover their template without being re-adopted.
   for (const r of ordered) {
-    if (r.isBuiltin && isBuiltinTemplate(r.templateType)) covered.add(r.templateType);
+    if (r.isBuiltin && r.templateType === 'general') covered.add('general');
   }
 
   // Group the QUALIFIERS per template first, so a tie is visible rather than
-  // being consumed silently by first-wins iteration.
+  // being consumed silently by first-wins iteration. Non-general rows never
+  // qualify: templates are opt-in via the gallery, which creates custom modes.
   const qualifiers = new Map<BuiltinModeTemplate, string[]>();
   for (const r of ordered) {
     if (r.isBuiltin) continue;
-    const t = r.templateType;
-    if (!isBuiltinTemplate(t) || covered.has(t)) continue;
-    if (String(r.name).trim() !== BUILTIN_MODE_LABELS[t]) continue;
-    const list = qualifiers.get(t) ?? [];
+    if (r.templateType !== 'general' || covered.has('general')) continue;
+    if (String(r.name).trim() !== BUILTIN_MODE_LABELS.general) continue;
+    const list = qualifiers.get('general') ?? [];
     list.push(r.id);
-    qualifiers.set(t, list);
+    qualifiers.set('general', list);
   }
 
   for (const [t, ids] of qualifiers) {
@@ -125,12 +139,7 @@ export function planBuiltinAdoption(rows: readonly AdoptionCandidate[]): Adoptio
     if (skipped.length) ambiguous.push({ templateType: t, chosen, skipped });
   }
 
-  const seed = (Object.keys(BUILTIN_MODE_LABELS) as BuiltinModeTemplate[])
-    .filter((t) => !covered.has(t));
+  const seed = covered.has('general') ? [] : (['general'] as BuiltinModeTemplate[]);
 
   return { adopt, seed, ambiguous };
-}
-
-function isBuiltinTemplate(v: string): v is BuiltinModeTemplate {
-  return Object.prototype.hasOwnProperty.call(BUILTIN_MODE_LABELS, v);
 }

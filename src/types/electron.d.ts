@@ -320,7 +320,8 @@ export interface ElectronAPI {
   onModeChanged: (callback: (data: { id: string | null; name: string | null; fileCount?: number; indexedCount?: number }) => void) => () => void
 
   // Modes
-  modesGetAll: () => Promise<Array<{ id: string; name: string; templateType: string; customContext: string; isActive: boolean; createdAt: string; referenceFileCount: number }>>
+  modesGetAll: () => Promise<Array<{ id: string; name: string; templateType: string; customContext: string; isActive: boolean; isBuiltin: boolean; createdAt: string; referenceFileCount: number }>>
+  modesGetTemplates: () => Promise<{ success: boolean; templates?: Array<{ type: string; label: string; description: string; starterPrompt: string; noteSections: Array<{ title: string; description: string }> }>; error?: string }>
   modesGetActive: () => Promise<{ id: string; name: string; templateType: string; customContext: string; isActive: boolean; createdAt: string } | null>
   modesCreate: (params: { name: string; templateType: string }) => Promise<{ success: boolean; mode?: any; error?: string }>
   modesGenerateFromBrief: (params: { brief: string; requiresGrounding?: boolean; templateHint?: string; key?: string; persist?: boolean }) => Promise<{ success: boolean; mode?: any; draft?: any; attempts?: number; issues?: any[]; persisted?: boolean; error?: string }>

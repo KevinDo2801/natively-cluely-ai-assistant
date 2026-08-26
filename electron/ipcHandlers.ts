@@ -11700,6 +11700,34 @@ export function initializeIpcHandlers(appState: AppState): void {
     }
   });
 
+  // Template catalog for the Modes Manager "Natively Templates" gallery.
+  // Read-only: MODE_TEMPLATES (label/description) + TEMPLATE_STARTER_PROMPTS
+  // (the "Real-time prompt" a created mode is seeded with) + TEMPLATE_NOTE_SECTIONS
+  // (the note-template structure the mode's summary is built from). No pro gate:
+  // browsing is free; creating a mode from one is gated by modes:create.
+  safeHandle('modes:get-templates', async () => {
+    try {
+      const {
+        MODE_TEMPLATES,
+        TEMPLATE_STARTER_PROMPTS,
+        TEMPLATE_NOTE_SECTIONS,
+      } = require('./services/ModesManager');
+      return {
+        success: true,
+        templates: MODE_TEMPLATES.map((t: { type: string; label: string; description: string }) => ({
+          type: t.type,
+          label: t.label,
+          description: t.description,
+          starterPrompt: TEMPLATE_STARTER_PROMPTS[t.type] ?? '',
+          noteSections: TEMPLATE_NOTE_SECTIONS[t.type] ?? [],
+        })),
+      };
+    } catch (e: any) {
+      console.error('[IPC] modes:get-templates error:', e);
+      return { success: false, error: e.message, templates: [] };
+    }
+  });
+
   safeHandle('modes:get-active', async () => {
     try {
       const { ModesManager } = require('./services/ModesManager');

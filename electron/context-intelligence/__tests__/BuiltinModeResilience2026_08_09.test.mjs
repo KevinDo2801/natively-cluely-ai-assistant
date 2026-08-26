@@ -23,6 +23,12 @@
 //    an adopted row always has a correct name↔template pairing, so the only loss
 //    is that that particular row can no longer be re-templated, and the rejection
 //    error already tells the user to duplicate it as a custom mode.
+//
+// BUILT-IN SCOPE (Modes Manager redesign): only the General default is a
+// built-in mode. Non-general rows are never adopted (templates are opt-in via
+// the gallery, which creates CUSTOM modes), so the ambiguity logic below only
+// ever involves rows named "General", and stale built-in template rows seeded
+// by pre-redesign versions are removed by ensureBuiltinModes.
 
 import { test, describe } from 'node:test';
 import assert from 'node:assert/strict';
@@ -33,34 +39,34 @@ import { pathToFileURL } from 'node:url';
 import { createRequire } from 'node:module';
 
 const base = path.resolve(process.cwd(), 'dist-electron/electron');
-const { planBuiltinAdoption, BUILTIN_MODE_LABELS } =
+const { planBuiltinAdoption } =
   await import(pathToFileURL(path.join(base, 'services/builtinModes.js')).href);
 
 describe('ambiguous adoption is reported, not silent', () => {
   test('two rows qualifying for the same template are surfaced', () => {
     const plan = planBuiltinAdoption([
-      { id: 'old', name: 'Looking for work', templateType: 'looking-for-work', createdAt: '1' },
-      { id: 'new', name: 'Looking for work', templateType: 'looking-for-work', createdAt: '2' },
+      { id: 'old', name: 'General', templateType: 'general', createdAt: '1' },
+      { id: 'new', name: 'General', templateType: 'general', createdAt: '2' },
     ]);
     assert.deepEqual(plan.adopt, ['old'], 'the oldest still wins — behaviour unchanged');
     assert.equal(plan.ambiguous.length, 1);
     assert.deepEqual(plan.ambiguous[0], {
-      templateType: 'looking-for-work', chosen: 'old', skipped: ['new'],
+      templateType: 'general', chosen: 'old', skipped: ['new'],
     });
   });
 
   test('an unambiguous table reports nothing', () => {
     const plan = planBuiltinAdoption([
-      { id: 'a', name: 'Team Meet', templateType: 'team-meet', createdAt: '1' },
+      { id: 'a', name: 'General', templateType: 'general', createdAt: '1' },
     ]);
     assert.deepEqual(plan.ambiguous, []);
   });
 
   test('three candidates report both losers', () => {
     const plan = planBuiltinAdoption([
-      { id: 'a', name: 'Sales', templateType: 'sales', createdAt: '1' },
-      { id: 'b', name: 'Sales', templateType: 'sales', createdAt: '2' },
-      { id: 'c', name: 'Sales', templateType: 'sales', createdAt: '3' },
+      { id: 'a', name: 'General', templateType: 'general', createdAt: '1' },
+      { id: 'b', name: 'General', templateType: 'general', createdAt: '2' },
+      { id: 'c', name: 'General', templateType: 'general', createdAt: '3' },
     ]);
     assert.deepEqual(plan.adopt, ['a']);
     assert.deepEqual(plan.ambiguous[0].skipped, ['b', 'c']);
@@ -68,16 +74,16 @@ describe('ambiguous adoption is reported, not silent', () => {
 
   test('a near-miss is NOT ambiguity — only exact qualifiers count', () => {
     const plan = planBuiltinAdoption([
-      { id: 'a', name: 'Team Meet', templateType: 'team-meet', createdAt: '1' },
-      { id: 'b', name: 'Team Meet Notes', templateType: 'team-meet', createdAt: '2' },
-      { id: 'c', name: 'Team Meet', templateType: 'general', createdAt: '3' },
+      { id: 'a', name: 'General', templateType: 'general', createdAt: '1' },
+      { id: 'b', name: 'General Notes', templateType: 'general', createdAt: '2' },
+      { id: 'c', name: 'General', templateType: 'sales', createdAt: '3' },
     ]);
     assert.deepEqual(plan.adopt, ['a']);
     assert.deepEqual(plan.ambiguous, [], 'b and c never qualified, so nothing was skipped');
   });
 });
 
-// These two exercise the real DB, so they need the Electron runner:
+// These exercise the real DB, so they need the Electron runner:
 // better-sqlite3 is built against Electron's ABI and cannot load under plain
 // `node --test` (NODE_MODULE_VERSION mismatch). Skipping rather than failing
 // keeps the suite green under BOTH runners — run with
@@ -97,38 +103,89 @@ const dbAvailable = (() => {
 })();
 
 describe('seeding survives a partial failure', { skip: dbAvailable ? false : 'needs the Electron runner (better-sqlite3 ABI)' }, () => {
+  // dist-electron/services/ModesManager.js is CommonJS, so the `?t=` query
+  // string below does NOT create a fresh module (Node caches CJS by filename):
+  // every test in this describe shares ONE inlined DatabaseManager singleton,
+  // bound to the FIRST directory it ever saw. Use a single shared directory so
+  // all tests (and the standalone DatabaseManager import in the stale-cleanup
+  // test) read and write the SAME database file. The latch is still reset
+  // explicitly per test.
+  const SHARED_DIR = fs.mkdtempSync(path.join(os.tmpdir(), 'resil-'));
+
   const freshManager = async () => {
-    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'resil-'));
-    process.env.NATIVELY_TEST_USERDATA = dir;
+    process.env.NATIVELY_TEST_USERDATA = SHARED_DIR;
     // Fresh module registry so the singleton + latch are per-test.
     const mod = await import(`${pathToFileURL(path.join(base, 'services/ModesManager.js')).href}?t=${Date.now()}${Math.random()}`);
-    return { ModesManager: mod.ModesManager, dir };
+    return { ModesManager: mod.ModesManager, dir: SHARED_DIR };
   };
 
-  test('one failing seed does not abort the others, and the run reports incomplete', async () => {
+  test('a fresh user gets ONLY the General default, and a re-run adds nothing', async () => {
     const { ModesManager } = await freshManager();
     const mm = ModesManager.getInstance();
-    // Everything is already seeded by getInstance on a fresh dir; start over.
+    // Seeding rule (Modes Manager redesign): a fresh install seeds exactly one
+    // mode. Every other template is opt-in via the Templates gallery.
+    assert.deepEqual(mm.getModes().map((m) => m.templateType), ['general'],
+      'fresh install seeds exactly one default mode');
+    // A forced re-run over the complete table is a no-op that reports true.
+    ModesManager._resetBuiltinLatchForTest?.();
+    assert.equal(mm.ensureBuiltinModes(), true);
+    assert.deepEqual(mm.getModes().map((m) => m.templateType), ['general'],
+      'idempotent — no template materializes until the user picks it from the gallery');
+  });
+
+  test('stale built-in template rows are removed; user custom modes survive', async () => {
+    const { ModesManager } = await freshManager();
+    const mm = ModesManager.getInstance();
+    // Simulate a pre-redesign database: a template mode marked as built-in.
+    const stale = mm.createMode({ name: 'Sales', templateType: 'sales' });
+    const { DatabaseManager } = await import(pathToFileURL(path.join(base, 'db/DatabaseManager.js')).href);
+    DatabaseManager.getInstance().setModeBuiltin(stale.id, true);
+    // A user-created custom mode must never be touched by the cleanup.
+    mm.createMode({ name: 'My Sales', templateType: 'general' });
+
+    // Re-run startup seeding: the stale built-in is removed.
+    ModesManager._resetBuiltinLatchForTest?.();
+    assert.equal(mm.ensureBuiltinModes(), true);
+
+    const rows = mm.getModes().map((m) => `${m.templateType}:${m.isBuiltin}`);
+    assert.ok(!rows.includes('sales:true'), 'stale built-in Sales row was removed');
+    assert.ok(rows.includes('general:true'), 'the General default is intact');
+    assert.ok(rows.includes('general:false'), 'the user custom mode survives');
+  });
+
+  test('a failed General seed reports the run incomplete, and a later retry completes it', async () => {
+    const { ModesManager } = await freshManager();
+    const mm = ModesManager.getInstance();
+    // The DB may also carry rows left by sibling tests in this file (the
+    // inlined DatabaseManager singleton binds to the first temp dir), so find
+    // the built-in General explicitly rather than assuming it is index 0.
+    const general = mm.getModes().find((m) => m.isBuiltin && m.templateType === 'general');
+    assert.ok(general, 'the built-in General default exists');
+    const generalId = general.id;
+
+    // Simulate a failed FIRST seeding run: remove the default and make the
+    // next seed throw (the per-seed try/catch must surface the failure).
+    mm.deleteMode(generalId);
     const real = mm.createMode.bind(mm);
     let failed = 0;
     mm.createMode = (params) => {
-      if (params.templateType === 'seminar') { failed += 1; throw new Error('disk full'); }
+      if (params.templateType === 'general') { failed += 1; throw new Error('disk full'); }
       return real(params);
     };
-    // Force a re-run over an empty-ish table by clearing the latch.
     ModesManager._resetBuiltinLatchForTest?.();
     const complete = mm.ensureBuiltinModes();
 
-    assert.equal(typeof complete, 'boolean', 'ensureBuiltinModes reports completion');
-    if (failed > 0) {
-      assert.equal(complete, false, 'a failed seed must report the run as incomplete');
-    }
-    // Whatever else was requested still exists — one failure cannot abort the rest.
-    const templates = new Set(mm.getModes().map((m) => m.templateType));
-    for (const t of Object.keys(BUILTIN_MODE_LABELS)) {
-      if (t === 'seminar' && failed > 0) continue;
-      assert.ok(templates.has(t), `${t} should have survived the seminar failure`);
-    }
+    assert.equal(failed, 1, 'the General seed was attempted');
+    assert.equal(complete, false, 'a failed seed must report the run as incomplete');
+
+    // Retry with a healthy disk: the default comes back, idempotently.
+    mm.createMode = real;
+    assert.equal(mm.ensureBuiltinModes(), true);
+    // (The DB may also carry rows left by sibling tests in this file — the
+    // shared DatabaseManager singleton binds to the first temp dir — so assert
+    // the General default is present, not that it is the only row.)
+    const after = mm.getModes().map((m) => `${m.templateType}:${m.isBuiltin}`);
+    assert.ok(after.includes('general:true'), 'the General default was re-seeded');
   });
 
   test('an incomplete run is retried on a later getInstance()', async () => {

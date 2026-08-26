@@ -981,10 +981,23 @@ interface ElectronAPI {
       templateType: string;
       customContext: string;
       isActive: boolean;
+      isBuiltin: boolean;
       createdAt: string;
       referenceFileCount: number;
     }>
   >;
+  /** Read-only template catalog for the Modes Manager "Natively Templates" gallery. */
+  modesGetTemplates: () => Promise<{
+    success: boolean;
+    templates?: Array<{
+      type: string;
+      label: string;
+      description: string;
+      starterPrompt: string;
+      noteSections: Array<{ title: string; description: string }>;
+    }>;
+    error?: string;
+  }>;
   modesGetActive: () => Promise<{
     id: string;
     name: string;
@@ -2661,6 +2674,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
 
   // Modes API
   modesGetAll: () => ipcRenderer.invoke('modes:get-all'),
+  modesGetTemplates: () => ipcRenderer.invoke('modes:get-templates'),
   modesGetActive: () => ipcRenderer.invoke('modes:get-active'),
   modesCreate: (params: { name: string; templateType: string }) =>
     ipcRenderer.invoke('modes:create', params),
