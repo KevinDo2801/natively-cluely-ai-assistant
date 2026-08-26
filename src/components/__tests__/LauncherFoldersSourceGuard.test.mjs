@@ -29,7 +29,7 @@ describe('Launcher meeting folders (v32)', () => {
   });
 
   test('root view renders a Folders section with a New Folder button', () => {
-    assert.match(source, /\{t\('Folders'\)\}/, 'the section header must use the i18n key');
+    assert.match(source, /\{t\('My Folder'\)\}/, 'the section header must use the i18n key');
     assert.match(source, /\{t\('New Folder'\)\}/, 'the New Folder button must use the i18n key');
     assert.match(source, /openCreateFolderDialog/, 'New Folder must open the create dialog');
   });
@@ -49,9 +49,20 @@ describe('Launcher meeting folders (v32)', () => {
 
   test('the meeting ⋯ menu offers Move', () => {
     assert.match(source, /\{t\('Move'\)\}/, 'the menu item must use the i18n key');
-    assert.match(source, /setMoveMeetingId\(m\.id\)/, 'the item must open the move picker for that meeting');
-    assert.match(source, /moveMeetingToFolder\?\.\(meetingId, folderId\)/,
+    assert.match(source, /setMoveMeetingIds\(\[m\.id\]\)/, 'the item must open the move picker for that meeting');
+    assert.match(source, /moveMeetingToFolder\?\.\(id, folderId\)/,
       'the picker must call the move IPC with the target folder');
+  });
+
+  test('selection mode toolbar offers Move, trash-can delete, and Cancel', () => {
+    assert.match(source, /\{t\('Cancel'\)\}/,
+      'the exit-selection button must read Cancel (renamed from Done)');
+    assert.match(source, /setMoveMeetingIds\(Array\.from\(selectedIds\)\)/,
+      'toolbar Move must open the picker for every selected meeting');
+    assert.match(source, /onClick=\{\(\) => setConfirmBulkDelete\(true\)\}/,
+      'the trash-can icon must trigger the bulk-delete confirmation');
+    assert.match(source, /moveMeetingIds\.length > 1 \? .*Move.*\(\$\{moveMeetingIds\.length\}\)/,
+      'the picker title must reflect a bulk move');
   });
 
   test('folders support rename and delete (meetings move to root)', () => {

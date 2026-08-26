@@ -116,7 +116,7 @@ const Launcher: React.FC<LauncherProps> = ({ onStartMeeting, onOpenSettings, onO
     // Delete-folder dialog: when checked, contained meetings are permanently
     // deleted along with the folder (instead of moving back to root).
     const [deleteMeetingsCheck, setDeleteMeetingsCheck] = useState(false);
-    const [moveMeetingId, setMoveMeetingId] = useState<string | null>(null);
+    const [moveMeetingIds, setMoveMeetingIds] = useState<string[] | null>(null);
     const [folderMenuId, setFolderMenuId] = useState<string | null>(null);
     // Multi-select bulk delete (v32): Google-Drive style checkboxes.
     const [selectionMode, setSelectionMode] = useState(false);
@@ -528,16 +528,21 @@ const Launcher: React.FC<LauncherProps> = ({ onStartMeeting, onOpenSettings, onO
         refreshData();
     };
 
-    const handleMoveMeeting = async (meetingId: string, folderId: string | null) => {
+    const handleMoveMeetings = async (ids: string[], folderId: string | null) => {
         let ok = false;
         try {
-            const res = await window.electronAPI?.moveMeetingToFolder?.(meetingId, folderId);
-            ok = !!res?.success;
+            const results = await Promise.all(
+                ids.map(id => window.electronAPI?.moveMeetingToFolder?.(id, folderId))
+            );
+            ok = results.some(r => r?.success);
         } catch (err) {
-            console.error("[Launcher] Move meeting failed:", err);
+            console.error("[Launcher] Move meetings failed:", err);
         }
-        setMoveMeetingId(null);
-        if (ok) refreshData();
+        setMoveMeetingIds(null);
+        if (ok) {
+            exitSelection();
+            refreshData();
+        }
     };
 
     // ── Multi-select bulk delete (v32) ──────────────────────────────────
@@ -1307,24 +1312,44 @@ const Launcher: React.FC<LauncherProps> = ({ onStartMeeting, onOpenSettings, onO
                                             <div className="flex items-center justify-end pl-1">
                                                 {selectionMode ? (
                                                     <>
-                                                        <span className="text-[13px] font-medium text-text-secondary flex items-center gap-1.5">
-                                                            <Check size={13} className="text-accent-primary" />
-                                                            {selectedIds.size} {t('selected')}
-                                                        </span>
-                                                        <div className="flex items-center gap-2">
+                                                        {/* Floating action-bar pill (Google-Drive style):
+                                                            [✓ N selected] | [Move] [🗑] [Cancel] */}
+                                                        <div className={`flex items-center gap-1 px-1.5 py-1 rounded-xl border ${isLight ? 'bg-[#EDEDED] border-black/[0.04] shadow-[0_1px_2px_rgba(0,0,0,0.03),0_3px_8px_rgba(0,0,0,0.025)]' : 'bg-[#2A2A2E] border-white/10 shadow-[0_1px_2px_rgba(0,0,0,0.4),0_3px_8px_rgba(0,0,0,0.25)]'}`}>
+                                                            {/* Selected count */}
+                                                            <span className="h-8 flex items-center gap-1.5 px-2.5 text-[12px] font-medium text-text-secondary whitespace-nowrap">
+                                                                <Check size={13} className="text-accent-primary" />
+                                                                {selectedIds.size} {t('selected')}
+                                                            </span>
+
+                                                            {/* Divider */}
+                                                            <div className={`w-px h-[17px] mx-[3px] ${isLight ? 'bg-black/[0.09]' : 'bg-white/10'}`} />
+
+                                                            {/* Move selected meetings to a folder */}
                                                             <button
-                                                                onClick={exitSelection}
-                                                                className={`px-3 py-1.5 rounded-full text-[12px] font-medium text-text-secondary hover:text-text-primary transition-colors ${isLight ? 'hover:bg-black/8' : 'hover:bg-white/10'}`}
+                                                                disabled={selectedIds.size === 0}
+                                                                onClick={() => setMoveMeetingIds(Array.from(selectedIds))}
+                                                                className={`h-8 flex items-center gap-1.5 px-2.5 rounded-lg text-[12px] font-medium transition-all active:scale-95 ${selectedIds.size > 0 ? (isLight ? 'text-text-primary hover:bg-white/[0.65]' : 'text-text-primary hover:bg-white/10') : 'text-text-tertiary cursor-default'}`}
                                                             >
-                                                                {t('Done')}
+                                                                <Folder size={14} />
+                                                                <span>{t('Move')}</span>
                                                             </button>
+
+                                                            {/* Trash-can icon button — bulk delete selected meetings */}
                                                             <button
                                                                 disabled={selectedIds.size === 0}
                                                                 onClick={() => setConfirmBulkDelete(true)}
-                                                                className={`flex items-center gap-1.5 px-3.5 py-1.5 rounded-full text-[12px] font-semibold transition-all active:scale-95 ${selectedIds.size > 0 ? 'text-white bg-red-500 hover:bg-red-400' : 'bg-bg-toggle-switch text-text-tertiary cursor-default'}`}
+                                                                title={t('Delete')}
+                                                                className={`w-8 h-8 flex items-center justify-center rounded-lg transition-all active:scale-95 ${selectedIds.size > 0 ? (isLight ? 'text-text-secondary hover:text-red-500 hover:bg-red-50' : 'text-text-secondary hover:text-red-400 hover:bg-red-500/10') : 'text-text-tertiary cursor-default'}`}
                                                             >
-                                                                <Trash2 size={13} />
-                                                                {t('Delete')}
+                                                                <Trash2 size={14} />
+                                                            </button>
+
+                                                            {/* Cancel — exits selection mode (renamed from Done) */}
+                                                            <button
+                                                                onClick={exitSelection}
+                                                                className={`h-8 px-2.5 rounded-lg text-[12px] font-medium transition-all active:scale-95 ${isLight ? 'text-text-secondary hover:text-text-primary hover:bg-white/[0.65]' : 'text-text-secondary hover:text-text-primary hover:bg-white/10'}`}
+                                                            >
+                                                                {t('Cancel')}
                                                             </button>
                                                         </div>
                                                     </>
@@ -1379,7 +1404,7 @@ const Launcher: React.FC<LauncherProps> = ({ onStartMeeting, onOpenSettings, onO
                                                                         {t('Live')}
                                                                     </span>
                                                                 ) : m.title === 'Processing...' ? (
-                                                                    <div className="flex items-center gap-2 transition-all duration-200 ease-out group-hover:opacity-0 group-hover:translate-x-2 delayed-hover-exit">
+                                                                    <div className={`flex items-center gap-2 transition-all duration-200 ease-out ${!selectionMode ? 'group-hover:opacity-0 group-hover:translate-x-2 delayed-hover-exit' : ''}`}>
                                                                         <RefreshCw size={12} className="animate-spin text-blue-500" />
                                                                         <span className="text-xs text-blue-500 font-medium">{t('Finalizing...')}</span>
                                                                     </div>
@@ -1389,8 +1414,10 @@ const Launcher: React.FC<LauncherProps> = ({ onStartMeeting, onOpenSettings, onO
                                                                             {formatDurationPill(m.duration)}
                                                                         </span>
 
-                                                                        {/* Time Text (Should fade out on hover) */}
-                                                                        <span className="text-[13px] text-text-secondary font-medium min-w-[60px] text-right transition-all duration-200 ease-out group-hover:opacity-0 group-hover:translate-x-2 delayed-hover-exit">
+                                                                        {/* Time Text — only fades out on hover when the context-menu
+                                                                            (⋯) button is shown; in selection mode that button is hidden,
+                                                                            so the time must stay visible. */}
+                                                                        <span className={`text-[13px] text-text-secondary font-medium min-w-[60px] text-right transition-all duration-200 ease-out ${!selectionMode ? 'group-hover:opacity-0 group-hover:translate-x-2 delayed-hover-exit' : ''}`}>
                                                                             {formatTime(m.date)}
                                                                         </span>
                                                                     </>
@@ -1433,7 +1460,7 @@ const Launcher: React.FC<LauncherProps> = ({ onStartMeeting, onOpenSettings, onO
                                                                                 className={`w-full flex items-center gap-2 px-3 py-1.5 text-[12px] text-text-primary rounded-lg transition-colors text-left ${isLight ? 'hover:bg-bg-item-surface' : 'hover:bg-white/10'}`}
                                                                                 onClick={() => {
                                                                                     setActiveMenuId(null);
-                                                                                    setMoveMeetingId(m.id);
+                                                                                    setMoveMeetingIds([m.id]);
                                                                                 }}
                                                                             >
                                                                                 <Folder size={13} />
@@ -1676,16 +1703,16 @@ const Launcher: React.FC<LauncherProps> = ({ onStartMeeting, onOpenSettings, onO
                 )}
             </AnimatePresence>
 
-            {/* Move meeting to folder dialog */}
+            {/* Move meeting(s) to folder dialog */}
             <AnimatePresence>
-                {moveMeetingId && (
+                {moveMeetingIds && moveMeetingIds.length > 0 && (
                     <motion.div
                         key="move-meeting-dialog"
                         className="fixed inset-0 z-[3000] flex items-center justify-center bg-black/40 backdrop-blur-sm"
                         initial={{ opacity: 0 }}
                         animate={{ opacity: 1 }}
                         exit={{ opacity: 0 }}
-                        onClick={() => setMoveMeetingId(null)}
+                        onClick={() => setMoveMeetingIds(null)}
                     >
                         <motion.div
                             initial={{ opacity: 0, scale: 0.96, y: 12 }}
@@ -1698,15 +1725,15 @@ const Launcher: React.FC<LauncherProps> = ({ onStartMeeting, onOpenSettings, onO
                             <div className="flex items-center justify-between mb-4">
                                 <h3 className="text-[15px] font-semibold text-text-primary flex items-center gap-2">
                                     <Folder size={16} className="text-accent-primary" />
-                                    {t('Move')}
+                                    {moveMeetingIds.length > 1 ? `${t('Move')} (${moveMeetingIds.length})` : t('Move')}
                                 </h3>
-                                <button onClick={() => setMoveMeetingId(null)} className="p-1 text-text-tertiary hover:text-text-primary transition-colors rounded-lg">
+                                <button onClick={() => setMoveMeetingIds(null)} className="p-1 text-text-tertiary hover:text-text-primary transition-colors rounded-lg">
                                     <X size={15} />
                                 </button>
                             </div>
                             <div className="flex flex-col gap-1 max-h-[280px] overflow-y-auto custom-scrollbar pr-1">
                                 <button
-                                    onClick={() => handleMoveMeeting(moveMeetingId, null)}
+                                    onClick={() => handleMoveMeetings(moveMeetingIds, null)}
                                     className={`flex items-center gap-2.5 px-3 py-2 rounded-xl text-[13px] text-text-primary transition-colors text-left ${isLight ? 'hover:bg-black/5' : 'hover:bg-white/10'}`}
                                 >
                                     <FolderOpen size={15} className="text-text-secondary shrink-0" />
@@ -1721,7 +1748,7 @@ const Launcher: React.FC<LauncherProps> = ({ onStartMeeting, onOpenSettings, onO
                                         <button
                                             key={f.id}
                                             disabled={isCurrent}
-                                            onClick={() => handleMoveMeeting(moveMeetingId, f.id)}
+                                            onClick={() => handleMoveMeetings(moveMeetingIds, f.id)}
                                             className={`flex items-center gap-2.5 px-3 py-2 rounded-xl text-[13px] transition-colors text-left ${isCurrent ? 'text-text-tertiary cursor-default' : isLight ? 'text-text-primary hover:bg-black/5' : 'text-text-primary hover:bg-white/10'}`}
                                         >
                                             <Folder size={15} className="text-accent-primary shrink-0" />
