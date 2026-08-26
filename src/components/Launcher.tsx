@@ -1249,7 +1249,21 @@ const Launcher: React.FC<LauncherProps> = ({ onStartMeeting, onOpenSettings, onO
                                                 </div>
 
                                                 {folders.length === 0 ? (
-                                                    <p className="pl-1 text-text-tertiary text-xs">{t('No folders yet')}</p>
+                                                    /* Empty state styled like the Modes manager's
+                                                       reference-files empty field: centered box with
+                                                       a muted description + a New Folder action. */
+                                                    <div className={`flex flex-col items-center justify-center text-center gap-[18px] min-h-[128px] rounded-[13px] border px-7 py-7 ${isLight ? 'bg-[#fafafa] border-[#e7e7e7]' : 'bg-white/[0.04] border-white/10'}`}>
+                                                        <span className={`text-[15px] leading-relaxed ${isLight ? 'text-[#8a8f99]' : 'text-white/40'}`}>
+                                                            {t('No folders yet')}
+                                                        </span>
+                                                        <button
+                                                            onClick={openCreateFolderDialog}
+                                                            className={`flex items-center gap-2 px-4 py-2.5 rounded-[10px] text-[13px] font-medium border transition-all active:scale-95 ${isLight ? 'bg-white border-[#dedede] text-[#111111] shadow-[0_1px_2px_rgba(0,0,0,0.06)] hover:bg-[#fafafa]' : 'bg-white/[0.06] border-white/15 text-white hover:bg-white/10'}`}
+                                                        >
+                                                            <FolderPlus size={15} />
+                                                            {t('New Folder')}
+                                                        </button>
+                                                    </div>
                                                 ) : (
                                                     <div className="grid grid-cols-2 sm:grid-cols-3 gap-2">
                                                         {folders.map((f) => (
