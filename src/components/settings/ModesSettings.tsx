@@ -152,8 +152,6 @@ export const ModesSettings: React.FC<ModesSettingsProps> = ({ onClose }) => {
 
   // View / interaction state
   const [view, setView] = useState<'modes' | 'templates'>('modes');
-  const [creatingName, setCreatingName] = useState(false);
-  const [newModeName, setNewModeName] = useState('');
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');
   const [confirmDeleteId, setConfirmDeleteId] = useState<string | null>(null);
@@ -249,14 +247,14 @@ export const ModesSettings: React.FC<ModesSettingsProps> = ({ onClose }) => {
 
   // ── Mode actions ────────────────────────────────────────────────────────────
 
-  const handleCreateMode = async (name: string, templateType: string): Promise<boolean> => {
+  const handleCreateMode = async (name: string, templateType: string): Promise<ModeSummary | null> => {
     setBusy(true);
     setError('');
     try {
       const res = await window.electronAPI?.modesCreate?.({ name, templateType });
       if (!res?.success) {
         setError(res?.error === 'pro_required' ? PRO_ERROR_TEXT : res?.error || 'Could not create mode.');
-        return false;
+        return null;
       }
       const list = await refresh();
       const created = list.find((m) => m.id === res.mode?.id) ?? list.find((m) => m.name === name);
@@ -264,60 +262,40 @@ export const ModesSettings: React.FC<ModesSettingsProps> = ({ onClose }) => {
         setSelectedId(created.id);
         loadDetails(created);
       }
-      return true;
+      return created ?? null;
     } catch {
       setError('Could not create mode.');
-      return false;
+      return null;
     } finally {
       setBusy(false);
     }
   };
 
-  const handleNewModeSubmit = async () => {
-    const name = newModeName.trim();
-    if (!name || busy) return;
-    if (await handleCreateMode(name, 'general')) {
-      setNewModeName('');
-      setCreatingName(false);
-    }
+  // "New Mode" creates a blank "Untitled Mode" immediately — a custom general
+  // mode with an empty Real-time prompt, no reference files and a blank Notes
+  // template (the user builds their own structure with + Add template).
+  const handleNewMode = async () => {
+    if (busy) return;
+    await handleCreateMode('Untitled Mode', 'general');
   };
 
   const handleTemplatePick = async (tpl: ModeTemplate) => {
     if (busy) return;
     setError('');
-    // The "General" row means "start from an empty mode": back to the modes
-    // view and open the name field. Creating the mode happens there.
-    if (tpl.type === 'general') {
-      setView('modes');
-      setCreatingName(true);
-      return;
-    }
-    setBusy(true);
-    try {
-      const res = await window.electronAPI?.modesCreate?.({ name: tpl.label, templateType: tpl.type });
-      if (!res?.success) {
-        setError(res?.error === 'pro_required' ? PRO_ERROR_TEXT : res?.error || 'Could not create mode.');
-        return;
-      }
+    // The "General" row means "start from an empty mode": create "Untitled
+    // Mode" (blank), exactly like the sidebar New Mode button.
+    const isGeneral = tpl.type === 'general';
+    const created = await handleCreateMode(isGeneral ? 'Untitled Mode' : tpl.label, tpl.type);
+    if (created && tpl.starterPrompt && !isGeneral) {
       // Seed the template's starter "real-time prompt" (backend source of truth).
-      if (tpl.starterPrompt) {
-        const upd = await window.electronAPI?.modesUpdate?.(res.mode?.id, { customContext: tpl.starterPrompt });
-        if (upd && !upd.success) {
-          setError(upd.error === 'pro_required' ? PRO_ERROR_TEXT : upd.error || 'Could not save mode prompt.');
-        }
+      const upd = await window.electronAPI?.modesUpdate?.(created.id, { customContext: tpl.starterPrompt });
+      if (upd && !upd.success) {
+        setError(upd.error === 'pro_required' ? PRO_ERROR_TEXT : upd.error || 'Could not save mode prompt.');
+      } else {
+        await refresh();
       }
-      const list = await refresh();
-      const created = list.find((m) => m.id === res.mode?.id) ?? list.find((m) => m.name === tpl.label);
-      if (created) {
-        setSelectedId(created.id);
-        loadDetails(created);
-      }
-      setView('modes');
-    } catch {
-      setError('Could not create mode.');
-    } finally {
-      setBusy(false);
     }
+    setView('modes');
   };
 
   const handleSetActive = async (id: string) => {
@@ -463,40 +441,13 @@ export const ModesSettings: React.FC<ModesSettingsProps> = ({ onClose }) => {
           ×
         </button>
 
-        {creatingName ? (
-          <div className="ms-new-mode-form">
-            <input
-              autoFocus
-              value={newModeName}
-              onChange={(e) => setNewModeName(e.target.value)}
-              onKeyDown={(e) => {
-                if (e.key === 'Enter') void handleNewModeSubmit();
-                if (e.key === 'Escape') { setCreatingName(false); setNewModeName(''); }
-              }}
-              placeholder={t('New mode name…')}
-              className="ms-name-input"
-            />
-            <div className="ms-new-mode-actions">
-              <button className="ms-name-submit" onClick={() => void handleNewModeSubmit()} disabled={busy || !newModeName.trim()}>
-                {t('Create')}
-              </button>
-              <button
-                className="ms-name-cancel"
-                onClick={() => { setCreatingName(false); setNewModeName(''); }}
-              >
-                {t('Cancel')}
-              </button>
-            </div>
-          </div>
-        ) : (
-          <button
-            className="ms-new-mode-button"
-            onClick={() => { setCreatingName(true); setNewModeName(''); setError(''); }}
-          >
-            <span className="ms-plus">+</span>
-            <span>{t('New Mode')}</span>
-          </button>
-        )}
+        <button
+          className="ms-new-mode-button"
+          onClick={() => void handleNewMode()}
+        >
+          <span className="ms-plus">+</span>
+          <span>{t('New Mode')}</span>
+        </button>
 
         <div className="ms-mode-list">
           {modes === null ? (
@@ -546,7 +497,7 @@ export const ModesSettings: React.FC<ModesSettingsProps> = ({ onClose }) => {
           <p className="ms-empty-description">
             {t('Modes let you tailor Natively with custom prompts, note templates, and reference files for different workflows.')}
           </p>
-          <button className="ms-card-new-mode" onClick={() => { setCreatingName(true); setError(''); }}>
+          <button className="ms-card-new-mode" onClick={() => void handleNewMode()}>
             <span className="ms-plus">+</span>
             <span>{t('New Mode')}</span>
           </button>
@@ -622,7 +573,7 @@ export const ModesSettings: React.FC<ModesSettingsProps> = ({ onClose }) => {
                 value={promptDraft}
                 onChange={(e) => setPromptDraft(e.target.value)}
                 onBlur={() => void handlePromptBlur()}
-                placeholder={t('The background prompt the AI receives while this mode is active…')}
+                placeholder={t('Tell Natively how to respond during the conversation.')}
               />
               <span className="ms-save-hint">
                 {promptSaving
@@ -635,6 +586,46 @@ export const ModesSettings: React.FC<ModesSettingsProps> = ({ onClose }) => {
           )}
         </div>
 
+        {/* Reference files */}
+        <div className="ms-field">
+          <label className="ms-field-label">{t('Reference files')}</label>
+          {locked ? (
+            <div className="ms-input-box">
+              <Lock size={15} />
+              <span>{t('Autofilled by Natively')}</span>
+            </div>
+          ) : refFiles.length === 0 ? (
+            <div className="ms-empty-field">
+              <span className="ms-empty-text">{t('Add files as real-time context.')}</span>
+              <button className="ms-upload" onClick={() => void handleUploadFile()} disabled={uploading}>
+                {uploading ? <Loader2 className="ms-spin" size={14} /> : <Upload size={14} />}
+                <span>{t('Upload file')}</span>
+              </button>
+            </div>
+          ) : (
+            <div className="ms-ref-files">
+              {refFiles.map((file) => (
+                <div className="ms-ref-file" key={file.id}>
+                  <FileText size={15} strokeWidth={1.8} />
+                  <span className="ms-ref-name">{file.fileName}</span>
+                  {file.pageCount ? <span className="ms-ref-pages">{file.pageCount}p</span> : null}
+                  <button
+                    className="ms-ref-delete"
+                    title={t('Delete file')}
+                    onClick={() => void handleDeleteFile(file.id)}
+                  >
+                    <Trash2 size={14} />
+                  </button>
+                </div>
+              ))}
+              <button className="ms-upload" onClick={() => void handleUploadFile()} disabled={uploading}>
+                {uploading ? <Loader2 className="ms-spin" size={14} /> : <Upload size={14} />}
+                <span>{t('Upload file')}</span>
+              </button>
+            </div>
+          )}
+        </div>
+
         {/* Notes template */}
         <div className="ms-field">
           <label className="ms-field-label">{t('Notes template')}</label>
@@ -643,11 +634,16 @@ export const ModesSettings: React.FC<ModesSettingsProps> = ({ onClose }) => {
               <Lock size={15} />
               <span>{t('Autofilled by Natively')}</span>
             </div>
+          ) : noteSections.length === 0 && !addingSection ? (
+            <div className="ms-empty-field">
+              <span className="ms-empty-text">{t('Add a custom formatting template for your notes.')}</span>
+              <button className="ms-add-template" onClick={() => setAddingSection(true)}>
+                <Plus size={15} />
+                <span>{t('Add template')}</span>
+              </button>
+            </div>
           ) : (
             <div className="ms-sections">
-              {noteSections.length === 0 && (
-                <p className="ms-muted">{t('No note sections yet — add one below.')}</p>
-              )}
               {noteSections.map((section) => (
                 <div className="ms-section" key={section.id}>
                   <input
@@ -718,43 +714,6 @@ export const ModesSettings: React.FC<ModesSettingsProps> = ({ onClose }) => {
                   <span>{t('Add section')}</span>
                 </button>
               )}
-            </div>
-          )}
-        </div>
-
-        {/* Reference files */}
-        <div className="ms-field">
-          <label className="ms-field-label">{t('Reference files')}</label>
-          {locked ? (
-            <div className="ms-input-box">
-              <Lock size={15} />
-              <span>{t('Autofilled by Natively')}</span>
-            </div>
-          ) : (
-            <div className="ms-ref-files">
-              {refFiles.length === 0 && (
-                <p className="ms-muted">
-                  {t('No reference files yet. Upload documents the AI may use as context in this mode.')}
-                </p>
-              )}
-              {refFiles.map((file) => (
-                <div className="ms-ref-file" key={file.id}>
-                  <FileText size={15} strokeWidth={1.8} />
-                  <span className="ms-ref-name">{file.fileName}</span>
-                  {file.pageCount ? <span className="ms-ref-pages">{file.pageCount}p</span> : null}
-                  <button
-                    className="ms-ref-delete"
-                    title={t('Delete file')}
-                    onClick={() => void handleDeleteFile(file.id)}
-                  >
-                    <Trash2 size={14} />
-                  </button>
-                </div>
-              ))}
-              <button className="ms-upload" onClick={() => void handleUploadFile()} disabled={uploading}>
-                {uploading ? <Loader2 className="ms-spin" size={14} /> : <Upload size={14} />}
-                <span>{t('Upload file')}</span>
-              </button>
             </div>
           )}
         </div>

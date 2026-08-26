@@ -754,8 +754,14 @@ export class ModesManager {
             customContext: '',
             sourceContractJson: serializeModeSourceContract(initialContract),
         });
-        // Seed default note sections for this template type
-        const defaultSections = TEMPLATE_NOTE_SECTIONS[params.templateType] ?? [];
+        // Seed default note sections for this template type.
+        // Custom general modes ("Untitled Mode" created via New Mode, or the
+        // gallery's General choice) start with a BLANK Notes template — the
+        // user builds their own structure with "+ Add template". Template modes
+        // (Sales, Team Meet, ...) keep their canonical sections. The built-in
+        // General default gets its sections from the DB migration, not here,
+        // and its Notes template is Autofilled/locked in the UI anyway.
+        const defaultSections = params.templateType === 'general' ? [] : (TEMPLATE_NOTE_SECTIONS[params.templateType] ?? []);
         defaultSections.forEach((s, i) => {
             const sectionId = `ns_${crypto.randomUUID()}`;
             DatabaseManager.getInstance().addNoteSection({
