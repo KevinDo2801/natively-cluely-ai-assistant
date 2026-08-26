@@ -2925,6 +2925,14 @@ html[data-platform="win32"] body,
 html[data-platform="linux"] body {
   border-radius: 8px !important;
   overflow: hidden;
+  /* `overflow: hidden` alone cannot clip `position: fixed` descendants (a fixed
+     element's containing block is the viewport, not body). That let full-window
+     overlays such as the Settings backdrop (SettingsOverlay) and the Modes/
+     Profile manager panel paint a square dark rectangle over the window's rounded
+     corners. `contain: paint` makes body the containing block for fixed/absolute
+     descendants, so the existing overflow + border-radius actually clip them —
+     restoring the rounded window corners while any modal is open. */
+  contain: paint;
 }
 
 /* ───────────────────────────────────────────────────────────────────────
