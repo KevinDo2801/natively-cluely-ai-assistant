@@ -74,15 +74,61 @@ test('launcher mode registers chat scroll Up/Down globally', () => {
       `BUG: ${id} must be registered with no meeting running — the standalone overlay chat is scrollable.`
     );
   }
-  // The deliberate exclusions must stay out: Ctrl+1..7 hijack browser tab
-  // switching, Ctrl+Alt+Arrows hijack workspace/editor navigation.
+  // The deliberate exclusions must stay out of PLAIN launcher mode: Ctrl+1..7
+  // hijack browser tab switching, Ctrl+Alt+Arrows hijack workspace/editor
+  // navigation. They only register when a meeting is active (see the
+  // meeting-active test below).
   assert.ok(
     !/actionId\s*===\s*'chat:whatToAnswer'\)\s*return true/.test(gate),
-    'chat:whatToAnswer (Ctrl+1) must stay overlay-only in launcher mode.'
+    'chat:whatToAnswer (Ctrl+1) must stay overlay-only in plain launcher mode.'
   );
   assert.ok(
     !/actionId\s*===\s*'chat:scrollLeft'\)\s*return true/.test(gate),
-    'chat:scrollLeft (Ctrl+Alt+Left) must stay overlay-only in launcher mode.'
+    'chat:scrollLeft (Ctrl+Alt+Left) must stay overlay-only in plain launcher mode.'
+  );
+});
+
+test('chat action shortcuts (Ctrl+1..7) register whenever a meeting is active, even with the window in launcher mode', () => {
+  // 1. KeybindManager exposes a meeting-active flag that re-registers shortcuts.
+  const method = extractClassMethod(keybindSource, 'setMeetingActive');
+  assert.ok(
+    /this\.meetingActive\s*=\s*active/.test(method),
+    'BUG: setMeetingActive must persist the meeting-active flag.'
+  );
+  assert.ok(
+    /registerGlobalShortcuts\s*\(\s*\)/.test(method),
+    'BUG: setMeetingActive must re-register global shortcuts when the flag flips.'
+  );
+
+  // 2. shouldRegister gates the chat action shortcuts behind meetingActive.
+  const gate = extractClassMethod(keybindSource, 'shouldRegister');
+  assert.ok(
+    /this\.meetingActive\s*&&\s*this\.isChatActionShortcut\s*\(\s*actionId\s*\)\s*\)\s*return true/.test(gate),
+    'BUG: while a meeting is active, chat action shortcuts (Ctrl/Cmd+1..7) must register even in launcher window mode (hideOverlayOnStart).'
+  );
+
+  // 3. isChatActionShortcut covers all seven chat action ids.
+  const helper = extractClassMethod(keybindSource, 'isChatActionShortcut');
+  for (const id of [
+    "'chat:whatToAnswer'",
+    "'chat:clarify'",
+    "'chat:dynamicAction4'",
+    "'chat:followUp'",
+    "'chat:answer'",
+    "'chat:codeHint'",
+    "'chat:brainstorm'",
+  ]) {
+    assert.ok(helper.includes(id), `isChatActionShortcut must cover ${id}.`);
+  }
+
+  // 4. main drives the flag from the meeting lifecycle.
+  assert.ok(
+    /this\.isMeetingActive\s*=\s*true;[\s\S]{0,400}?setMeetingActive\s*\(\s*true\s*\)/.test(mainSource),
+    'BUG: startMeeting must call KeybindManager.setMeetingActive(true) so Ctrl+1..7 register for the whole meeting.'
+  );
+  assert.ok(
+    /this\.isMeetingActive\s*=\s*false;[\s\S]{0,400}?setMeetingActive\s*\(\s*false\s*\)/.test(mainSource),
+    'BUG: endMeeting must call KeybindManager.setMeetingActive(false) so Ctrl+1..7 stop hijacking browser tabs once the meeting ends.'
   );
 });
 

@@ -80,6 +80,12 @@ export class KeybindManager {
     private onUpdateCallbacks: (() => void)[] = [];
     private onShortcutTriggeredCallbacks: ((actionId: string) => void)[] = [];
     private activeMode: 'launcher' | 'overlay' = 'launcher';
+    // True while a meeting is running, independent of which window is shown.
+    // With `hideOverlayOnStart` the window (and thus activeMode) stays
+    // 'launcher' during a meeting, but the chat action shortcuts (Ctrl+1..7)
+    // must still register so they work the moment the user opens the overlay
+    // chat — otherwise they are dead for the whole meeting.
+    private meetingActive = false;
     private healthCheckTimer: NodeJS.Timeout | null = null;
     // Ids whose globalShortcut.register() call did not take. Kept as state
     // rather than fire-and-forget IPC because the first registration pass runs
@@ -100,8 +106,41 @@ export class KeybindManager {
         this.registerGlobalShortcuts();
     }
 
+    /**
+     * Mirrors the meeting lifecycle so chat action shortcuts register whenever a
+     * meeting is running — even when `hideOverlayOnStart` keeps the window (and
+     * thus activeMode) on the launcher. Called by AppState on start/stop meeting.
+     */
+    public setMeetingActive(active: boolean): void {
+        if (this.meetingActive === active) return;
+        this.meetingActive = active;
+        console.log(`[KeybindManager] Meeting active: ${active}. Refreshing global shortcuts.`);
+        this.registerGlobalShortcuts();
+    }
+
+    private isChatActionShortcut(actionId: string): boolean {
+        return (
+            actionId === 'chat:whatToAnswer' ||
+            actionId === 'chat:clarify' ||
+            actionId === 'chat:dynamicAction4' ||
+            actionId === 'chat:followUp' ||
+            actionId === 'chat:answer' ||
+            actionId === 'chat:codeHint' ||
+            actionId === 'chat:brainstorm'
+        );
+    }
+
     private shouldRegister(actionId: string): boolean {
         if (this.activeMode === 'overlay') return true;
+
+        // A meeting is running but the overlay window is kept closed
+        // (hideOverlayOnStart), so activeMode is still 'launcher'. The chat
+        // action shortcuts (Ctrl/Cmd+1..7) must still register so they work the
+        // instant the user opens the overlay chat — otherwise they are dead for
+        // the whole meeting. This matches overlay-mode behavior; the "no meeting"
+        // hijack concern (browser tab-switching) that keeps them out of plain
+        // launcher mode does not apply while a meeting is actually running.
+        if (this.meetingActive && this.isChatActionShortcut(actionId)) return true;
 
         // In launcher mode, register visibility + movement shortcuts
         if (actionId === 'general:toggle-visibility') return true;

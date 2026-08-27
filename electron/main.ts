@@ -5918,6 +5918,11 @@ export class AppState {
 
     const meetingGeneration = ++this._meetingGeneration;
     this.isMeetingActive = true;
+    // Register chat action shortcuts (Ctrl/Cmd+1..7) globally for the duration
+    // of the meeting — required even with `hideOverlayOnStart` (window stays on
+    // the launcher, so activeMode is 'launcher', which would otherwise never
+    // register them and Ctrl+1..7 would be dead mid-meeting).
+    KeybindManager.getInstance().setMeetingActive(true);
     this.broadcastMeetingState()
     if (metadata) {
       this.intelligenceManager.setMeetingMetadata(metadata);
@@ -6311,6 +6316,10 @@ export class AppState {
     this.isMeetingActive = false;
     this._meetingGeneration++;
     this._isDraining = true;
+    // Meeting over — drop the chat action shortcuts (Ctrl/Cmd+1..7) back out of
+    // the global registration set (launcher mode should not hijack browser tab
+    // switching with no meeting running).
+    KeybindManager.getInstance().setMeetingActive(false);
     this.broadcastMeetingState();
 
     // LIVE MEETING NOTE (v31): stop the periodic flush and hand the live row id
