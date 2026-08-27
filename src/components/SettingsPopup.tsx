@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useLayoutEffect, useMemo, useRef } from 'react';
-import { MessageSquare, Camera, Zap, User } from 'lucide-react';
+import { MessageSquare, Camera, Zap, User, Pin } from 'lucide-react';
 import { useShortcuts } from '../hooks/useShortcuts';
 import { useResolvedTheme } from '../hooks/useResolvedTheme';
 import { getModifierSymbol } from '../utils/platformUtils';
@@ -77,6 +77,7 @@ const SettingsPopup = () => {
         return localStorage.getItem('natively_groq_fast_text') === 'true';
     });
     const [profileMode, setProfileMode] = useState(false);
+    const [pillAlwaysVisible, setPillAlwaysVisible] = useState(false);
     // Context Intelligence V3 (Phase 7): when the V3 flag is on, the Profile
     // Mode toggle is HIDDEN — under V3 source authority decides per turn when
     // profile evidence applies, and a global override is the compensation
@@ -157,6 +158,11 @@ const SettingsPopup = () => {
         };
         loadProfile();
 
+        // Load TopPill always-visible state from main process (source of truth)
+        try {
+            window.electronAPI?.getPillAlwaysVisible?.().then((state: boolean) => setPillAlwaysVisible(!!state)).catch(() => {});
+        } catch { /* non-fatal */ }
+
         // Settings staleness fix (2026-08-21): this window mounts ONCE at app
         // start and is hidden/shown afterwards, so the mount fetches above go
         // stale. The focus handler never fires for the overlay-anchored
@@ -168,6 +174,9 @@ const SettingsPopup = () => {
         const unsubscribeShown = window.electronAPI?.onSettingsWindowShown?.(() => {
             loadCredentials();
             loadProfile();
+            try {
+                window.electronAPI?.getPillAlwaysVisible?.().then((state: boolean) => setPillAlwaysVisible(!!state)).catch(() => {});
+            } catch { /* non-fatal */ }
             try {
                 // Undetectable's INITIAL fetch is mount-only; its change
                 // listener only covers changes made while this window exists.
@@ -496,6 +505,28 @@ const SettingsPopup = () => {
                                 // @ts-ignore
                                 await window.electronAPI?.setActionButtonMode?.(newMode);
                             } catch (e) { console.error(e); }
+                        }}
+                        onClassName="bg-accent-primary shadow-[0_2px_10px_var(--accent-shadow-20)]"
+                        offClassName={defaultToggleTrackClass}
+                    />
+                </div>
+
+                {/* Always Show TopPill */}
+                <div className={`flex items-center justify-between px-2.5 py-1.5 rounded-md transition-colors duration-200 group cursor-default ${itemHoverClass} ${glassRowClass}`}>
+                    <div className="flex items-center gap-2.5">
+                        <Pin
+                            className={`w-3.5 h-3.5 transition-colors ${pillAlwaysVisible ? 'text-accent-primary' : inactiveIconColorClass}`}
+                            fill={pillAlwaysVisible ? "currentColor" : "none"}
+                        />
+                        <span className={`text-[12px] font-medium transition-colors ${labelColorClass}`}>TopPill</span>
+                    </div>
+                    <PopupToggle
+                        checked={pillAlwaysVisible}
+                        label="Always Show TopPill"
+                        onChange={() => {
+                            const newState = !pillAlwaysVisible;
+                            setPillAlwaysVisible(newState);
+                            window.electronAPI?.setPillAlwaysVisible?.(newState);
                         }}
                         onClassName="bg-accent-primary shadow-[0_2px_10px_var(--accent-shadow-20)]"
                         offClassName={defaultToggleTrackClass}
