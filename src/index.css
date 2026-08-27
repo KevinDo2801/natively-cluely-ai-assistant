@@ -2785,6 +2785,37 @@ body {
   color: var(--overlay-text-placeholder);
 }
 
+/* Synthetic caret for the overlay chat input. The input can never take real
+   DOM focus on Windows (WS_EX_NOACTIVATE — see windowsFocusPolicy.ts), and on
+   both platforms the stealth tap deliberately blocks focus, so the native
+   blinking caret never renders. This element mirrors the typed text with the
+   exact same font metrics (Tailwind preflight makes <input> inherit the app
+   font, so a sibling span with the same text classes matches 1:1) and blinks a
+   real caret at the end of it, so a clicked-and-typing input reads as focused
+   everywhere. Rendered only while the stealth tap is active (the only time the
+   user is typing without real focus). */
+.overlay-synthetic-caret {
+  display: inline-block;
+  width: 2px;
+  height: 14px;
+  margin-left: 1px;
+  border-radius: 1px;
+  background: var(--overlay-text-primary);
+  animation: overlay-caret-blink 1.06s step-start infinite;
+}
+
+@keyframes overlay-caret-blink {
+  0%,
+  49% {
+    opacity: 1;
+  }
+
+  50%,
+  100% {
+    opacity: 0;
+  }
+}
+
 /* Interaction Utilities - Reusable */
 .interaction-base {
   transition-property: transform, opacity, background-color, border-color, color;

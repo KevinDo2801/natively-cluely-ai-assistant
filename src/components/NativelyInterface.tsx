@@ -9091,6 +9091,24 @@ Provide only the answer, nothing else.`;
                     style={appearance.inputStyle}
                   />
 
+                  {/* Synthetic caret — the input can never take real DOM focus
+                      while the stealth tap is active (Windows no-activate
+                      policy + the focus-block on both platforms), so the
+                      native blinking caret never renders. Mirror the typed
+                      text with identical font metrics (Tailwind preflight makes
+                      <input> inherit the app font, so this span matches 1:1)
+                      and blink a real caret after it. */}
+                  {stealthTapActive && (
+                    <div
+                      aria-hidden="true"
+                      className="absolute left-3 top-1/2 -translate-y-1/2 flex items-center pointer-events-none select-none overflow-hidden"
+                      style={{ maxWidth: 'calc(100% - 52px)' }}
+                    >
+                      <span className="invisible whitespace-pre text-[13px] leading-relaxed">{inputValue}</span>
+                      <span className="overlay-synthetic-caret" />
+                    </div>
+                  )}
+
                   {/* Skill picker — portal so it escapes the overflow-hidden shell */}
                   {filteredSkills.length > 0 && skillPickerQuery !== null &&
                     createPortal(
@@ -9104,8 +9122,10 @@ Provide only the answer, nothing else.`;
                     )
                   }
 
-                  {/* Custom Rich Placeholder */}
-                  {!inputValue && (
+                  {/* Custom Rich Placeholder — hidden while the synthetic caret
+                      is active so a focused empty input reads like a native one
+                      (blinking caret, no placeholder) */}
+                  {!inputValue && !stealthTapActive && (
                     <div className="absolute left-3 top-1/2 -translate-y-1/2 flex items-center gap-1.5 pointer-events-none text-[13px] overlay-text-muted">
                       <span>{t('Ask anything on screen or conversation, or')}</span>
                       <div className="flex items-center gap-1 opacity-80">
