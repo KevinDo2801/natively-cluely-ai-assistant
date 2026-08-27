@@ -2135,6 +2135,20 @@ export class WindowHelper {
   public setPillAlwaysVisible(enabled: boolean): void {
     this.pillAlwaysVisible = enabled;
     this.syncPillAlwaysVisibility();
+    // Toggling ON while the overlay chat is already visible: the pill then
+    // belongs to the GROUP path (setPillStandalone(false) above), which is
+    // normally driven by applyOverlayAuxVisibility on the overlay's show/hide
+    // event — an event that has already fired by the time the user flips this
+    // toggle. Without this explicit re-show the pill stays hidden until the
+    // next window swap ("Always Show TopPill on with the chat open → no pill").
+    if (
+      enabled &&
+      this.overlayWindow &&
+      !this.overlayWindow.isDestroyed() &&
+      this.overlayWindow.isVisible()
+    ) {
+      this.applyOverlayAuxVisibility(true);
+    }
   }
 
   /**
@@ -2223,6 +2237,24 @@ export class WindowHelper {
       pill.setOpacity(1);
       pill.showInactive();
       this.pillStandalone = true;
+      // Re-anchor into the current work area. The pill's bounds may be stale —
+      // they were last set relative to a hidden overlay (e.g. the shell was
+      // dragged to a screen edge, onto another display, or the display was
+      // unplugged) — so toggling "Always Show TopPill" on must guarantee the
+      // floating pill actually lands on-screen instead of appearing off-screen
+      // or behind the taskbar ("toggle on, but I don't see the TopPill").
+      // Same clamp the standalone drag uses at settle (endOverlayGroupDrag),
+      // so a pill the user intentionally placed on-screen is a no-op.
+      const o = pill.getBounds();
+      const { x, y } = this.clampedPillOrigin(pill, o.x, o.y);
+      if (x !== o.x || y !== o.y) {
+        this.auxSyncing = true;
+        try {
+          pill.setPosition(x, y);
+        } finally {
+          this.auxSyncing = false;
+        }
+      }
       console.log('[WindowHelper] Pill is now STANDALONE (launcher mode, no meeting)');
     } else {
       if (

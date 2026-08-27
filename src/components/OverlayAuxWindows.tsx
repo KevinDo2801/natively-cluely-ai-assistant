@@ -247,13 +247,16 @@ export function OverlayPillWindow() {
         ['--overlay-opacity' as '--overlay-opacity']: String(state.overlayOpacity ?? 1),
       } as React.CSSProperties}
     >
-      {/* Mirrors the old in-window behavior: on Cmd+B collapse the pill fades
-          with the shell; the OS window itself hides when the overlay window
-          hides (main-process visibility mirroring). */}
+      {/* Fade the pill content ONLY while the shell is actually visible AND
+          collapsed (Cmd+B collapse mirrors the shell fade). When the pill is
+          floating standalone — overlay hidden, "Always Show TopPill" on — the
+          overlay's cached `expanded` state must NOT gate it, or a previously
+          collapsed shell would leave the always-visible pill at opacity 0
+          ("toggle on but I don't see the TopPill"). */}
       <div
         style={{
-          opacity: state.expanded === false ? 0 : 1,
-          pointerEvents: state.expanded === false ? 'none' : 'auto',
+          opacity: state.overlayVisible === true && state.expanded === false ? 0 : 1,
+          pointerEvents: state.overlayVisible === true && state.expanded === false ? 'none' : 'auto',
           transition: 'opacity 0.22s cubic-bezier(0.32, 0, 0.67, 0)',
         }}
       >

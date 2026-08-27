@@ -124,6 +124,44 @@ test('WindowHelper seeds the flag and re-evaluates standalone visibility', () =>
   );
 });
 
+test('toggling ON while the overlay is visible actively shows the in-group pill', () => {
+  // The pill belongs to the GROUP path while the overlay is up, and that path
+  // is driven by applyOverlayAuxVisibility on the overlay's show/hide event —
+  // an event that has already fired by the time the user flips this toggle. The
+  // setter must therefore re-show the group pill NOW, or "toggle Always Show
+  // TopPill on with the chat open" leaves the pill hidden until the next swap.
+  const setter = extractMethodBody(windowHelper, 'setPillAlwaysVisible');
+  assert.match(
+    setter,
+    /if \(\s*\n\s*enabled &&\s*\n\s*this\.overlayWindow/,
+    'the group re-show must be gated on the setting being ON and the overlay actually visible',
+  );
+  assert.match(
+    setter,
+    /this\.applyOverlayAuxVisibility\(true\);/,
+    'toggling on while the overlay is up must show the pill through the group path now',
+  );
+});
+
+test('the standalone pill ignores a collapsed overlay expanded state (content stays opacity 1)', () => {
+  // The always-visible pill floats while the overlay is hidden. It must NOT be
+  // gated by the overlay's cached `expanded` state, or a previously collapsed
+  // shell would leave the floating pill at opacity 0 ("toggle on but I don't
+  // see the TopPill"). The collapse fade applies only while the shell is
+  // actually visible AND collapsed.
+  const aux = read('src/components/OverlayAuxWindows.tsx');
+  assert.match(
+    aux,
+    /opacity: state\.overlayVisible === true && state\.expanded === false \? 0 : 1/,
+    'the pill content may only fade when the shell is visible and collapsed',
+  );
+  assert.match(
+    aux,
+    /pointerEvents: state\.overlayVisible === true && state\.expanded === false \? 'none' : 'auto'/,
+    'the pill must stay interactive while floating standalone',
+  );
+});
+
 test('syncPillAlwaysVisibility hides the pill when off or undetectable', () => {
   const sync = extractMethodBody(windowHelper, 'syncPillAlwaysVisibility');
   assert.match(
