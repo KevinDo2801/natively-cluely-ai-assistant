@@ -399,12 +399,18 @@ fn tap_callback_inner(
     // user expects plain Tab to work in their newly-active app (focus-
     // cycle). Tab is rarely useful as text in a chat input — never as a
     // submit gesture — so passing it through is the right default. Same
-    // rationale for arrow keys: they're navigation, not text.
+    // rationale for Left/Right arrows (123/124): pure navigation, never text.
+    //
+    // Up/Down (125/126) are DELIBERATELY NOT in the pass-through list: the
+    // chat input exposes terminal-style history navigation (↑ recalls the
+    // previous message, ↓ walks forward), which needs those keystrokes in
+    // the renderer. When the tap is not engaged they are never captured, so
+    // the foreground app keeps them normally.
     if matches!(
         key_code,
         48 | 64 | 79 | 80 | 90 | 96 | 97 | 98 | 99 | 100 | 101 | 103
             | 105 | 106 | 107 | 109 | 111 | 113 | 118 | 120 | 122
-            | 123 | 124 | 125 | 126
+            | 123 | 124
     ) {
         return event;
     }

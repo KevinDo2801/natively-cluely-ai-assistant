@@ -1082,6 +1082,22 @@ const NativelyInterface: React.FC<NativelyInterfaceProps> = ({
   const t = useT();
   const [isExpanded, setIsExpanded] = useState(true);
   const [inputValue, setInputValue] = useState('');
+  // Terminal-style chat history: every submitted message is pushed onto this
+  // stack, and ↑/↓ walk it (like a shell's history). The cursor is the index
+  // into `chatHistoryRef.current` being shown, or -1 when the user is composing
+  // fresh text (the "draft" that ↑ temporarily replaces and ↓ restores).
+  // Session-scoped by design: the stack lives only in memory for the current
+  // chat — a Ctrl+R / app restart starts with a clean history.
+  const chatHistoryRef = useRef<string[]>([]);
+  const chatHistoryCursorRef = useRef(-1);
+  const chatDraftRef = useRef('');
+  // Latest-handler ref so the stealth captured-key listener (mounted with []
+  // deps) calls the CURRENT navigation closure. Updated every render below.
+  const navigateChatHistoryRef = useRef<(dir: -1 | 1) => string | null>(() => null);
+  // Skill-picker state mirrored into refs for the []-deps stealth key handler
+  // (arrows route to the picker while it's open, history otherwise).
+  const skillPickerOpenRef = useRef(false);
+  const filteredSkillsCountRef = useRef(0);
   const [availableSkills, setAvailableSkills] = useState<SkillSummary[]>([]);
   const [skillPickerIndex, setSkillPickerIndex] = useState(0);
   const { shortcuts, isShortcutPressed } = useShortcuts();
@@ -6394,6 +6410,19 @@ Provide only the answer, nothing else.`;
     manualSubmitInFlightRef.current = true;
     lastManualSubmitRef.current = { text: userText, atMs: nowMs };
 
+    // Terminal-style chat history: record the submitted text (dedupe
+    // consecutive repeats like a shell, cap the stack). Session-scoped —
+    // nothing is persisted, so Ctrl+R / restart starts a fresh history.
+    if (userText.length > 0) {
+      const history = chatHistoryRef.current;
+      if (history[history.length - 1] !== userText) {
+        chatHistoryRef.current = [...history, userText].slice(-50);
+      }
+    }
+    // Reset history navigation back to the fresh-draft position.
+    chatHistoryCursorRef.current = -1;
+    chatDraftRef.current = '';
+
     const currentAttachments = attachedContext;
     const conversationContextForSubmit = buildConversationContextFromMessages(messages);
 
@@ -6527,6 +6556,44 @@ Provide only the answer, nothing else.`;
   // listener (mounted with [] deps) calls the CURRENT closure, not a
   // stale snapshot from first render.
   handleManualSubmitRef.current = handleManualSubmit;
+
+  // ── Terminal-style chat history navigation ────────────────────────────────
+  // dir = -1 walks OLDER (↑), dir = +1 walks NEWER (↓). Cursor semantics:
+  //   -1 → composing fresh text; the current input is the "draft"
+  //    0 → newest history entry; n → n-th older entry
+  // First ↑ press saves the draft; ↓ back past the newest entry restores it.
+  // Returns the text to place in the input, or null when there is none.
+  const navigateChatHistory = (dir: -1 | 1): string | null => {
+    const history = chatHistoryRef.current;
+    if (history.length === 0) return null;
+
+    const cursor = chatHistoryCursorRef.current;
+    if (dir === -1) {
+      // ↑ — walk older. From the draft, jump to the newest entry; otherwise
+      // step back one, clamped at the oldest entry.
+      if (cursor === -1) {
+        // First ↑ press: save whatever is being composed so ↓ can restore it.
+        chatDraftRef.current = inputValue;
+        chatHistoryCursorRef.current = 0;
+        return history[history.length - 1];
+      }
+      const next = Math.min(cursor + 1, history.length - 1);
+      chatHistoryCursorRef.current = next;
+      return history[history.length - 1 - next];
+    }
+
+    // ↓ — walk newer. From the newest entry, go back to the draft; otherwise
+    // step forward one, clamped at the draft.
+    if (cursor === -1) return null; // already at the draft
+    if (cursor === 0) {
+      chatHistoryCursorRef.current = -1;
+      return chatDraftRef.current;
+    }
+    const next = cursor - 1;
+    chatHistoryCursorRef.current = next;
+    return history[history.length - 1 - next];
+  };
+  navigateChatHistoryRef.current = navigateChatHistory;
 
   const clearChat = () => {
     resetChatState();
@@ -7691,14 +7758,27 @@ Provide only the answer, nothing else.`;
         case 51: // Backspace — delete one char
           setInputValue((prev) => prev.slice(0, -1));
           return;
-        // ROUND 4 FIX (#6): Tab (48) and arrows (123-126) used to
-        // be no-op'd here. They're now passed through at the Rust
-        // layer (keyboard_tap.rs F-key whitelist) so they reach the
-        // user's foreground app normally. Removing the dead cases
-        // keeps the contract honest: this switch only sees text-
-        // worthy keys + Backspace + Enter. If anyone ever changes
-        // the Rust filter to deliver Tab again, decide explicitly
-        // what it should do here rather than copy-pasting a no-op.
+        case 126: // Up arrow — terminal-style chat history (older entry)
+        case 125: // Down arrow — terminal-style chat history (newer entry)
+          // While the skill picker is open, arrows navigate it instead.
+          if (skillPickerOpenRef.current) {
+            if (ev.keyCode === 126) {
+              setSkillPickerIndex((i) => Math.max(0, i - 1));
+            } else {
+              setSkillPickerIndex((i) => Math.min(filteredSkillsCountRef.current - 1, i + 1));
+            }
+          } else {
+            const recalled = navigateChatHistoryRef.current(ev.keyCode === 126 ? -1 : 1);
+            if (recalled !== null) setInputValue(recalled);
+          }
+          return;
+        // ROUND 4 FIX (#6): Tab (48) used to be no-op'd here. It's now passed
+        // through at the Rust layer (keyboard_tap.rs F-key whitelist) so it
+        // reaches the user's foreground app normally. Arrows (123-126) are
+        // delivered here (Up/Down) for chat-history navigation — Left/Right
+        // (123/124) still pass through at the Rust layer as pure navigation.
+        // If anyone ever changes the Rust filter to deliver Tab again, decide
+        // explicitly what it should do here rather than copy-pasting a no-op.
       }
 
       // Append printable chars. CGEventKeyboardGetUnicodeString already
@@ -8014,6 +8094,10 @@ Provide only the answer, nothing else.`;
       )
     : [];
   const clampedPickerIndex = Math.min(skillPickerIndex, Math.max(0, filteredSkills.length - 1));
+  // Mirror into refs for the []-deps stealth captured-key handler: arrows
+  // navigate the picker while it's open, chat history otherwise.
+  skillPickerOpenRef.current = filteredSkills.length > 0 && skillPickerQuery !== null;
+  filteredSkillsCountRef.current = filteredSkills.length;
 
   return (
     <>
@@ -9060,6 +9144,21 @@ Provide only the answer, nothing else.`;
                           selectSkill(filteredSkills[clampedPickerIndex]);
                           return;
                         }
+                      }
+                      // Terminal-style chat history: ↑/↓ recall previously
+                      // submitted messages (only when the skill picker isn't
+                      // consuming the arrows above).
+                      if (e.key === 'ArrowUp') {
+                        e.preventDefault();
+                        const recalled = navigateChatHistory(-1);
+                        if (recalled !== null) setInputValue(recalled);
+                        return;
+                      }
+                      if (e.key === 'ArrowDown') {
+                        e.preventDefault();
+                        const recalled = navigateChatHistory(1);
+                        if (recalled !== null) setInputValue(recalled);
+                        return;
                       }
                       if (e.key !== 'Enter' || e.repeat) return;
                       // Cmd/Ctrl+Enter belongs to general:process-screenshots.

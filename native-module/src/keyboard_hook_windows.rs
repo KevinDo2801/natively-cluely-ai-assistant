@@ -34,10 +34,13 @@
 //! # keyCode contract with the renderer
 //!
 //! `NativelyInterface.tsx` hardcodes macOS HID virtual keycodes (53=Esc,
-//! 36=Return, 76=NumpadEnter, 51=Backspace) and expects Tab (48) + arrows
-//! (123-126) + F-keys + any system-modifier combo to be PASSED THROUGH (never
-//! delivered). We translate Windows VK codes to those mac HID codes and apply
-//! the same pass-through filter, so the JS switch statement works unchanged.
+//! 36=Return, 76=NumpadEnter, 51=Backspace, 126=Up, 125=Down) and expects
+//! Tab (48) + Left/Right arrows (123/124) + F-keys + any system-modifier
+//! combo to be PASSED THROUGH (never delivered). We translate Windows VK
+//! codes to those mac HID codes and apply the same pass-through filter, so
+//! the JS switch statement works unchanged. Up/Down are DELIVERED (not
+//! passed through) so the chat input can expose terminal-style history
+//! navigation — see is_passthrough_vk's doc comment.
 //!
 //! # Threading
 //!
@@ -584,10 +587,13 @@ fn win_held() -> bool {
 /// own Alt+H screenshot bind, and Windows' own Win-key shortcuts too.
 ///
 /// Also passed through: lock keys (swallowing CapsLock would break the toggle),
-/// media / volume / browser keys, and navigation keys — matching the macOS
-/// rationale for arrows and Tab ("navigation, not text"). Esc/Enter/Backspace
-/// are deliberately NOT here: those are delivered to the renderer with a
-/// translated keyCode.
+/// media / volume / browser keys, and Left/Right navigation keys — matching the
+/// macOS rationale for Tab and horizontal arrows ("navigation, not text").
+/// Up/Down are deliberately NOT here: they're delivered to the renderer
+/// (translated to macOS HID 126/125 in vk_to_mac_keycode) so the chat input can
+/// expose terminal-style history navigation (↑ recalls the previous message,
+/// ↓ walks forward). Esc/Enter/Backspace are also deliberately not here: those
+/// are delivered to the renderer with a translated keyCode.
 fn is_passthrough_vk(vk: u32) -> bool {
     // Modifiers, incl. the left/right-specific codes an LL hook can report.
     const VK_SHIFT_: u32 = 0x10;
@@ -609,9 +615,7 @@ fn is_passthrough_vk(vk: u32) -> bool {
     const VK_END: u32 = 0x23;
     const VK_HOME: u32 = 0x24;
     const VK_LEFT: u32 = 0x25;
-    const VK_UP: u32 = 0x26;
     const VK_RIGHT: u32 = 0x27;
-    const VK_DOWN: u32 = 0x28;
     const VK_SNAPSHOT: u32 = 0x2C; // PrintScreen
     const VK_INSERT: u32 = 0x2D;
     const VK_DELETE: u32 = 0x2E;
@@ -640,9 +644,7 @@ fn is_passthrough_vk(vk: u32) -> bool {
             | VK_END
             | VK_HOME
             | VK_LEFT
-            | VK_UP
             | VK_RIGHT
-            | VK_DOWN
             | VK_SNAPSHOT
             | VK_INSERT
             | VK_DELETE
@@ -657,10 +659,17 @@ fn vk_to_mac_keycode(vk: u32) -> u32 {
     const VK_BACK: u32 = 0x08;
     const VK_RETURN: u32 = 0x0D;
     const VK_ESCAPE: u32 = 0x1B;
+    const VK_UP: u32 = 0x26;
+    const VK_DOWN: u32 = 0x28;
     match vk {
         VK_ESCAPE => 53,
         VK_RETURN => 36, // Enter (numpad Enter also reports VK_RETURN via LL hook)
         VK_BACK => 51,   // Backspace
+        // Up/Down are NOT in is_passthrough_vk — they're delivered to the
+        // renderer for terminal-style chat-history navigation, keyed off the
+        // same macOS HID codes the renderer's stealth switch expects.
+        VK_UP => 126,
+        VK_DOWN => 125,
         _ => 0,
     }
 }
