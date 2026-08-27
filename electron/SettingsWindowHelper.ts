@@ -55,6 +55,17 @@ export class SettingsWindowHelper {
     }
 
     /**
+     * Clear the blur-reopen guard (lastBlurTime). Called whenever the overlay
+     * re-shows: a blur timestamp stamped by the PREVIOUS overlay-hide close is
+     * stale the moment the overlay is back, but toggleWindow()'s 250ms guard
+     * would still swallow a fast settings re-open made right after bringing
+     * the chat overlay back ("settings popup works sometimes — hit-or-miss").
+     */
+    public clearBlurGuard(): void {
+        this.lastBlurTime = 0;
+    }
+
+    /**
      * Pre-create the settings window in the background (hidden) for faster first open
      */
     public preloadWindow(): void {
@@ -69,16 +80,24 @@ export class SettingsWindowHelper {
     }
 
     public toggleWindow(x?: number, y?: number): void {
-        const mainWindow = this.windowHelper?.getMainWindow() ?? null;
-        if (mainWindow && !mainWindow.isDestroyed() && x !== undefined && y !== undefined) {
-            const bounds = mainWindow.getBounds();
+        // Anchor to the window that actually hosts the popup button. The button
+        // lives in the chat OVERLAY, and the overlay can be the visible surface
+        // while currentWindowMode is still 'launcher' (Ctrl+B / the pill's Ask
+        // open the chat WITHOUT a mode swap), so getMainWindow() — which
+        // returns the launcher in 'launcher' mode — is NOT a reliable anchor:
+        // parenting to the launcher puts the popup BELOW the always-on-top
+        // overlay on Windows (screen-saver > topmost) and hides it with the
+        // launcher ("settings works only while the launcher is up").
+        const overlayWin = this.windowHelper?.getOverlayWindow?.();
+        const anchorWin =
+            overlayWin && !overlayWin.isDestroyed() && overlayWin.isVisible()
+                ? overlayWin
+                : (this.windowHelper?.getMainWindow() ?? null);
+        if (anchorWin && !anchorWin.isDestroyed() && x !== undefined && y !== undefined) {
+            const bounds = anchorWin.getBounds();
             this.offsetX = x - bounds.x;
             this.offsetY = y - (bounds.y + bounds.height);
-            // Overlay-anchored open: remember the panel-relative offset so the
-            // dropdown follows the panel through width springs, drags, and
-            // content-height growth.
-            const overlayWin = this.windowHelper?.getOverlayWindow?.();
-            if (overlayWin && mainWindow === overlayWin) {
+            if (anchorWin === overlayWin) {
                 const margin = this.windowHelper?.getOverlayPanelLeftMargin?.() ?? 0;
                 this.overlayAnchor = {
                     offsetXFromPanel: x - bounds.x - margin,
@@ -113,10 +132,18 @@ export class SettingsWindowHelper {
 
         const activate = options.activate ?? true;
 
-        // Set parent to ensure it stays on top of the correct window
-        const mainWin = this.windowHelper?.getMainWindow();
-        if (mainWin && !mainWin.isDestroyed()) {
-            this.settingsWindow.setParentWindow(mainWin);
+        // Parent to the OVERLAY when it is the visible host (see toggleWindow:
+        // the popup button lives in the overlay, and the overlay can be up while
+        // currentWindowMode is still 'launcher'). Parenting to the launcher in
+        // that state puts the popup below the always-on-top overlay on Windows
+        // and hides it with the launcher.
+        const overlayWin = this.windowHelper?.getOverlayWindow?.();
+        const anchorWin =
+            overlayWin && !overlayWin.isDestroyed() && overlayWin.isVisible()
+                ? overlayWin
+                : (this.windowHelper?.getMainWindow() ?? null);
+        if (anchorWin && !anchorWin.isDestroyed()) {
+            this.settingsWindow.setParentWindow(anchorWin);
         }
 
         if (x !== undefined && y !== undefined) {
@@ -180,6 +207,19 @@ export class SettingsWindowHelper {
 
     public closeWindow(): void {
         if (this.settingsWindow && !this.settingsWindow.isDestroyed()) {
+            // Break the parent link BEFORE hiding — the exact pattern
+            // ModelSelectorWindowHelper.hideWindow() already uses. On Windows
+            // the settings window is an OWNED window of the overlay
+            // (setParentWindow in showWindow): hiding the owner auto-hides the
+            // owned window, and re-showing an owned window that was taken down
+            // by its owner can leave it in a state where it stops receiving
+            // clicks ("settings popup opens but clicks do nothing" after the
+            // chat overlay is hidden and re-shown). Un-parenting first lets the
+            // next showWindow() re-establish the relationship from a clean
+            // slate. Harmless on macOS (NSPanel parenting is re-applied on
+            // every show) and while the owner stays visible (hide works the
+            // same with or without a parent).
+            this.settingsWindow.setParentWindow(null);
             this.settingsWindow.hide()
             this.emitVisibilityChange(false);
         }

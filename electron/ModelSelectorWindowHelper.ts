@@ -52,9 +52,18 @@ export class ModelSelectorWindowHelper {
 
         const activate = options.activate ?? true;
 
-        // Set parent and align window settings
-        const mainWin = this.windowHelper?.getMainWindow();
-        const isOverlay = mainWin === this.windowHelper?.getOverlayWindow();
+        // Anchor to the window that actually hosts the toggle button. The
+        // button lives in the chat OVERLAY, and the overlay can be the visible
+        // surface while currentWindowMode is still 'launcher' (Ctrl+B / the
+        // pill's Ask open the chat WITHOUT a mode swap), so getMainWindow()
+        // returns the launcher in that state. Parenting to the launcher puts
+        // the dropdown BELOW the always-on-top overlay on Windows
+        // (screen-saver > topmost) and hides it with the launcher — the same
+        // hit-or-miss the settings popup had. Use the overlay whenever it is
+        // visible; fall back to getMainWindow() only when it is not.
+        const overlayWin = this.windowHelper?.getOverlayWindow?.();
+        const isOverlay = !!overlayWin && !overlayWin.isDestroyed() && overlayWin.isVisible();
+        const mainWin = isOverlay ? overlayWin : (this.windowHelper?.getMainWindow() ?? null);
 
         if (mainWin && !mainWin.isDestroyed()) {
             this.window.setParentWindow(mainWin);

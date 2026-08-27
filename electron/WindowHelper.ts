@@ -1686,6 +1686,11 @@ export class WindowHelper {
       this.overlayHoverInteractive = true;
       this.syncOverlayInteractionPolicy(true);
       this.syncOverlayAuxVisibility();
+      // A settings-window blur stamped by the PREVIOUS overlay-hide close is
+      // stale once the overlay is back. Without this, toggleWindow()'s 250ms
+      // blur-reopen guard swallows a settings re-open made right after
+      // bringing the chat overlay back ("settings popup hit-or-miss").
+      this.appState.settingsWindowHelper?.clearBlurGuard?.();
     });
     this.overlayWindow.on('hide', () => {
       this.syncOverlayAuxVisibility();
