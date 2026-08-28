@@ -293,7 +293,7 @@ export interface ElectronAPI {
   // Recap, submitManualQuestion) are DELETED; every surface goes through
   // runIntelligence. generateAssist / context probe / reset remain.
   generateAssist: () => Promise<{ insight: string | null }>
-  getIntelligenceContext: () => Promise<{ context: string; lastAssistantMessage: string | null; activeMode: string }>
+  getIntelligenceContext: () => Promise<{ context: string; recapContext: string; lastAssistantMessage: string | null; activeMode: string }>
   resetIntelligence: () => Promise<{ success: boolean; error?: string }>
 
   // Dynamic Action Button Mode

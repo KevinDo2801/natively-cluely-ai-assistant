@@ -9950,8 +9950,25 @@ export function initializeIpcHandlers(appState: AppState): void {
   safeHandle('get-intelligence-context', async () => {
     try {
       const intelligenceManager = appState.getIntelligenceManager();
+      const rawRecapContext = intelligenceManager.getRecapContext();
+      // Fit the full-meeting transcript to the active model's context window
+      // (same fitter RecapLLM uses) so a long meeting can never blow the
+      // prompt; fitting keeps the NEWEST transcript, which is exactly what a
+      // "so far" recap needs.
+      let recapContext = rawRecapContext;
+      try {
+        const llmHelper = appState.processingHelper.getLLMHelper();
+        if (llmHelper?.fitContextForCurrentModel && rawRecapContext) {
+          recapContext = llmHelper.fitContextForCurrentModel(rawRecapContext);
+        }
+      } catch { /* non-fatal: pass raw transcript through */ }
       return {
         context: intelligenceManager.getFormattedContext(),
+        // RECAP (transcript-only): the durable, assistant-filtered meeting
+        // transcript the Recap button must summarize — distinct from
+        // `context`, which is the rolling window and may include previous
+        // AI suggestions (see SessionTracker.getRecapContext).
+        recapContext,
         lastAssistantMessage: intelligenceManager.getLastAssistantMessage(),
         activeMode: intelligenceManager.getActiveMode(),
       };

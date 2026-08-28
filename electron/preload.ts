@@ -410,6 +410,7 @@ interface ElectronAPI {
   generateAssist: () => Promise<{ insight: string | null }>;
   getIntelligenceContext: () => Promise<{
     context: string;
+    recapContext: string;
     lastAssistantMessage: string | null;
     activeMode: string;
   }>;

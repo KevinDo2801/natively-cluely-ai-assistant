@@ -704,6 +704,37 @@ export class SessionTracker {
         return recentTranscript;
     }
 
+    /**
+     * RECAP-ONLY context: what ACTUALLY happened in the meeting up to now.
+     * Unlike `getFullSessionContext()` / `getFormattedContext()`, this strips
+     * every role === 'assistant' entry — previous AI suggestions must never
+     * leak into a recap ("what did we talk about so far?", not "what did the
+     * assistant suggest earlier"). It reads the DURABLE store (fullTranscript +
+     * epoch summaries), so the recap spans the whole meeting instead of the
+     * rolling `contextItems` window (default 180s).
+     */
+    getRecapContext(): string {
+        const recentTranscript = this.fullTranscript
+            .map(segment => {
+                const role = this.mapSpeakerToRole(segment.speaker);
+                if (role === 'assistant') return null; // never recap AI suggestions
+                const label = role === 'interviewer' ? 'INTERVIEWER' : 'ME';
+                return `[${label}]: ${segment.text}`;
+            })
+            .filter((line): line is string => line !== null)
+            .join('\n');
+
+        // Epoch summaries compress EARLIER transcript (interviewer + user turns);
+        // they are produced by compactTranscriptIfNeeded from fullTranscript and
+        // preserve early topics without raw segments.
+        if (this.transcriptEpochSummaries.length > 0) {
+            const epochContext = this.transcriptEpochSummaries.join('\n---\n');
+            return `[EARLIER DISCUSSION]\n${epochContext}\n\n[RECENT TRANSCRIPT]\n${recentTranscript}`;
+        }
+
+        return recentTranscript;
+    }
+
     // ============================================
     // Session Data Accessors (for MeetingPersistence)
     // ============================================

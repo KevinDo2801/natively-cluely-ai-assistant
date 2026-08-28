@@ -5504,13 +5504,23 @@ const NativelyInterface: React.FC<NativelyInterfaceProps> = ({
   // are NOT aborted by the auto-answer engine's generation supersession (which
   // previously left the placeholder blinking forever). Meeting context is
   // fetched so recap/clarify/follow-up stay grounded in the conversation.
+  // `contextOverride` lets a caller supply a DIFFERENT grounding blob than the
+  // default rolling window — the Recap button passes the transcript-only recap
+  // context (see getRecapContext) so the summary reflects what actually
+  // happened in the meeting, not previous AI suggestions.
   const runQuickActionThroughChat = useCallback(
-    async (instruction: string, imagePaths?: string[]) => {
-      let meetingCtx = '';
-      try {
-        const intel = await window.electronAPI?.getIntelligenceContext?.();
-        meetingCtx = intel?.context ?? '';
-      } catch { /* non-fatal */ }
+    async (instruction: string, imagePaths?: string[], contextOverride?: string) => {
+      // `contextOverride !== undefined` (not truthiness): the Recap button
+      // passes an EMPTY recapContext when there is no transcript, and that
+      // must NOT fall back to the rolling window — a recap with no transcript
+      // should report "nothing to recap yet", not summarize chat history.
+      let meetingCtx = contextOverride !== undefined ? contextOverride : '';
+      if (!meetingCtx) {
+        try {
+          const intel = await window.electronAPI?.getIntelligenceContext?.();
+          meetingCtx = intel?.context ?? '';
+        } catch { /* non-fatal */ }
+      }
       // Claim the desktop chat surface (same as the manual chat submit) so the
       // stream supersedes cleanly via the unified stream guard (R-17).
       chatStreamIdRef.current = null;
@@ -5544,7 +5554,27 @@ const NativelyInterface: React.FC<NativelyInterfaceProps> = ({
     analytics.trackCommandExecuted('recap');
 
     try {
-      await runQuickActionThroughChat('Recap the conversation so far. Be concise and organized.');
+      // RECAP semantics: summarize what ACTUALLY happened in the meeting so
+      // far, based on the TRANSCRIPT (interviewer + user turns), not chat
+      // history, resume, or previous AI suggestions. `recapContext` is the
+      // durable, assistant-filtered transcript blob (see
+      // SessionTracker.getRecapContext); the prompt instructs the model to
+      // answer "what have we been talking about?" in a flowing narrative,
+      // in the same language as the conversation (no forced language).
+      let recapCtx = '';
+      try {
+        const intel = await window.electronAPI?.getIntelligenceContext?.();
+        recapCtx = intel?.recapContext ?? '';
+      } catch { /* non-fatal */ }
+      await runQuickActionThroughChat(
+        'Recap what has actually been discussed in this meeting so far, based ONLY on the transcript below. ' +
+        'Tell a short flowing narrative of the conversation: what topic was covered, what you said, and what the interviewer asked. ' +
+        'Answer the question "what have we been talking about up to now?" — do NOT suggest what to say next, ' +
+        'do NOT summarize the resume or any documents, and do NOT include previous AI suggestions. ' +
+        'Use the same language as the conversation. If the transcript is empty, say there is nothing to recap yet.',
+        undefined,
+        recapCtx,
+      );
     } catch (err) {
       chatStreamIdRef.current = null;
       chatStreamSourceRef.current = null;

@@ -167,6 +167,16 @@ export class IntelligenceManager extends EventEmitter {
         return this.session.getFormattedContext(lastSeconds);
     }
 
+    /**
+     * Transcript-only recap context (interviewer + user turns; assistant
+     * suggestions filtered out; durable whole-meeting window). Used by the
+     * Recap quick action so the summary reflects what actually happened in
+     * the meeting — never previous AI suggestions / chat history / resume.
+     */
+    getRecapContext(): string {
+        return this.session.getRecapContext();
+    }
+
     getLastInterviewerTurn(): string | null {
         return this.session.getLastInterviewerTurn();
     }

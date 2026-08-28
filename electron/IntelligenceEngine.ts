@@ -5621,7 +5621,12 @@ export class IntelligenceEngine extends EventEmitter {
                 return null;
             }
 
-            const context = this.session.getFormattedContext(120);
+            // RECAP (2026): transcript-only grounding. The rolling
+            // getFormattedContext window includes role === 'assistant' entries
+            // (previous AI suggestions) — a recap must reflect what ACTUALLY
+            // happened in the meeting, so read the durable assistant-filtered
+            // transcript (SessionTracker.getRecapContext) instead.
+            const context = this.session.getRecapContext();
             if (!context) {
                 console.warn('[IntelligenceEngine] No context available for recap');
                 this.setMode('idle');
