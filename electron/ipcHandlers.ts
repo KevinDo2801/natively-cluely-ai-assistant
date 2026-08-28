@@ -2313,6 +2313,15 @@ export function initializeIpcHandlers(appState: AppState): void {
         if (turnContract
             && turnContract.sourceOwner === 'clarify'
             && isIntelligenceFlagEnabled('contextOsPropertyValidation')
+            // CALLER-OWNED PROMPT GUARD (2026-08-28 parity): quick actions
+            // (Recap/Clarify/Follow-up/Brainstorm) route through manual_chat
+            // with skipSystemPrompt + context — the caller composed the FULL
+            // prompt, so the source-ownership clarify short-circuit must never
+            // intercept such a turn (their "based on the conversation"
+            // instruction is parsed as an explicit transcript switch and would
+            // be denied by a strict reference mode). Mirrors the guard on the
+            // SOURCE-HONEST CLARIFICATION block below.
+            && !callerOwnsPrompt
             && !isCodingChat
             && !imagePaths?.length
             && !isStealthChat

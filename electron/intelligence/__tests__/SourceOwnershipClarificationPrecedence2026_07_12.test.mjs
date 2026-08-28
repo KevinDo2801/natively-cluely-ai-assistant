@@ -185,6 +185,26 @@ describe('FIX: manual-chat and WTA short-circuits prefer the specific legacy mes
     );
   });
 
+  test('WIRING (manual chat): the clarification short-circuit is gated by !callerOwnsPrompt (quick actions bypass source-ownership)', () => {
+    // Quick actions (Recap/Clarify/Follow-up/Brainstorm) route through
+    // manual_chat with skipSystemPrompt + context (a caller-owned prompt). The
+    // 2026-08-28 CALLER-OWNED PROMPT GUARD on the SOURCE-HONEST CLARIFICATION
+    // block was never mirrored here, so in a strict reference mode the
+    // "based on the conversation" instruction of those quick actions was
+    // parsed as an explicit transcript switch, denied, and answered with the
+    // canned "This mode only answers from your uploaded material…" refusal.
+    const shortCircuitStart = ipcSource.indexOf("turnContract.sourceOwner === 'clarify'");
+    assert.ok(shortCircuitStart >= 0, 'clarification short-circuit not found');
+    const clarifyIdx = ipcSource.indexOf('const clarify = manualOwnership', shortCircuitStart);
+    assert.ok(clarifyIdx > shortCircuitStart, 'the clarify assignment must live inside the short-circuit block');
+    const shortCircuitBlock = ipcSource.slice(shortCircuitStart, clarifyIdx);
+    assert.match(
+      shortCircuitBlock,
+      /!\s*callerOwnsPrompt\b/,
+      'manual-chat clarification short-circuit must honor the caller-owned prompt contract so quick actions are not intercepted',
+    );
+  });
+
   test('WIRING (WTA): the clarification short-circuit checks wtaOwnershipDecision.shouldClarifyInsteadOfProfile before buildSourceClarification', () => {
     const shortCircuitStart = engineSource.indexOf("wtaTurnContract.sourceOwner === 'clarify'");
     assert.ok(shortCircuitStart >= 0, 'WTA clarification short-circuit not found');
