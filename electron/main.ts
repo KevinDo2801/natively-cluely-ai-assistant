@@ -1258,6 +1258,7 @@ interface ScreenshotCaptureSession {
   captureKind: ScreenshotCaptureKind;
   wasMainWindowVisible: boolean;
   wasLauncherVisible: boolean;
+  wasOverlayVisible: boolean;
   windowMode: ScreenshotWindowMode;
   wasSettingsVisible: boolean;
   wasModelSelectorVisible: boolean;
@@ -7026,12 +7027,15 @@ export class AppState {
     const settingsWindow = this.settingsWindowHelper.getSettingsWindow();
     const modelSelectorWindow = this.modelSelectorWindowHelper.getWindow();
     const launcherWindow = this.windowHelper.getLauncherWindow();
+    const overlayWindow = this.windowHelper.getOverlayWindow();
 
     return {
       captureKind,
       wasMainWindowVisible: this.windowHelper.isVisible(),
       wasLauncherVisible:
         !!launcherWindow && !launcherWindow.isDestroyed() && launcherWindow.isVisible(),
+      wasOverlayVisible:
+        !!overlayWindow && !overlayWindow.isDestroyed() && overlayWindow.isVisible(),
       windowMode: this.windowHelper.getCurrentWindowMode(),
       wasSettingsVisible: !!settingsWindow && !settingsWindow.isDestroyed() && settingsWindow.isVisible(),
       wasModelSelectorVisible: !!modelSelectorWindow && !modelSelectorWindow.isDestroyed() && modelSelectorWindow.isVisible(),
@@ -7070,6 +7074,10 @@ export class AppState {
 
     if (session.wasMainWindowVisible) {
       this.hideMainWindow();
+    } else {
+      // Launcher down: overlay + aux chrome can still float (showOverlay
+      // never sets isWindowVisible) — hide them or they leak into the frame.
+      this.windowHelper.hideFloatingUiForScreenshot();
     }
 
     // The meeting/global chat overlay ("Search this meeting" / global search) is
@@ -7124,6 +7132,13 @@ export class AppState {
       if (launcher && !launcher.isDestroyed() && !launcher.isVisible()) {
         launcher.showInactive();
       }
+    }
+
+    // Restore the floating meeting overlay the capture took down while the
+    // launcher stayed closed (overlay-mode meeting / always-visible pill).
+    // showOverlay(true) is the inactive reveal — it never steals focus.
+    if (!session.wasMainWindowVisible && session.wasOverlayVisible) {
+      this.windowHelper.showOverlay(true);
     }
 
     // ALWAYS-VISIBLE PILL: the screenshot hide took the pill down (capture

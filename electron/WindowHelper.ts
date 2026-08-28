@@ -1196,6 +1196,34 @@ export class WindowHelper {
     this.pushPillState();
   }
 
+  /**
+   * Screenshot capture: take the floating meeting UI (overlay + aux chrome)
+   * down while the launcher is NOT visible. hideMainWindow() covers the
+   * launcher-open case; this covers the overlay-mode / standalone-pill state
+   * where `isWindowVisible` is false (showOverlay()/global-shortcut reveal
+   * paths never set it) but the overlay chat and/or the always-visible top
+   * pill are still on screen — they would leak into the captured frame.
+   * Restore re-shows the overlay via showOverlay(true) and re-floats a
+   * standalone pill via syncPillAlwaysVisibility().
+   */
+  public hideFloatingUiForScreenshot(): void {
+    // Stealth typing must never outlive a hidden overlay (same rationale as
+    // hideMainWindow / hideOverlay). No-op when not engaged.
+    this.stopStealthTyping();
+    // Zero opacity on the windows that are actually visible BEFORE hiding
+    // them — mirrors hideMainWindow()'s capture ordering (win32 adapter;
+    // darwin no-op) so the compositor never paints them into the frame.
+    for (const w of [this.overlayWindow, this.pillWindow, this.toggleWindow]) {
+      if (w && !w.isDestroyed() && w.isVisible()) this.adapter.zeroOpacityForHide(w);
+    }
+    // Leave standalone-pill mode so the floating pill goes down with the rest
+    // (applyOverlayAuxVisibility deliberately never hides a standalone pill).
+    this.setPillStandalone(false);
+    this.applyOverlayAuxVisibility(false);
+    this.overlayWindow?.hide();
+    this.pushPillState();
+  }
+
   // Apply the click-through (mouse passthrough) policy on the overlay window.
   // TWO inputs:
   //   • overlayMousePassthrough (master stealth toggle) — when ON the whole

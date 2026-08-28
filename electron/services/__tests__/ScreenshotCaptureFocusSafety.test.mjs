@@ -203,7 +203,11 @@ describe('Screenshot capture must not leak the launcher-hosted chat overlay (mee
 
   test('hideWindowsForScreenshot hides the launcher when it was visible', () => {
     const hideStart = mainSrc.indexOf('private hideWindowsForScreenshot');
-    const body = mainSrc.slice(hideStart, hideStart + 1300);
+    // The window covers the whole method: the else-branch added for the
+    // floating-overlay hide (launcher closed) sits between the main-window
+    // gate and the launcher block, so a too-narrow slice stops reaching
+    // `launcher.hide()` for reasons unrelated to the invariant it pins.
+    const body = mainSrc.slice(hideStart, hideStart + 1800);
     assert.match(body, /if \(session\.wasLauncherVisible\) \{/, 'must gate the launcher hide on wasLauncherVisible');
     assert.match(body, /this\.windowHelper\.getLauncherWindow\(\)/, 'must resolve the launcher window to hide');
     assert.match(body, /launcher\.hide\(\)/, 'must hide the launcher (and therefore the chat overlay)');
@@ -215,5 +219,74 @@ describe('Screenshot capture must not leak the launcher-hosted chat overlay (mee
     assert.match(body, /if \(session\.wasLauncherVisible\) \{/, 'must gate the launcher restore on wasLauncherVisible');
     assert.match(body, /!launcher\.isVisible\(\)/, 'must only restore if the launcher is not already up (idempotent with switchTo*)');
     assert.match(body, /launcher\.showInactive\(\)/, 'must restore via showInactive (never steals focus)');
+  });
+});
+
+describe('Screenshot capture must not leak the floating overlay / top pill (launcher closed)', () => {
+  // During a meeting the launcher can be closed while the chat overlay + the
+  // always-visible top pill stay on screen: showOverlay()/global-shortcut
+  // reveal paths show the overlay WITHOUT setting isWindowVisible, so
+  // wasMainWindowVisible is false and the conditional hideMainWindow() would
+  // skip them — overlay and pill leak into the captured frame (the reported
+  // Ctrl+H bug). The fix records overlay visibility in the session and
+  // hides/restores the floating UI explicitly, independent of the
+  // wasMainWindowVisible gate. These source anchors pin that.
+
+  const windowHelperSrc = fs.readFileSync(path.join(root, 'electron/WindowHelper.ts'), 'utf8');
+
+  test('createScreenshotCaptureSession records whether the overlay window was visible', () => {
+    const sessionStart = mainSrc.indexOf('private createScreenshotCaptureSession');
+    const sessionBody = mainSrc.slice(sessionStart, sessionStart + 1000);
+    assert.match(
+      sessionBody,
+      /wasOverlayVisible:\s*[\s\S]{0,90}overlayWindow\.isVisible\(\)/,
+      'the capture session must snapshot overlay visibility independently of isWindowVisible',
+    );
+  });
+
+  test('hideWindowsForScreenshot hides the floating UI when the main window was NOT visible', () => {
+    const hideStart = mainSrc.indexOf('private hideWindowsForScreenshot');
+    const body = mainSrc.slice(hideStart, hideStart + 1800);
+    assert.match(
+      body,
+      /if \(session\.wasMainWindowVisible\) \{\s*\n\s*this\.hideMainWindow\(\);[\s\S]{0,400}this\.windowHelper\.hideFloatingUiForScreenshot\(\);/,
+      'when the main window was not visible, the floating overlay + pill must still be hidden for the capture',
+    );
+  });
+
+  test('restoreWindowsAfterScreenshot re-shows the overlay (inactive) when it was visible but the main window was not', () => {
+    const restoreStart = mainSrc.indexOf('private restoreWindowsAfterScreenshot');
+    const body = mainSrc.slice(restoreStart, restoreStart + 2400);
+    assert.match(
+      body,
+      /!session\.wasMainWindowVisible && session\.wasOverlayVisible/,
+      'must gate the overlay restore on both session flags (never double-show after switchTo*)',
+    );
+    assert.match(
+      body,
+      /this\.windowHelper\.showOverlay\(true\)/,
+      'must restore via showOverlay(true) — the inactive reveal never steals focus',
+    );
+  });
+
+  test('WindowHelper.hideFloatingUiForScreenshot takes the overlay and the standalone pill down', () => {
+    const methodStart = windowHelperSrc.indexOf('public hideFloatingUiForScreenshot');
+    assert.ok(methodStart !== -1, 'hideFloatingUiForScreenshot must exist');
+    const body = windowHelperSrc.slice(methodStart, methodStart + 1600);
+    assert.match(
+      body,
+      /this\.setPillStandalone\(false\)/,
+      'must leave standalone mode so the floating pill is taken down for the capture',
+    );
+    assert.match(
+      body,
+      /this\.applyOverlayAuxVisibility\(false\)/,
+      'must take the aux chrome (top pill / toggle) down with the overlay',
+    );
+    assert.match(
+      body,
+      /this\.overlayWindow\?\.hide\(\)/,
+      'must hide the overlay body itself',
+    );
   });
 });
