@@ -175,6 +175,13 @@ export class SessionTracker {
 
     // Track interim interviewer segment
     private lastInterimInterviewer: TranscriptSegment | null = null;
+    // Track interim USER (mic channel) segment — the app user's own in-flight
+    // speech. Mirrors lastInterimInterviewer: STT emits partials while the
+    // person is speaking and only commits a FINAL after endpoint detection +
+    // inference (~1-5s), so without this the recap / persisted transcript
+    // would lag the spoken word and "click recap right after talking" would
+    // see an empty (or stale) transcript.
+    private lastInterimUser: TranscriptSegment | null = null;
 
     // Detected coding question from transcript or screenshot extraction
     private detectedCodingQuestion: string | null = null;
@@ -286,6 +293,7 @@ export class SessionTracker {
         this.lastAssistantMessage = null;
         this.assistantResponseHistory = [];
         this.lastInterimInterviewer = null;
+        this.lastInterimUser = null;
         console.log('[SessionTracker] Mode-specific session context cleared');
     }
 
@@ -532,6 +540,18 @@ export class SessionTracker {
             }
         }
 
+        if (segment.speaker === 'user') {
+            // Mirror the interviewer interim tracking for the MIC channel: the
+            // app user's last in-flight partial is what the STT-only readers
+            // (recap / persistence / in-meeting search) append until the final
+            // lands, so "the transcript up to NOW" includes what was just said.
+            if (!segment.final) {
+                this.lastInterimUser = segment;
+            } else {
+                this.lastInterimUser = null;
+            }
+        }
+
         return this.addTranscript(segment);
     }
 
@@ -714,14 +734,11 @@ export class SessionTracker {
      * rolling `contextItems` window (default 180s).
      */
     getRecapContext(): string {
-        const recentTranscript = this.fullTranscript
+        const recentTranscript = this.getSttTranscript()
             .map(segment => {
-                const role = this.mapSpeakerToRole(segment.speaker);
-                if (role === 'assistant') return null; // never recap AI suggestions
-                const label = role === 'interviewer' ? 'INTERVIEWER' : 'ME';
+                const label = segment.speaker === 'user' ? 'ME' : 'INTERVIEWER';
                 return `[${label}]: ${segment.text}`;
             })
-            .filter((line): line is string => line !== null)
             .join('\n');
 
         // Epoch summaries compress EARLIER transcript (interviewer + user turns);
@@ -733,6 +750,77 @@ export class SessionTracker {
         }
 
         return recentTranscript;
+    }
+
+    /**
+     * The MEETING transcript proper: ONLY segments that came from real spoken
+     * audio (origin 'stt') or test injection (origin 'test'). Typed manual
+     * chat (origin 'manual_chat') and assistant answers (origin 'assistant')
+     * are conversation context — they live in contextItems for follow-up
+     * continuity — but they must NEVER appear in the persisted meeting
+     * transcript or in a recap, which are supposed to reflect what was
+     * actually SAID in the meeting.
+     */
+    getSttTranscript(): TranscriptSegment[] {
+        const committed = this.fullTranscript.filter(
+            (seg) => seg.origin === 'stt' || seg.origin === 'test',
+        );
+        // The durable store only ever commits FINAL segments, but STT emits
+        // partials while the person is speaking and finalizes ~1-5s later —
+        // so a recap clicked right after talking would otherwise miss the
+        // just-said words. Append the guarded tail of each speaker's pending
+        // interim so readers see the transcript UP TO NOW; when the final
+        // lands it replaces the interim (both fields are cleared on final),
+        // so the view never duplicates.
+        const pending = this.pendingInterimTranscript();
+        return pending.length > 0 ? [...committed, ...pending] : committed;
+    }
+
+    /**
+     * Latest pending (not-yet-final) STT speech per speaker, tail-guarded
+     * against cumulative provider interims (see llm/interimInjectionGuard —
+     * the same guard `getContextWithInterim` uses). A fresh utterance-scoped
+     * interim injects whole; a cumulative blob (Google/relay interims measured
+     * up to 10K chars) injects only its novel tail; stale (>30s) or duplicate
+     * interims are skipped. The appended entries keep `final: false` and the
+     * speaker's real origin so downstream readers (persist, search, recap
+     * labels) treat them exactly like the live speech they are.
+     */
+    private pendingInterimTranscript(): TranscriptSegment[] {
+        const now = Date.now();
+        const { resolveInterimInjection } = require('./llm/interimInjectionGuard') as typeof import('./llm/interimInjectionGuard');
+        const out: TranscriptSegment[] = [];
+        for (const interim of [this.lastInterimInterviewer, this.lastInterimUser]) {
+            if (!interim || !interim.text || !interim.text.trim()) continue;
+            const sameSpeakerFinals = this.fullTranscript.filter(
+                (s) => s.speaker === interim.speaker && s.final && (s.origin === 'stt' || s.origin === 'test'),
+            );
+            const verdict = resolveInterimInjection({
+                interim: { text: interim.text, timestamp: interim.timestamp },
+                recentInterviewerFinals: sameSpeakerFinals.map((s) => ({
+                    role: s.speaker === 'user' ? 'user' : 'interviewer',
+                    text: s.text,
+                    timestamp: s.timestamp,
+                })),
+                // `lastContextItem: null` INTENTIONALLY disables the guard's
+                // 1s-duplicate heuristic for this read path. That heuristic
+                // assumes "the last item within 1s is the FINAL for this same
+                // utterance" — true for the WTA path, false here: the interim
+                // fields are cleared synchronously the moment a final lands
+                // (handleTranscript), so a non-null interim means no final has
+                // arrived yet. Passing the real last item would false-positive
+                // on unrelated recent writes (e.g. an assistant answer the user
+                // is replying to right now) and silently drop the just-said
+                // words from the recap. Staleness + containment + length cap
+                // still guard the injection.
+                lastContextItem: null,
+                now,
+            });
+            if (verdict.action === 'inject' && verdict.text) {
+                out.push({ ...interim, text: verdict.text });
+            }
+        }
+        return out;
     }
 
     // ============================================
@@ -812,12 +900,20 @@ export class SessionTracker {
      * Force-save any pending interim transcript (called on meeting stop)
      */
     flushInterimTranscript(): void {
-        if (this.lastInterimInterviewer) {
-            console.log('[SessionTracker] Force-saving pending interim transcript', { length: this.lastInterimInterviewer.text.length });
-            const finalSegment = { ...this.lastInterimInterviewer, final: true };
-            this.addTranscript(finalSegment);
-            this.lastInterimInterviewer = null;
+        // Flush BOTH channels: interviewer (system audio) AND user (mic). If
+        // the provider's real final arrives during the stop-drain window it
+        // clears the interim field first (handleTranscript sets it to null on
+        // final), so this only ever forces speech that would otherwise be lost
+        // — never duplicates a final that already landed.
+        for (const pending of [this.lastInterimInterviewer, this.lastInterimUser]) {
+            if (pending) {
+                console.log('[SessionTracker] Force-saving pending interim transcript', { speaker: pending.speaker, length: pending.text.length });
+                const finalSegment = { ...pending, final: true };
+                this.addTranscript(finalSegment);
+            }
         }
+        this.lastInterimInterviewer = null;
+        this.lastInterimUser = null;
     }
 
     // ============================================
@@ -833,6 +929,7 @@ export class SessionTracker {
         this.lastAssistantMessage = null;
         this.assistantResponseHistory = [];
         this.lastInterimInterviewer = null;
+        this.lastInterimUser = null;
         this.detectedCodingQuestion = null;
         this.codingQuestionSource = null;
         this.codingQuestionSetAt = null;

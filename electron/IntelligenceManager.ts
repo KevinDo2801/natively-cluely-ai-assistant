@@ -181,9 +181,12 @@ export class IntelligenceManager extends EventEmitter {
         return this.session.getLastInterviewerTurn();
     }
 
-    /** Current meeting's full finalized transcript (for in-meeting search, Phase 10). */
+    /** Current meeting's full finalized transcript (for in-meeting search, Phase 10).
+     * STT-ONLY (2026): typed manual chat + assistant answers are conversation
+     * context, not meeting audio — in-meeting search, lecture notes, and the
+     * live snapshot flush must all operate on what was actually SAID. */
     getCurrentMeetingTranscript(): Array<{ speaker: string; text: string; timestamp: number }> {
-        return this.session.getFullTranscript().map(s => ({ speaker: s.speaker, text: s.text, timestamp: s.timestamp }));
+        return this.session.getSttTranscript().map(s => ({ speaker: s.speaker, text: s.text, timestamp: s.timestamp }));
     }
 
     /** Current meeting's full usage log (live-note DB flush; mirrors getCurrentMeetingTranscript). */

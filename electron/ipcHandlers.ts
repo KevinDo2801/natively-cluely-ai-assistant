@@ -972,6 +972,13 @@ export function initializeIpcHandlers(appState: AppState): void {
         // one frozen decision, scope/version-filtered evidence, one composed
         // prompt, and stream events that ALWAYS carry streamId (F4: every legacy
         // early-return emits untagged events that no renderer can supersede).
+        // CALLER-OWNED PROMPT CONTRACT — hoisted OUT of the V3 try block so the
+        // legacy transport below can honor it: skip the V3 short-circuit, skip
+        // the source-ownership clarification gate, and restore the caller's
+        // exact composed prompt right before the stream (quick actions like
+        // Recap route through manual_chat with their own grounded transcript).
+        let callerOwnsPrompt = false;
+        let callerPromptContext: string | undefined;
         try {
           const { isContextIntelligenceV3Enabled } = require('./context-intelligence/contracts/flag');
           // CALLER-OWNED PROMPT CONTRACT: `skipSystemPrompt + context` means the
@@ -982,7 +989,11 @@ export function initializeIpcHandlers(appState: AppState): void {
           // evidence plus the CURRENT meeting — a wrong-scope answer that
           // looked grounded. Those turns stay on the legacy transport until a
           // dedicated V3 surface owns them.
-          const callerOwnsPrompt = options?.skipSystemPrompt === true && Boolean(context);
+          callerOwnsPrompt = options?.skipSystemPrompt === true && Boolean(context);
+          // Snapshot the caller's exact composed prompt so the legacy assembly
+          // below (profile prepends, coding/answer contracts) can be rolled back
+          // right before the stream for caller-owned turns.
+          callerPromptContext = context;
           if (!callerOwnsPrompt && isContextIntelligenceV3Enabled()) {
             const { buildV3Prompt } = require('./context-intelligence/orchestration/engine-bridge');
             const { resolveModePolicy, isModeId, resolveModeIdOrWarn } = require('./context-intelligence/policies/mode-policy-registry');
@@ -2568,7 +2579,16 @@ export function initializeIpcHandlers(appState: AppState): void {
         // SOURCE-HONEST CLARIFICATION: doc/transcript mode + an EXPLICIT profile
         // ask is an explicit internal refusal, so it may bypass provider generation;
         // it must not contain profile facts and is not authoritative memory.
+        // CALLER-OWNED PROMPT GUARD (2026-08-28): quick actions (Recap/Clarify/
+        // Follow-up/Brainstorm) route through manual_chat with `skipSystemPrompt +
+        // context` — the caller composed the FULL prompt, including its own
+        // grounded transcript. The source-ownership resolver must never intercept
+        // such a turn: in a reference-files mode it classified the Recap
+        // instruction as an "explicit profile ask" and answered with the canned
+        // "This mode only answers from your uploaded material…" refusal while the
+        // session held a full transcript.
         if (manualOwnership?.shouldClarifyInsteadOfProfile && !_ownerEnforcementOff
+            && !callerOwnsPrompt
             && !isCodingChat && !imagePaths?.length && !isStealthChat) {
           try {
             const { buildSourceSwitchClarification } = require('./llm/sourceOwnership');
@@ -3312,7 +3332,12 @@ export function initializeIpcHandlers(appState: AppState): void {
           // knowledge intercept at all — no profile, no intro, no candidate
           // grounding belongs in a policy redirect (release 2026-06-06b).
           const isSafetyAnswer = answerPlan.answerType === 'ethical_usage_answer';
-          const ignoreKnowledge = isCodingChat || isSafetyAnswer ? true : options?.ignoreKnowledgeMode;
+          // CALLER-OWNED PROMPT GUARD (2026-08-28): the caller composed the full
+          // prompt (Recap embeds its grounded transcript) — the knowledge
+          // intercept and active-mode injection must never add profile/reference
+          // material on top of it (same contract the old RecapLLM path kept via
+          // promptOverride + ignoreKnowledgeMode).
+          const ignoreKnowledge = isCodingChat || isSafetyAnswer || callerOwnsPrompt ? true : options?.ignoreKnowledgeMode;
           iTrace.lifecycle('evidence_selected', {
             selectedEvidenceCount: selectedProfileEvidence?.items.length ?? 0,
             renderedEvidenceCount: selectedProfileEvidence?.items.length ?? 0,
@@ -3326,6 +3351,13 @@ export function initializeIpcHandlers(appState: AppState): void {
           }).lifecycle('provider_dispatched', {
             providerAttempts: 1,
           });
+          // CALLER-OWNED PROMPT CONTRACT (2026-08-28): the caller composed the
+          // FULL system prompt (e.g. the Recap quick action embeds the
+          // transcript-only recapContext). All legacy assembly above — profile
+          // prepends, coding/answer contracts, memory blocks — must never alter
+          // it; restore the exact caller blob so the model sees ONLY what the
+          // caller grounded the turn on.
+          if (callerOwnsPrompt && callerPromptContext) context = callerPromptContext;
           chatTrace.mark('provider_request_started', { ignoreKnowledgeMode: Boolean(ignoreKnowledge) });
           const stream = llmHelper.streamChat(
             message,
@@ -3333,7 +3365,7 @@ export function initializeIpcHandlers(appState: AppState): void {
             context,
             systemPromptOverride,
             ignoreKnowledge,
-            isCodingChat || isSafetyAnswer, // skipModeInjection; safety/coding must not pull active-mode resume/JD/reference context
+            isCodingChat || isSafetyAnswer || callerOwnsPrompt, // skipModeInjection; caller-owned turns are fully composed
             [],    // extraDataScopes
             myController.signal,
             // Coding gets a small reasoning budget (correctness); everything else

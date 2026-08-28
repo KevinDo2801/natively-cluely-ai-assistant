@@ -85,6 +85,30 @@ describe('UnifiedRequestNormalizer — request shaping', () => {
     assert.equal(req.pinnedModeId, 'm1');
   });
 
+  test('normalizeRequest PRESERVES context + skipSystemPrompt (caller-owned prompt contract)', () => {
+    // REGRESSION (2026-08-28): the whitelist dropped these fields, so the
+    // Recap/clarify/follow-up quick actions (which route through manual_chat
+    // with a composed system prompt) silently fell back to the rolling window
+    // — "Recap" answered "there is nothing to recap yet" while the session
+    // held a full transcript.
+    const req = normalizeRequest({
+      source: 'manual_chat',
+      text: 'Recap what has actually been discussed...',
+      context: '[INTERVIEWER]: ...\n[ME]: ...',
+      skipSystemPrompt: true,
+    });
+    assert.equal(req.source, 'manual_chat');
+    assert.equal(req.context, '[INTERVIEWER]: ...\n[ME]: ...',
+      'the caller-composed context must survive normalization');
+    assert.equal(req.skipSystemPrompt, true,
+      'the caller-owned-prompt flag must survive normalization');
+
+    // Plain typed chat (no caller-owned prompt) stays untouched.
+    const plain = normalizeRequest({ source: 'manual_chat', text: 'hi' });
+    assert.equal(plain.context, undefined);
+    assert.equal(plain.skipSystemPrompt, undefined);
+  });
+
   test('imagePaths are capped at 5 and empty arrays drop to undefined', () => {
     const req = normalizeRequest({ source: 'manual_chat', imagePaths: ['a', 'b', 'c', 'd', 'e', 'f'] });
     assert.equal(req.imagePaths.length, 5);

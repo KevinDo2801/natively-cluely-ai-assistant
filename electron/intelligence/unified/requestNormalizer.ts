@@ -84,6 +84,16 @@ export interface NormalizeRequestInput {
   pinnedModeId?: string | null;
   followUpIntent?: string;
   confidence?: number;
+  // Caller-owned prompt contract (quick actions route through manual_chat with
+  // a composed system prompt): `context` is the caller's full prompt blob
+  // (e.g. the Recap transcript) and `skipSystemPrompt` tells the handler to
+  // use it AS the system prompt. These were DROPPED by this whitelist until
+  // 2026-08-28 — the recap/clarify/follow-up quick actions silently fell back
+  // to the rolling window (or V3 mode evidence) and never saw their composed
+  // transcript, which is how "Recap" could answer "there is nothing to recap
+  // yet" while the session held a full transcript.
+  context?: string;
+  skipSystemPrompt?: boolean;
   // auto_transcript extras
   questionId?: string;
   answerability?: number;
@@ -126,6 +136,8 @@ export function normalizeRequest(input: NormalizeRequestInput): IntelligenceRequ
     pinnedModeId: input.pinnedModeId,
     followUpIntent: input.followUpIntent,
     confidence: input.confidence,
+    context: input.context,
+    skipSystemPrompt: input.skipSystemPrompt,
     questionId: input.questionId,
     answerability: input.answerability,
     dialogueAct: input.dialogueAct,

@@ -117,7 +117,12 @@ export class MeetingPersistence {
         }
 
         const snapshot = {
-            transcript: [...this.session.getFullTranscript()],
+            // RECAP/TRANSCRIPT (2026): persist ONLY the real spoken-audio
+            // transcript (origin 'stt' / 'test'). Typed manual chat and
+            // assistant answers are conversation context, not meeting audio —
+            // including them made the saved meeting transcript read like chat
+            // history (and leaked quick-action prompts into it).
+            transcript: [...this.session.getSttTranscript()],
             usage: [...this.session.getFullUsage()],
             startTime: this.session.getSessionStartTime(),
             durationMs: durationMs,
