@@ -6973,9 +6973,52 @@ export class AppState {
    * of the launcher and of whether a meeting is running. Mirrors the pill's
    * Ask/Hide button (toggleOverlayChat on the helper): hidden → show (and
    * focus), visible → hide (a running meeting keeps recording).
+   *
+   * When the toggle OPENS the chat (was hidden → now visible) it also engages
+   * the stealth-typing input path, so the user can type immediately without
+   * having to click the input box — the same route as the chat:focusInput
+   * hotkey (Ctrl/Cmd+Shift+Space). This covers every "open chat" entry point
+   * (global Ctrl+B, the renderer-side Ctrl+B fallback, the tray and the app
+   * menu) in one place.
    */
   public toggleOverlayChat(): void {
-    this.windowHelper.toggleOverlayChat();
+    const helper = this.windowHelper;
+    const overlay = helper.getOverlayWindow();
+    const wasVisible = !!overlay && !overlay.isDestroyed() && overlay.isVisible();
+    helper.toggleOverlayChat();
+    // Only when the chat was just OPENED (not hidden) engage stealth typing.
+    if (!wasVisible && overlay && !overlay.isDestroyed() && overlay.isVisible()) {
+      this.engageOverlayStealthTyping();
+    }
+  }
+
+  /**
+   * Engage the stealth-typing input path so the user can type into the overlay
+   * chat immediately (no click required). Mirrors the chat:focusInput
+   * engagement: start the native OS tap/hook when available and auto-expand the
+   * shell so the typed text is visible. No-op on the native tap when it is
+   * unavailable (stale binary / Linux) — except on macOS it falls back to real
+   * DOM focus, matching chat:focusInput. On Windows the no-activate overlay can
+   * never be focused, so without the native tap typing is not possible there
+   * (the user rebuilds the native module to get capture).
+   */
+  private engageOverlayStealthTyping(): void {
+    // eslint-disable-next-line @typescript-eslint/no-var-requires
+    const { StealthKeyboardManager } = require('./services/StealthKeyboardManager');
+    const mgr = StealthKeyboardManager.getInstance();
+    const overlay = this.windowHelper.getOverlayWindow();
+    this.sendToWindow(overlay, 'ensure-expanded');
+    if (mgr.isAvailable()) {
+      if (!mgr.isActive()) mgr.start();
+      return; // the OS tap/hook is the input path; never focus the overlay
+    }
+    // No native stealth path: surface the input and focus the window so the
+    // user can actually type — except Windows (no-activate overlay can't be
+    // focused and would steal the meeting app's foreground).
+    if (overlay && !overlay.isDestroyed()) {
+      this.sendToWindow(overlay, 'global-shortcut', { action: 'focusInput' });
+      if (process.platform !== 'win32') overlay.focus();
+    }
   }
 
   public setWindowDimensions(width: number, height: number): void {
