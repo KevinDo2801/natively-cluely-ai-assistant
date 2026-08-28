@@ -5560,7 +5560,13 @@ const NativelyInterface: React.FC<NativelyInterfaceProps> = ({
     analytics.trackCommandExecuted('recap');
 
     try {
-      await window.electronAPI.generateRecap();
+      const result = await window.electronAPI.generateRecap();
+      // If the engine returned no content (null/empty summary) it may have
+      // ended without emitting the completion event, leaving the streaming
+      // placeholder blinking forever. Finalize it with a clear fallback.
+      if (!result?.summary) {
+        finalizeStreamingByIntent('recap', "Couldn't generate a recap. Please try again.");
+      }
     } catch (err) {
       setMessages((prev) => [
         ...prev,
@@ -5588,7 +5594,10 @@ const NativelyInterface: React.FC<NativelyInterfaceProps> = ({
     analytics.trackCommandExecuted('suggest_questions');
 
     try {
-      await window.electronAPI.generateFollowUpQuestions();
+      const result = await window.electronAPI.generateFollowUpQuestions();
+      if (!result?.questions) {
+        finalizeStreamingByIntent('follow_up_questions', "Couldn't generate follow-up questions. Please try again.");
+      }
     } catch (err) {
       setMessages((prev) => [
         ...prev,
@@ -5616,7 +5625,10 @@ const NativelyInterface: React.FC<NativelyInterfaceProps> = ({
     analytics.trackCommandExecuted('clarify');
 
     try {
-      await window.electronAPI.generateClarify();
+      const result = await window.electronAPI.generateClarify();
+      if (!result?.clarification) {
+        finalizeStreamingByIntent('clarify', "Couldn't generate a clarifying question. Please try again.");
+      }
     } catch (err) {
       setMessages((prev) => [
         ...prev,
