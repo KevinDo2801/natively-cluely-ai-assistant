@@ -83,10 +83,16 @@ export function attachNoActivate(
   managed.add(win);
   win.setFocusable(false);
   // Defensive re-assert: if anything ever flips focusable on (a stray focus(),
-  // an Electron internal), losing focus or hiding restores the non-activating
+  // an Electron internal), losing focus or hiding restores the no-activating
   // state, so the next meeting click can never steal foreground focus.
+  //
+  // The re-assert is SETTING-AWARE: it consults hookAvailabilityProvider()
+  // (which folds the user's stealth toggle + IME availability), so when the
+  // user disables stealth typing mid-session the blur/hide handler keeps the
+  // window focusable (setFocusable(true)) instead of fighting the toggle — the
+  // window must be focusable to type with an IME through real DOM focus.
   const revert = () => {
-    if (!win.isDestroyed()) win.setFocusable(false);
+    if (!win.isDestroyed()) win.setFocusable(!hookAvailabilityProvider());
   };
   win.on('blur', revert);
   win.on('hide', revert);

@@ -550,6 +550,7 @@ const SettingsOverlay: React.FC<SettingsOverlayProps> = ({
     const [pillAlwaysVisible, setPillAlwaysVisible] = useState(false);
     const [hideOverlayOnStart, setHideOverlayOnStart] = useState(false);
     const [autoAnswerEnabled, setAutoAnswerEnabled] = useState(false);
+    const [stealthTypingEnabled, setStealthTypingEnabled] = useState(true);
     const [meetingRetention, setMeetingRetention] = useState<'forever' | '7d' | '30d' | 'never'>('forever');
     const [showVerboseToast, setShowVerboseToast] = useState(false);
     const [codeVerification, setCodeVerification] = useState(false);
@@ -571,6 +572,7 @@ const SettingsOverlay: React.FC<SettingsOverlayProps> = ({
             window.electronAPI?.getPillAlwaysVisible?.().then(setPillAlwaysVisible).catch(() => { });
             window.electronAPI?.getHideOverlayOnStart?.().then(setHideOverlayOnStart).catch(() => { });
             window.electronAPI?.getAutoAnswerEnabled?.().then(setAutoAnswerEnabled).catch(() => { });
+            window.electronAPI?.getStealthTypingEnabled?.().then((v) => setStealthTypingEnabled(v !== false)).catch(() => { });
             window.electronAPI?.getCodeVerification?.().then((v) => setCodeVerification(v === true)).catch(() => { });
             window.electronAPI?.getMeetingRetention?.().then(setMeetingRetention).catch(() => { });
         }
@@ -2038,6 +2040,40 @@ const SettingsOverlay: React.FC<SettingsOverlayProps> = ({
                                                             }
                                                         }}
                                                         className={autoAnswerEnabled ? 'bg-accent-primary border border-transparent' : 'bg-bg-toggle-switch border border-border-muted'}
+                                                    />
+                                                </div>
+
+                                                {/* Stealth Typing */}
+                                                <div className="flex items-start justify-between px-4 py-3 gap-4">
+                                                    <div className="flex items-start gap-4">
+                                                        <div className="w-10 h-10 bg-bg-item-surface rounded-lg border border-border-subtle text-text-primary flex items-center justify-center shrink-0">
+                                                            <Keyboard size={20} />
+                                                        </div>
+                                                        <div>
+                                                            <h3 className="text-sm font-bold text-text-primary">{t('Stealth typing')}</h3>
+                                                            <p className="text-xs text-text-secondary mt-0.5">{t('Type into the chat without stealing focus from the app you are in. Turn OFF to type with an IME (e.g. Vietnamese).')}</p>
+                                                        </div>
+                                                    </div>
+                                                    <SettingsToggle
+                                                        checked={stealthTypingEnabled}
+                                                        label={t('Stealth typing')}
+                                                        onChange={async () => {
+                                                            const previous = stealthTypingEnabled;
+                                                            const newState = !previous;
+                                                            setStealthTypingEnabled(newState); // Optimistic update
+                                                            try {
+                                                                const result = await window.electronAPI?.setStealthTypingEnabled?.(newState);
+                                                                if (result && !result.success) {
+                                                                    // Rollback on explicit failure (settings store degraded)
+                                                                    setStealthTypingEnabled(previous);
+                                                                    console.error('[Settings] Failed to set Stealth typing:', result.error);
+                                                                }
+                                                            } catch (err) {
+                                                                setStealthTypingEnabled(previous);
+                                                                console.error('[Settings] Exception setting Stealth typing:', err);
+                                                            }
+                                                        }}
+                                                        className={stealthTypingEnabled ? 'bg-accent-primary border border-transparent' : 'bg-bg-toggle-switch border border-border-muted'}
                                                     />
                                                 </div>
 

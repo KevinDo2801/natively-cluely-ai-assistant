@@ -23,6 +23,8 @@ export interface SettingsFlagsDeps {
   setHideOverlayOnStart(v: boolean): void;
   getAutoAnswerEnabled(): boolean;
   setAutoAnswerEnabled(v: boolean): boolean;
+  getStealthTypingEnabled(): boolean;
+  setStealthTypingEnabled(v: boolean): boolean;
 }
 
 export function registerSettingsFlagHandlers(deps: SettingsFlagsDeps): void {
@@ -82,6 +84,17 @@ export function registerSettingsFlagHandlers(deps: SettingsFlagsDeps): void {
 
   safeHandle('set-auto-answer-enabled', async (_event, enabled: boolean) => {
     const persisted = deps.setAutoAnswerEnabled(Boolean(enabled));
+    return persisted
+      ? { success: true }
+      : { success: false, error: 'Settings store is unavailable; the change was not saved.' };
+  });
+
+  safeHandle('get-stealth-typing-enabled', async () => {
+    return deps.getStealthTypingEnabled();
+  });
+
+  safeHandle('set-stealth-typing-enabled', async (_event, enabled: boolean) => {
+    const persisted = deps.setStealthTypingEnabled(Boolean(enabled));
     return persisted
       ? { success: true }
       : { success: false, error: 'Settings store is unavailable; the change was not saved.' };

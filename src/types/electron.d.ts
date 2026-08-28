@@ -643,6 +643,10 @@ export interface ElectronAPI {
   // when on; never shown when off. Ctrl+B only toggles the overlay chat.
   getPillAlwaysVisible: () => Promise<boolean>;
   setPillAlwaysVisible: (enabled: boolean) => Promise<{ success: boolean }>;
+  // Stealth typing toggle — when OFF the overlay uses real DOM focus (needed to
+  // type with an IME like Vietnamese)
+  getStealthTypingEnabled: () => Promise<boolean>;
+  setStealthTypingEnabled: (enabled: boolean) => Promise<{ success: boolean; error?: string }>;
   // Keep the meeting overlay closed when a meeting starts (open on demand from the launcher)
   getHideOverlayOnStart: () => Promise<boolean>;
   setHideOverlayOnStart: (enabled: boolean) => Promise<{ success: boolean }>;

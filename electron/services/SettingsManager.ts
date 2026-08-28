@@ -59,6 +59,12 @@ export interface AppSettings {
     hindsightAutoStart?: boolean;
     hindsightServerCommand?: string;
     hindsightLlmProvider?: string;
+    // User toggle: when OFF, stealth typing (the OS-level keystroke tap/hook) is
+    // disabled entirely and the overlay input falls back to real DOM focus —
+    // required to type with an IME (e.g. Vietnamese, CJK) because the stealth
+    // hook captures below the input method and breaks composition. Default ON
+    // (stealth as before); `undefined` reads as enabled.
+    stealthTypingEnabled?: boolean;
     // Explicit opt-out sentinel for "I do not want Hindsight at all". Distinct from
     // "hindsightBaseUrl is empty" — that condition means "user hasn't configured yet"
     // (synthetic default applies). `true` here means "user has actively disabled Hindsight"

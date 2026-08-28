@@ -884,6 +884,10 @@ interface ElectronAPI {
   // Always-visible TopPill — the overlay pill floats in launcher mode too
   getPillAlwaysVisible: () => Promise<boolean>;
   setPillAlwaysVisible: (enabled: boolean) => Promise<{ success: boolean }>;
+  // Stealth typing toggle — when OFF the overlay uses real DOM focus (needed to
+  // type with an IME like Vietnamese)
+  getStealthTypingEnabled: () => Promise<boolean>;
+  setStealthTypingEnabled: (enabled: boolean) => Promise<{ success: boolean; error?: string }>;
   // Keep the meeting overlay closed when a meeting starts (open on demand from the launcher)
   getHideOverlayOnStart: () => Promise<boolean>;
   setHideOverlayOnStart: (enabled: boolean) => Promise<{ success: boolean }>;
@@ -2577,6 +2581,8 @@ contextBridge.exposeInMainWorld('electronAPI', {
   // Always-visible TopPill — the overlay pill floats in launcher mode too
   getPillAlwaysVisible: () => ipcRenderer.invoke('get-pill-always-visible'),
   setPillAlwaysVisible: (enabled: boolean) => ipcRenderer.invoke('set-pill-always-visible', enabled),
+  getStealthTypingEnabled: () => ipcRenderer.invoke('get-stealth-typing-enabled'),
+  setStealthTypingEnabled: (enabled: boolean) => ipcRenderer.invoke('set-stealth-typing-enabled', enabled),
   getHideOverlayOnStart: () => ipcRenderer.invoke('get-hide-overlay-on-start'),
   setHideOverlayOnStart: (enabled: boolean) => ipcRenderer.invoke('set-hide-overlay-on-start', enabled),
   getAutoAnswerEnabled: () => ipcRenderer.invoke('get-auto-answer-enabled'),

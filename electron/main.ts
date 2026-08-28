@@ -1424,6 +1424,10 @@ export class AppState {
   // on demand. Read by startMeetingTransition (Settings > Overlay toggle).
   private _hideOverlayOnStart: boolean = false;
   private _autoAnswerEnabled: boolean = false;
+  // User toggle for stealth typing (OS-level keystroke tap/hook). When OFF the
+  // overlay input uses real DOM focus, which is required to type with an IME
+  // (Vietnamese, CJK). Default ON; `undefined` reads as enabled.
+  private _stealthTypingEnabled: boolean = true;
   // Tracks whether STT sample-rate has been applied for the current capture
   // session. Reset on every reconfigureAudio / new pipeline build so the next
   // first-chunk handler reads the freshly-detected native rate.
@@ -1480,6 +1484,7 @@ export class AppState {
     setVerboseLoggingFlag(this._verboseLogging);
     this._ambientChatEnabled = settingsManager.get('ambientChatEnabled') ?? false;
     this._autoAnswerEnabled = settingsManager.get('autoAnswerEnabled') ?? false;
+    this._stealthTypingEnabled = settingsManager.get('stealthTypingEnabled') !== false;
     this._pillAlwaysVisible = settingsManager.get('pillAlwaysVisible') ?? false;
     this._hideOverlayOnStart = settingsManager.get('hideOverlayOnStart') ?? false;
     console.log(`[AppState] Initialized with isUndetectable=${this.isUndetectable}, disguiseMode=${this.disguiseMode}, verboseLogging=${this._verboseLogging}, ambientChatEnabled=${this._ambientChatEnabled}, autoAnswerEnabled=${this._autoAnswerEnabled}, pillAlwaysVisible=${this._pillAlwaysVisible}`);
@@ -1773,7 +1778,9 @@ export class AppState {
         // is in play. See electron/services/ImeDetector.ts for the rationale.
         registerStealthHandler('stealth-tap:should-auto-engage', () => {
           const { shouldAutoEngageStealthTap } = require('./services/ImeDetector');
-          return shouldAutoEngageStealthTap();
+          // stealth.isAvailable() folds the user's stealth toggle, so turning
+          // it OFF routes macOS through the focus-fallback too.
+          return stealth.isAvailable() && shouldAutoEngageStealthTap();
         });
         // Force a fresh IME probe and return the refined value. Renderer calls
         // this on window focus so users who add a Pinyin/Hangul source mid-
@@ -1782,7 +1789,7 @@ export class AppState {
         registerStealthHandler('stealth-tap:refresh-ime', () => {
           const { refreshImeDetection, shouldAutoEngageStealthTap } = require('./services/ImeDetector');
           refreshImeDetection();
-          return shouldAutoEngageStealthTap();
+          return stealth.isAvailable() && shouldAutoEngageStealthTap();
         });
       } else {
         // Windows: same decision as macOS, different probe. The WH_KEYBOARD_LL
@@ -7731,6 +7738,47 @@ export class AppState {
     this._hideOverlayOnStart = enabled;
     SettingsManager.getInstance().set('hideOverlayOnStart', enabled);
     console.log(`[AppState] hideOverlayOnStart set to ${enabled}`);
+  }
+
+  public getStealthTypingEnabled(): boolean {
+    return this._stealthTypingEnabled;
+  }
+
+  /**
+   * Sets the stealth-typing toggle and persists it. Returns whether it was
+   * PERSISTED (SettingsManager.set refuses when the store is degraded; the
+   * in-memory flag is left untouched in that case so memory/disk/renderer
+   * cannot disagree). On a successful OFF it also stops any engaged tap and,
+   * on Windows, flips the overlay window to focusable so the user can type
+   * with an IME through real DOM focus immediately.
+   */
+  public setStealthTypingEnabled(enabled: boolean): boolean {
+    const persisted = SettingsManager.getInstance().set('stealthTypingEnabled', enabled);
+    if (!persisted) {
+      console.warn(`[AppState] stealthTypingEnabled=${enabled} NOT persisted — settings store degraded; keeping ${this._stealthTypingEnabled}`);
+      return false;
+    }
+    const wasEnabled = this._stealthTypingEnabled;
+    this._stealthTypingEnabled = enabled;
+    console.log(`[AppState] stealthTypingEnabled set to ${enabled}`);
+    // Disabling mid-session must disengage any active tap immediately.
+    if (!enabled) {
+      try {
+        // eslint-disable-next-line @typescript-eslint/no-var-requires
+        const { StealthKeyboardManager } = require('./services/StealthKeyboardManager');
+        StealthKeyboardManager.getInstance().stop();
+      } catch (e) {
+        console.warn('[AppState] failed to stop stealth typing on toggle-off:', e);
+      }
+    }
+    // Windows: the overlay's no-activate policy is set at window creation, so a
+    // mid-session toggle must flip focusability explicitly to take effect now.
+    // (stealth ON → no-activate/unfocusable; OFF → focusable so the IME works.)
+    if (process.platform === 'win32' && wasEnabled !== enabled) {
+      const overlay = this.windowHelper?.getOverlayWindow?.();
+      if (overlay && !overlay.isDestroyed()) overlay.setFocusable(!enabled);
+    }
+    return true;
   }
 
   public getAutoAnswerEnabled(): boolean {

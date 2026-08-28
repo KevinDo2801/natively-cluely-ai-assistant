@@ -200,6 +200,17 @@ export class StealthKeyboardManager {
      */
     public isAvailable(): boolean {
         if (!this.nativeAvailable) return false;
+        // The user can disable stealth typing entirely (Settings → toggle). Off
+        // means the overlay always uses the no-hook fallback (real DOM focus),
+        // which is required to type with an IME like Vietnamese. `undefined`
+        // (default) reads as enabled.
+        try {
+            // eslint-disable-next-line @typescript-eslint/no-var-requires
+            const { SettingsManager } = require('./SettingsManager');
+            if (SettingsManager.getInstance().get('stealthTypingEnabled') === false) return false;
+        } catch {
+            // settings store unavailable — fall through to the default (enabled)
+        }
         if (process.platform === 'win32' && this.isImeActive()) return false;
         return true;
     }
