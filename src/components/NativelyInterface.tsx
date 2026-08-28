@@ -329,6 +329,7 @@ import {
 import type { DynamicActionPayload } from '../types/electron';
 import { getCodexCliModelDisplayName, litellmModelLabel } from '../utils/modelUtils';
 import { getModifierSymbol, isMac, isWindows } from '../utils/platformUtils';
+import { fetchChatOverlayContext } from '../lib/chatOverlayContext';
 import { DynamicActionBar } from './dynamic-actions/DynamicActionBar';
 import GlassEffectLayer from './ui/GlassEffectLayer';
 import { OverlayBanner, OverlayBannerButton } from './ui/OverlayBanner';
@@ -6050,7 +6051,21 @@ Provide only the answer, nothing else.`;
     chatDraftRef.current = '';
 
     const currentAttachments = attachedContext;
-    const conversationContextForSubmit = buildConversationContextFromMessages(messages);
+    // Ground manual chat on the full meeting context — transcript + conversation
+    // + reference files — whenever a live transcript exists. V3 (default ON)
+    // drops the renderer `context`, so a plain manual_chat answers "I don't have
+    // the transcript"; routing through the caller-owned path (skipSystemPrompt +
+    // context) bypasses V3 and delivers exactly what we compose here.
+    const chatHistoryContext = buildConversationContextFromMessages(messages);
+    let conversationContextForSubmit = chatHistoryContext;
+    let useCallerOwnedPrompt = false;
+    try {
+      const composed = await fetchChatOverlayContext(chatHistoryContext, window.electronAPI as any);
+      if (composed) {
+        conversationContextForSubmit = composed.context;
+        useCallerOwnedPrompt = true;
+      }
+    } catch { /* non-fatal: submit without transcript */ }
 
     // Clear inputs immediately
     setInputValue('');
@@ -6143,6 +6158,7 @@ Provide only the answer, nothing else.`;
         text: userText || 'Analyze this screenshot',
         imagePaths: currentAttachments.length > 0 ? currentAttachments.map((s) => s.path) : undefined,
         context: conversationContextForSubmit,
+        ...(useCallerOwnedPrompt ? { skipSystemPrompt: true } : {}),
       });
     } catch (err) {
       // R-17: release the claim taken above — see the note at the other call site.

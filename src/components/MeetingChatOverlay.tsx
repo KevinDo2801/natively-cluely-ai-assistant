@@ -9,6 +9,7 @@ import { registerPrismLanguages } from '../utils/registerPrismLanguages';
 import nativelyIcon from './icon.png';
 import { useResolvedTheme } from '../hooks/useResolvedTheme';
 import { splitGistLineStreaming } from '../lib/displayMarkup';
+import { composeChatOverlayContext } from '../lib/chatOverlayContext';
 
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
@@ -288,7 +289,7 @@ const MeetingChatOverlay: React.FC<MeetingChatOverlayProps> = ({
         }
 
         if (meetingContext.transcript?.length) {
-            const recentTranscript = meetingContext.transcript.slice(-20);
+            const recentTranscript = meetingContext.transcript.slice(-50);
             const transcriptText = recentTranscript
                 .map(t => `[${t.speaker === 'user' ? 'Me' : 'Them'}]: ${t.text}`)
                 .join('\n');
@@ -297,6 +298,49 @@ const MeetingChatOverlay: React.FC<MeetingChatOverlayProps> = ({
 
         return parts.join('\n');
     }, [meetingContext]);
+
+    // Chat history in this overlay (user/assistant turns), for the conversation
+    // block the model sees alongside the transcript.
+    const buildConversationString = useCallback((): string => {
+        return messages
+            .slice(-20)
+            .map(m => `${m.role === 'user' ? 'User' : 'Assistant'}: ${m.content}`)
+            .join('\n');
+    }, [messages]);
+
+    // Vague/referential questions ("explain what she said", "tell me more",
+    // "what did they say?") don't name a topic, so the model tends to anchor on
+    // whichever transcript block is most "explainable" — often an older story.
+    // When the question is ambiguous, nudge it toward the MOST RECENT content.
+    const buildRecencyHint = useCallback((question: string): string => {
+        const VAGUE_QUESTION_RE = /\b(explain|describe|summarize|tell me (more|about)|what (did|does) (she|he|they|the (speaker|person|interviewer|candidate)|him|her) (say|mean)|what was (that|this|it)|repeat that|go on|continue|say that again|can you (say|repeat|clarify) (that|this|it))\b/i;
+        if (!VAGUE_QUESTION_RE.test(question)) return '';
+        return `\n\nThe question does not name a specific topic. If it is ambiguous, base the answer on the MOST RECENT part of the transcript above (the last thing discussed).`;
+    }, []);
+
+    // Compose the fallback context: meeting transcript + chat conversation +
+    // active-mode reference files (when present). Mirrors the main chat's
+    // caller-owned grounding so a typed question always sees the transcript.
+    const buildFallbackSystemPrompt = useCallback(async (question: string): Promise<string> => {
+        const contextString = buildContextString();
+        const conversation = buildConversationString();
+        let files: Array<{ fileName: string; content: string }> = [];
+        try {
+            const activeMode = await window.electronAPI?.modesGetActive?.();
+            if (activeMode?.id) {
+                const refs = await window.electronAPI?.modesGetReferenceFiles?.(activeMode.id);
+                files = (refs ?? []).map((f) => ({ fileName: f.fileName, content: f.content }));
+            }
+        } catch { /* files are optional */ }
+        const body = composeChatOverlayContext({
+            transcript: contextString,
+            chatHistory: conversation,
+            files,
+            persona: `You are recalling a specific meeting. Answer questions ONLY about this meeting. Be concise (2-4 sentences). Sound natural, like a human recalling. If information is not present, say so briefly. Never guess.${buildRecencyHint(question)}`,
+            transcriptLabel: '[MEETING CONTEXT:]',
+        });
+        return body;
+    }, [buildContextString, buildConversationString, buildRecencyHint]);
 
     // Submit question using RAG streaming
     const submitQuestion = useCallback(async (question: string) => {
@@ -394,7 +438,11 @@ const MeetingChatOverlay: React.FC<MeetingChatOverlayProps> = ({
             // Get meeting ID from context for RAG queries
             const meetingId = meetingContext.id;
 
-            if (meetingId) {
+            // TEMP: RAG disabled — route every question straight through the
+            // context-window chat fallback (transcript) instead of trying the
+            // RAG meeting_search path first.
+            const RAG_ENABLED = false;
+            if (meetingId && RAG_ENABLED) {
                 // Use RAG-powered meeting query through the UNIFIED entry point.
                 const result = await window.electronAPI?.runIntelligence({
                     source: 'meeting_search',
@@ -410,10 +458,7 @@ const MeetingChatOverlay: React.FC<MeetingChatOverlayProps> = ({
                     activeCleanups = [];
 
                     // FALLBACK LOGIC
-                    const contextString = buildContextString();
-                    const systemPrompt = `You are recalling a specific meeting. Answer questions ONLY about this meeting. Be concise (2-4 sentences). Sound natural, like a human recalling. If information is not present, say so briefly. Never guess.
-
-${contextString}`;
+                    const systemPrompt = await buildFallbackSystemPrompt(question);
 
                     streamBuffer.reset();
                     // UNIFIED PIPELINE (C5): chat fallback events with a
@@ -472,10 +517,7 @@ ${contextString}`;
                 }
             } else {
                 // No meeting ID, standard fallback
-                const contextString = buildContextString();
-                const systemPrompt = `You are recalling a specific meeting. Answer questions ONLY about this meeting. Be concise (2-4 sentences). Sound natural, like a human recalling. If information is not present, say so briefly. Never guess.
-
-${contextString}`;
+                const systemPrompt = await buildFallbackSystemPrompt(question);
 
                 // Switch to unified chat streaming (RAF-batched)
                 streamBuffer.reset();
@@ -551,7 +593,7 @@ ${contextString}`;
             setChatState(prev => (prev === 'error' || streamBuffer.isDraining() ? prev : 'idle'));
             streamBuffer.reset();
         }
-    }, [chatState, buildContextString, meetingContext]);
+    }, [chatState, buildFallbackSystemPrompt, meetingContext]);
 
     return (
         <AnimatePresence>
