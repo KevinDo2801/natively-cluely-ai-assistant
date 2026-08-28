@@ -5548,6 +5548,32 @@ const NativelyInterface: React.FC<NativelyInterfaceProps> = ({
     }
   };
 
+  // Quick actions are routed through the SAME manual-chat streaming channel as
+  // type+Enter (streamGeminiChat → onGeminiStreamToken / onGeminiStreamDone).
+  // This makes them behave exactly like manual chat: they stream reliably and
+  // are NOT aborted by the auto-answer engine's generation supersession (which
+  // previously left the placeholder blinking forever). Meeting context is
+  // fetched so recap/clarify/follow-up stay grounded in the conversation.
+  const runQuickActionThroughChat = useCallback(
+    async (instruction: string, imagePaths?: string[]) => {
+      let meetingCtx = '';
+      try {
+        const intel = await window.electronAPI?.getIntelligenceContext?.();
+        meetingCtx = intel?.context ?? '';
+      } catch { /* non-fatal */ }
+      // Claim the desktop chat surface (same as the manual chat submit) so the
+      // stream supersedes cleanly via the chat-stream guard.
+      chatStreamIdRef.current = null;
+      chatStreamSourceRef.current = 'desktop';
+      requestStartTimeRef.current = Date.now();
+      const systemPrompt = `You are a helpful assistant.${
+        meetingCtx ? `\n\nUse the following meeting context when it is relevant to the request:\n${meetingCtx}` : ''
+      }`;
+      await window.electronAPI?.streamGeminiChat(instruction, imagePaths, systemPrompt, { skipSystemPrompt: true });
+    },
+    [],
+  );
+
   const handleRecap = async () => {
     if (!tryBeginOverlayAction('recap')) return;
     setIsExpanded(true);
@@ -5556,18 +5582,14 @@ const NativelyInterface: React.FC<NativelyInterfaceProps> = ({
       ...prev,
       { id: genMessageId(), role: 'user', text: QUICK_ACTION_LABELS.recap, isQuickActionLabel: true },
     ]);
-    prepareIntelligenceStreamPlaceholder('recap');
+    prepareIntelligenceStreamPlaceholder('chat');
     analytics.trackCommandExecuted('recap');
 
     try {
-      const result = await window.electronAPI.generateRecap();
-      // If the engine returned no content (null/empty summary) it may have
-      // ended without emitting the completion event, leaving the streaming
-      // placeholder blinking forever. Finalize it with a clear fallback.
-      if (!result?.summary) {
-        finalizeStreamingByIntent('recap', "Couldn't generate a recap. Please try again.");
-      }
+      await runQuickActionThroughChat('Recap the conversation so far. Be concise and organized.');
     } catch (err) {
+      chatStreamIdRef.current = null;
+      chatStreamSourceRef.current = null;
       setMessages((prev) => [
         ...prev,
         {
@@ -5590,15 +5612,14 @@ const NativelyInterface: React.FC<NativelyInterfaceProps> = ({
       ...prev,
       { id: genMessageId(), role: 'user', text: QUICK_ACTION_LABELS.follow_up_questions, isQuickActionLabel: true },
     ]);
-    prepareIntelligenceStreamPlaceholder('follow_up_questions');
+    prepareIntelligenceStreamPlaceholder('chat');
     analytics.trackCommandExecuted('suggest_questions');
 
     try {
-      const result = await window.electronAPI.generateFollowUpQuestions();
-      if (!result?.questions) {
-        finalizeStreamingByIntent('follow_up_questions', "Couldn't generate follow-up questions. Please try again.");
-      }
+      await runQuickActionThroughChat('Suggest 3-5 strategic follow-up questions based on the conversation.');
     } catch (err) {
+      chatStreamIdRef.current = null;
+      chatStreamSourceRef.current = null;
       setMessages((prev) => [
         ...prev,
         {
@@ -5621,15 +5642,14 @@ const NativelyInterface: React.FC<NativelyInterfaceProps> = ({
       ...prev,
       { id: genMessageId(), role: 'user', text: QUICK_ACTION_LABELS.clarify, isQuickActionLabel: true },
     ]);
-    prepareIntelligenceStreamPlaceholder('clarify');
+    prepareIntelligenceStreamPlaceholder('chat');
     analytics.trackCommandExecuted('clarify');
 
     try {
-      const result = await window.electronAPI.generateClarify();
-      if (!result?.clarification) {
-        finalizeStreamingByIntent('clarify', "Couldn't generate a clarifying question. Please try again.");
-      }
+      await runQuickActionThroughChat('Based on the conversation, ask a concise clarifying question to understand the scope of the topic being discussed.');
     } catch (err) {
+      chatStreamIdRef.current = null;
+      chatStreamSourceRef.current = null;
       setMessages((prev) => [
         ...prev,
         {
