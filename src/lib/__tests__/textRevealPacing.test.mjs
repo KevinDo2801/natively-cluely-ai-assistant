@@ -82,6 +82,28 @@ test('never reveals faster than the configured max rate over a sustained window'
   assert.ok(state.revealedLen > MAX_REVEAL_CHARACTERS_PER_SECOND * 0.7, 'should still get close to the cap, not far under it');
 });
 
+test('ratePerSecond override caps the reveal to the supplied rate, independent of the global constant', () => {
+  const text = 'z'.repeat(5000);
+  const slowRate = 120;
+  const state = createPacerState();
+  // Skip the initial smoothing window deterministically so the rate math below
+  // is exact: open the gate by feeding a large enough arrival first.
+  tickPacer(state, text, INITIAL_BUFFER_MS + 1, FRAME_MS); // char-threshold gate opens
+  const before = state.revealedLen;
+  // Run for ~1s (60 frames) past the gate.
+  let now = INITIAL_BUFFER_MS + 1;
+  for (let i = 0; i < 60; i += 1) {
+    now += FRAME_MS;
+    tickPacer(state, text, now, FRAME_MS, { ratePerSecond: slowRate });
+  }
+  const revealed = state.revealedLen - before;
+  assert.ok(
+    revealed <= slowRate + 2,
+    `ratePerSecond=120 revealed ${revealed} chars in ~1s, cap is ${slowRate}/s`,
+  );
+  assert.ok(revealed > slowRate * 0.6, `should approach ${slowRate}/s, got ${revealed}`);
+});
+
 test('a slow provider (below the cap) is shown essentially immediately — the cap never becomes the bottleneck', () => {
   const state = createPacerState();
   // Simulate text arriving one word at a time, far slower than the cap.

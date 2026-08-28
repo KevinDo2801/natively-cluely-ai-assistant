@@ -38,7 +38,7 @@ export function tickPacer(
   fullText: string,
   nowMs: number,
   deltaMs: number,
-  opts?: { reducedMotion?: boolean },
+  opts?: { reducedMotion?: boolean; ratePerSecond?: number },
 ): PacerState;
 
 export function estimateRevealDurationMs(charCount: number): number;

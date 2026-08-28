@@ -202,7 +202,12 @@ const GlobalChatOverlay: React.FC<GlobalChatOverlayProps> = ({
 
     // Submit question using global RAG
     const submitQuestion = useCallback(async (question: string) => {
-        if (!question.trim() || submitInFlightRef.current) return;
+        // isDraining() closes the collision a deferred completion would otherwise
+        // allow: the finally block clears submitInFlightRef once the IPC invoke
+        // resolves, but the paced reveal may still be draining the OLD answer into
+        // its bubble. A new submit then would push a fresh placeholder and stream
+        // into the SAME buffer mid-drain. Block until the reveal catches up.
+        if (!question.trim() || submitInFlightRef.current || streamBuffer.isDraining()) return;
         submitInFlightRef.current = true;
 
         const userMessage: Message = {
@@ -265,23 +270,28 @@ const GlobalChatOverlay: React.FC<GlobalChatOverlayProps> = ({
 
             const doneCleanup = window.electronAPI?.onRAGStreamComplete((data?: any) => {
                 if (data && !isGlobal(data)) return;   // F-122
-                // The stream can legitimately complete with zero chunks (e.g. a
-                // short non-question like "hi" fed through the strict RAG-grounding
-                // prompt can make the model return an empty/degenerate completion).
-                // Without this fallback, the bubble renders as nothing — no text,
-                // no error — which reads as "the app didn't respond at all".
-                const finalContent = streamBuffer.getBufferedContent().trim()
-                    || "I'm not sure how to answer that from your meetings — try asking a more specific question.";
-                setMessages(prev => prev.map(msg =>
-                    msg.id === assistantMessageId
-                        ? { ...msg, content: finalContent, isStreaming: false }
-                        : msg
-                ));
-                setChatState('idle');
-                streamBuffer.reset();
-                tokenCleanup?.();
-                doneCleanup?.();
-                errorCleanup?.();
+                // Deferred completion: finalize the bubble only once the paced
+                // reveal has drained the full answer — a provider that burst the
+                // whole text still types out instead of snapping in one paint.
+                streamBuffer.complete((finalContent) => {
+                    // The stream can legitimately complete with zero chunks (e.g. a
+                    // short non-question like "hi" fed through the strict RAG-grounding
+                    // prompt can make the model return an empty/degenerate completion).
+                    // Without this fallback, the bubble renders as nothing — no text,
+                    // no error — which reads as "the app didn't respond at all".
+                    const text = finalContent.trim()
+                        || "I'm not sure how to answer that from your meetings — try asking a more specific question.";
+                    setMessages(prev => prev.map(msg =>
+                        msg.id === assistantMessageId
+                            ? { ...msg, content: text, isStreaming: false }
+                            : msg
+                    ));
+                    setChatState('idle');
+                    streamBuffer.reset();
+                    tokenCleanup?.();
+                    doneCleanup?.();
+                    errorCleanup?.();
+                });
             });
 
             const errorCleanup = window.electronAPI?.onRAGStreamError((data: { error: string }) => {
@@ -368,19 +378,21 @@ const GlobalChatOverlay: React.FC<GlobalChatOverlayProps> = ({
 
                 const oldDoneCleanup = window.electronAPI?.onGeminiStreamDone((payload?: { streamId?: number }) => {
                     if (!acceptsMeta(payload)) return;
-                    // Same empty-completion guard as the RAG path above.
-                    const finalContent = streamBuffer.getBufferedContent().trim()
-                        || "I'm not sure how to answer that — try rephrasing your question.";
-                    setMessages(prev => prev.map(msg =>
-                        msg.id === assistantMessageId
-                            ? { ...msg, content: finalContent, isStreaming: false }
-                            : msg
-                    ));
-                    setChatState('idle');
-                    streamBuffer.reset();
-                    oldTokenCleanup?.();
-                    oldDoneCleanup?.();
-                    oldErrorCleanup?.();
+                    streamBuffer.complete((finalContent) => {
+                        // Same empty-completion guard as the RAG path above.
+                        const text = finalContent.trim()
+                            || "I'm not sure how to answer that — try rephrasing your question.";
+                        setMessages(prev => prev.map(msg =>
+                            msg.id === assistantMessageId
+                                ? { ...msg, content: text, isStreaming: false }
+                                : msg
+                        ));
+                        setChatState('idle');
+                        streamBuffer.reset();
+                        oldTokenCleanup?.();
+                        oldDoneCleanup?.();
+                        oldErrorCleanup?.();
+                    });
                 });
 
                 const oldErrorCleanup = window.electronAPI?.onGeminiStreamError((error: string, meta?: { streamId?: number | null; source?: string }) => {
@@ -437,7 +449,10 @@ const GlobalChatOverlay: React.FC<GlobalChatOverlayProps> = ({
             // subsequent submitQuestion (no user-message push, no response).
             activeCleanups.forEach(fn => fn());
             activeCleanups = [];
-            setChatState(prev => (prev === 'error' ? prev : 'idle'));
+            // Preserve an explicit 'error' state; keep 'streaming' while a deferred
+            // completion is still draining the reveal (complete()'s callback sets
+            // it to 'idle' once the reveal has caught up).
+            setChatState(prev => (prev === 'error' || streamBuffer.isDraining() ? prev : 'idle'));
             streamBuffer.reset();
             submitInFlightRef.current = false;
         }

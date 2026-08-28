@@ -359,18 +359,21 @@ const MeetingChatOverlay: React.FC<MeetingChatOverlayProps> = ({
 
             const doneCleanup = window.electronAPI?.onRAGStreamComplete((data?: any) => {
                 if (data && !isThisMeeting(data)) return;   // F-122
-                // Final commit — flush any remaining buffered content
-                const finalContent = streamBuffer.getBufferedContent();
-                setMessages(prev => prev.map(msg =>
-                    msg.id === assistantMessageId
-                        ? { ...msg, content: finalContent, isStreaming: false }
-                        : msg
-                ));
-                setChatState('idle');
-                streamBuffer.reset();
-                tokenCleanup?.();
-                doneCleanup?.();
-                errorCleanup?.();
+                // Deferred completion: finalize the bubble only once the paced
+                // reveal has drained the full answer — a provider that burst the
+                // whole text still types out instead of snapping in one paint.
+                streamBuffer.complete((finalContent) => {
+                    setMessages(prev => prev.map(msg =>
+                        msg.id === assistantMessageId
+                            ? { ...msg, content: finalContent, isStreaming: false }
+                            : msg
+                    ));
+                    setChatState('idle');
+                    streamBuffer.reset();
+                    tokenCleanup?.();
+                    doneCleanup?.();
+                    errorCleanup?.();
+                });
             });
 
             const errorCleanup = window.electronAPI?.onRAGStreamError((data: { error: string }) => {
@@ -435,17 +438,18 @@ ${contextString}`;
 
                     const oldDoneCleanup = window.electronAPI?.onGeminiStreamDone((payload?: { streamId?: number }) => {
                         if (!acceptsMeta(payload)) return;
-                        const finalContent = streamBuffer.getBufferedContent();
-                        setMessages(prev => prev.map(msg =>
-                            msg.id === assistantMessageId
-                                ? { ...msg, content: finalContent, isStreaming: false }
-                                : msg
-                        ));
-                        setChatState('idle');
-                        streamBuffer.reset();
-                        oldTokenCleanup?.();
-                        oldDoneCleanup?.();
-                        oldErrorCleanup?.();
+                        streamBuffer.complete((finalContent) => {
+                            setMessages(prev => prev.map(msg =>
+                                msg.id === assistantMessageId
+                                    ? { ...msg, content: finalContent, isStreaming: false }
+                                    : msg
+                            ));
+                            setChatState('idle');
+                            streamBuffer.reset();
+                            oldTokenCleanup?.();
+                            oldDoneCleanup?.();
+                            oldErrorCleanup?.();
+                        });
                     });
 
                     const oldErrorCleanup = window.electronAPI?.onGeminiStreamError((error: string, meta?: { streamId?: number | null; source?: string }) => {
@@ -502,17 +506,18 @@ ${contextString}`;
 
                 const oldDoneCleanup = window.electronAPI?.onGeminiStreamDone((payload?: { streamId?: number }) => {
                     if (!acceptsMeta(payload)) return;
-                    const finalContent = streamBuffer.getBufferedContent();
-                    setMessages(prev => prev.map(msg =>
-                        msg.id === assistantMessageId
-                            ? { ...msg, content: finalContent, isStreaming: false }
-                            : msg
-                    ));
-                    setChatState('idle');
-                    streamBuffer.reset();
-                    oldTokenCleanup?.();
-                    oldDoneCleanup?.();
-                    oldErrorCleanup?.();
+                    streamBuffer.complete((finalContent) => {
+                        setMessages(prev => prev.map(msg =>
+                            msg.id === assistantMessageId
+                                ? { ...msg, content: finalContent, isStreaming: false }
+                                : msg
+                        ));
+                        setChatState('idle');
+                        streamBuffer.reset();
+                        oldTokenCleanup?.();
+                        oldDoneCleanup?.();
+                        oldErrorCleanup?.();
+                    });
                 });
 
                 const oldErrorCleanup = window.electronAPI?.onGeminiStreamError((error: string, meta?: { streamId?: number | null; source?: string }) => {
@@ -552,9 +557,12 @@ ${contextString}`;
             // subsequent submitQuestion (no user-message push, no response).
             activeCleanups.forEach(fn => fn());
             activeCleanups = [];
-            // Preserve an explicit 'error' state if one was set; otherwise
-            // fall back to 'idle' so the next submit can proceed.
-            setChatState(prev => (prev === 'error' ? prev : 'idle'));
+            // Preserve an explicit 'error' state if one was set; otherwise fall
+            // back to 'idle' so the next submit can proceed. If a deferred
+            // completion is still draining the reveal, keep the current
+            // (streaming) state — complete()'s callback sets it to 'idle' once
+            // the reveal has caught up.
+            setChatState(prev => (prev === 'error' || streamBuffer.isDraining() ? prev : 'idle'));
             streamBuffer.reset();
         }
     }, [chatState, buildContextString, meetingContext]);

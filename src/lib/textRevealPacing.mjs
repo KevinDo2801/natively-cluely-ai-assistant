@@ -220,7 +220,13 @@ export function createPacerState() {
  *      sentence/clause punctuation — arm the next hold.
  */
 export function tickPacer(state, fullText, nowMs, deltaMs, opts = {}) {
-  const { reducedMotion = false } = opts;
+  const { reducedMotion = false, ratePerSecond } = opts;
+  // Optional per-stream reveal-rate override (chars/sec). The shared default
+  // (MAX_REVEAL_CHARACTERS_PER_SECOND, 400 c/s) is tuned for the main chat
+  // path; the chat overlays pass a slower rate so a provider that bursts the
+  // whole answer in one tick still types out visibly instead of landing in a
+  // single imperceptible frame. When omitted, behaves exactly as before.
+  const charsPerMs = (ratePerSecond ?? MAX_REVEAL_CHARACTERS_PER_SECOND) / 1000;
 
   if (reducedMotion) {
     state.revealedLen = fullText.length;
@@ -251,7 +257,7 @@ export function tickPacer(state, fullText, nowMs, deltaMs, opts = {}) {
 
   if (nowMs < state.pauseUntilMs) return state;
 
-  state.charBudget += deltaMs * MAX_REVEAL_CHARS_PER_MS;
+  state.charBudget += deltaMs * charsPerMs;
   const chunk = Math.floor(state.charBudget);
   if (chunk <= 0) return state;
 
