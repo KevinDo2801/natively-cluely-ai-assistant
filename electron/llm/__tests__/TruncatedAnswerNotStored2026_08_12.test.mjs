@@ -198,8 +198,10 @@ describe('manual chat refuses to store a truncated answer', () => {
   });
 
   test('the renderer is told the answer is incomplete', () => {
-    const done = ipcSrc.slice(ipcSrc.indexOf("event.sender.send('gemini-stream-done', {"));
-    assert.match(done.slice(0, 400), /incomplete: v3Truncated/, 'the done payload must carry the incomplete flag');
+    // UNIFIED PIPELINE (C2c): the V3 done emit now goes through the stream bus.
+    const done = ipcSrc.slice(ipcSrc.indexOf("streamBus.emitDone({\n              generationId: myStreamId,\n              surface: 'desktop',\n              intent: 'chat',\n              finalText,\n              incomplete: v3Truncated"));
+    assert.ok(done.length > 0, 'could not locate the V3 bus done emit');
+    assert.match(done.slice(0, 500), /incomplete: v3Truncated/, 'the done payload must carry the incomplete flag');
   });
 
   test('the debug trace records it as a non-success', () => {

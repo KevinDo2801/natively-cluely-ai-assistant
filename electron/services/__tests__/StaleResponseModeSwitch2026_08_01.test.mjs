@@ -128,9 +128,11 @@ describe('Defect G contract: modes:set-active invalidates the chat-stream regist
 });
 
 describe('Defect G contract: mode-identity check precedes the user-visible done emits', () => {
-  // The manual-chat handler body: from its declaration to where it is registered.
+  // The manual-chat handler body: from its declaration to where the unified
+  // run-intelligence entry registers (the gemini-chat-stream channel was
+  // deleted in C6).
   const handlerStart = ipcSource.indexOf('const _geminiChatStreamHandler = async (');
-  const handlerEnd = ipcSource.indexOf("safeHandle('gemini-chat-stream', _geminiChatStreamHandler)");
+  const handlerEnd = ipcSource.indexOf("safeHandle('run-intelligence'", handlerStart);
   const handlerBody = ipcSource.slice(handlerStart, handlerEnd);
 
   test('manual-chat handler is locatable by structure', () => {
@@ -138,16 +140,14 @@ describe('Defect G contract: mode-identity check precedes the user-visible done 
     assert.ok(handlerEnd > handlerStart, 'handler registration must follow the declaration');
   });
 
-  test('V3 block: liveModeIdAtEmit comparison occurs BEFORE the V3 gemini-stream-done emit', () => {
-    // The V3 done emit is the only one whose payload opens `finalText,
-    // streamId: myStreamId`. Matched by regex rather than an exact one-line
-    // string: the payload gained an `incomplete` flag (2026-08-12) and was
-    // reformatted across lines, which silently broke the old indexOf locator —
-    // the ORDERING invariant below still held, but the test could no longer
-    // find the emit to check it against. Tolerate whitespace and extra fields.
-    const v3DoneMatch = /send\('gemini-stream-done',\s*\{\s*finalText,\s*streamId: myStreamId/.exec(handlerBody);
+  test('V3 block: liveModeIdAtEmit comparison occurs BEFORE the V3 bus done emit', () => {
+    // UNIFIED PIPELINE (C2c): the V3 done emit now goes through the stream bus.
+    // Matched by regex rather than an exact one-line string: the emit spans
+    // several lines and gained an `incomplete` flag (2026-08-12) — the ORDERING
+    // invariant below is what matters, not the emit's exact formatting.
+    const v3DoneMatch = /streamBus\.emitDone\(\{[\s\S]{0,80}?generationId:\s*myStreamId,[\s\S]{0,200}?incomplete:\s*v3Truncated/.exec(handlerBody);
     const v3DoneIdx = v3DoneMatch ? v3DoneMatch.index : -1;
-    assert.ok(v3DoneIdx >= 0, 'V3 done emit must exist');
+    assert.ok(v3DoneIdx >= 0, 'V3 bus done emit must exist');
 
     const emitGuardIdx = handlerBody.indexOf('liveModeIdAtEmit');
     assert.ok(emitGuardIdx >= 0, 'a liveModeIdAtEmit identity guard must exist in the V3 block');
@@ -178,10 +178,10 @@ describe('Defect G contract: mode-identity check precedes the user-visible done 
     assert.ok(recordGuardIdx >= 0, 'liveModeIdAtRecord record guard must still exist — the emit guard does not replace it');
   });
 
-  test('LEGACY block: liveModeIdAtDoneEmit comparison gates the legacy gemini-stream-done emit', () => {
-    // The legacy done emit is the only one with the conditional-finalText spread.
-    const legacyDoneIdx = handlerBody.indexOf("send('gemini-stream-done', { ...(finalText ? { finalText } : {}), streamId: myStreamId })");
-    assert.ok(legacyDoneIdx >= 0, 'legacy done emit must exist');
+  test('LEGACY block: liveModeIdAtDoneEmit comparison gates the legacy bus done emit', () => {
+    // UNIFIED PIPELINE (C2c): the legacy done emit now goes through the bus.
+    const legacyDoneIdx = handlerBody.indexOf("streamBus.emitDone({ generationId: myStreamId, surface: 'desktop', intent: 'chat', finalText });");
+    assert.ok(legacyDoneIdx >= 0, 'legacy bus done emit must exist');
 
     const legacyGuardIdx = handlerBody.indexOf('liveModeIdAtDoneEmit');
     assert.ok(legacyGuardIdx >= 0, 'a liveModeIdAtDoneEmit identity guard must exist on the legacy path');

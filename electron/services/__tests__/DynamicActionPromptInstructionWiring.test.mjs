@@ -29,10 +29,14 @@ test('dynamic action accept uses promptInstruction instead of display label/manu
   assert.doesNotMatch(mountSource, /handleManualSubmitRef\.current/);
 });
 
-test('generate-what-to-say IPC forwards promptInstruction option to IntelligenceManager', () => {
+test('what-to-say path forwards promptInstruction option to IntelligenceManager (UNIFIED run-intelligence)', () => {
   const source = read('electron/ipcHandlers.ts');
-  const handlerSource = sliceSafeHandleBlock(source, 'generate-what-to-say');
-  assert.ok(findSafeHandle(source, 'generate-what-to-say') >= 0, 'generate-what-to-say handler should exist');
+  // UNIFIED PIPELINE (C6): the channel registration is gone; the handler
+  // lives as `const _generateWhatToSayHandler` (what_to_say branch).
+  const constStart = source.indexOf('const _generateWhatToSayHandler = async (');
+  assert.ok(constStart >= 0, '_generateWhatToSayHandler should exist');
+  const constEnd = source.indexOf("safeHandle('run-intelligence'", constStart);
+  const handlerSource = source.slice(constStart, constEnd > constStart ? constEnd : constStart + 30_000);
 
   assert.match(handlerSource, OPTIONS_WITH_BOTH);
   assert.match(handlerSource, /promptInstruction:[\s\S]{0,120}typeof options\?\.promptInstruction === 'string'[\s\S]{0,80}options\.promptInstruction[\s\S]{0,40}: undefined/);
@@ -40,8 +44,6 @@ test('generate-what-to-say IPC forwards promptInstruction option to Intelligence
   // (`effectiveDomContext`) so the browser-envelope path can PREPEND a header to
   // it before forwarding. The cap itself is unchanged and is what matters here —
   // an untruncated domContext is how an unbounded page dump reaches the prompt.
-  // Anchored on the ternary rather than the property name so the assertion
-  // survives the value being named, while still failing if the cap disappears.
   assert.match(
     handlerSource,
     /typeof options\?\.domContext === 'string'[\s\S]{0,80}options\.domContext\.substring\(0, DOM_CONTEXT_MAX_CHARS\)[\s\S]{0,40}: undefined/,
@@ -49,11 +51,13 @@ test('generate-what-to-say IPC forwards promptInstruction option to Intelligence
   );
 });
 
-test('preload and renderer type expose promptInstruction option on generateWhatToSay', () => {
+test('preload and renderer type expose promptInstruction/domContext on the unified runIntelligence request', () => {
   const preload = read('electron/preload.ts');
   const types = read('src/types/electron.d.ts');
 
-  assert.match(preload, /generateWhatToSay:[\s\S]{0,200}options\?: \{[^}]*promptInstruction\?: string[^}]*domContext\?: string[^}]*\}/);
-  assert.match(preload, /ipcRenderer\.invoke\(['"]generate-what-to-say['"], question, imagePaths, options\)/);
-  assert.match(types, /generateWhatToSay:[\s\S]{0,200}options\?: \{[^}]*promptInstruction\?: string[^}]*domContext\?: string[^}]*\}/);
+  const runIntelligenceType = types.match(/runIntelligence:[\s\S]{0,2000}?=> Promise</);
+  assert.ok(runIntelligenceType, 'electron.d.ts must type runIntelligence');
+  assert.match(runIntelligenceType[0], /promptInstruction\?: string/, 'runIntelligence request must expose promptInstruction');
+  assert.match(runIntelligenceType[0], /domContext\?: string/, 'runIntelligence request must expose domContext');
+  assert.match(preload, /runIntelligence: \(request: any\) => ipcRenderer\.invoke\('run-intelligence', request\)/);
 });

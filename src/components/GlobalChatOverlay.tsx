@@ -1,5 +1,6 @@
 import React, { useState, useEffect, useRef, useCallback } from 'react';
 import { useStreamBuffer } from '../hooks/useStreamBuffer';
+import { IntelligenceStreamGuard } from '../lib/intelligenceStreamGuard.mjs';
 import { X, Copy, Check, Globe, ArrowUp } from 'lucide-react';
 import { motion, AnimatePresence } from 'framer-motion';
 import { genMessageId } from '../utils/messageId';
@@ -200,7 +201,66 @@ const GlobalChatOverlay: React.FC<GlobalChatOverlayProps> = ({
         }
     };
 
-    // Submit question using global RAG
+    // UNIFIED PIPELINE (C5): one mount-level subscription routes search + chat
+    // fallback events into the current bubble. Per-streamKey generation guards
+    // replace the old per-call adoptedStreamId + F-122 tag filters.
+    const activeAssistantIdRef = useRef<string | null>(null);
+    const globalGuardRef = useRef(new IntelligenceStreamGuard());
+    const fallbackGuardRef = useRef(new IntelligenceStreamGuard());
+
+    useEffect(() => {
+        return window.electronAPI.onIntelligenceStream((ev: any) => {
+            if (ev.type !== 'token' && ev.type !== 'done' && ev.type !== 'error') return;
+            const isGlobal = ev.intent === 'global_search';
+            const isChatFallback = ev.intent === 'chat';
+            if (!isGlobal && !isChatFallback) return;
+
+            const guard = isGlobal ? globalGuardRef.current : fallbackGuardRef.current;
+            const decision = guard.resolve(ev);
+            const assistantId = activeAssistantIdRef.current;
+            if (!assistantId) return;
+
+            if (ev.type === 'token') {
+                if (!decision.accept) return;
+                setChatState('streaming_response');
+                streamBuffer.appendToken(ev.text ?? '', (content) => {
+                    setMessages(prev => prev.map(msg =>
+                        msg.id === assistantId ? { ...msg, content } : msg
+                    ));
+                });
+                return;
+            }
+
+            if (ev.type === 'done') {
+                if (!decision.honor) return;
+                // Deferred completion: finalize only once the paced reveal has
+                // drained the full answer.
+                streamBuffer.complete((finalContent) => {
+                    const text = finalContent.trim()
+                        || (isGlobal
+                            ? "I'm not sure how to answer that from your meetings — try asking a more specific question."
+                            : "I'm not sure how to answer that — try rephrasing your question.");
+                    setMessages(prev => prev.map(msg =>
+                        msg.id === assistantId ? { ...msg, content: text, isStreaming: false } : msg
+                    ));
+                    setChatState('idle');
+                    streamBuffer.reset();
+                });
+                return;
+            }
+
+            // error
+            if (ev.surface === 'phone') return; // phone failure never defaces this bubble
+            if (!decision.accept) return;
+            console.error('[GlobalChat] stream error:', ev.error);
+            setMessages(prev => prev.filter(msg => msg.id !== assistantId));
+            setErrorMessage("Couldn't get a response. Please try again.");
+            setChatState('error');
+            streamBuffer.reset();
+        });
+    }, [streamBuffer]);
+
+    // Submit question using global RAG through the UNIFIED entry point
     const submitQuestion = useCallback(async (question: string) => {
         // isDraining() closes the collision a deferred completion would otherwise
         // allow: the finally block clears submitInFlightRef once the IPC invoke
@@ -226,14 +286,6 @@ const GlobalChatOverlay: React.FC<GlobalChatOverlayProps> = ({
 
         const assistantMessageId = genMessageId();
 
-        // Track active listener cleanups so the finally block can always
-        // remove them — even if the IPC done/error events never arrive.
-        // Without this, a hung stream leaves `chatState` stuck at
-        // 'waiting_for_llm' / 'streaming_response' and the guard at the
-        // top of submitQuestion silently drops every subsequent message
-        // (no user-message push, no response).
-        let activeCleanups: Array<() => void> = [];
-
         try {
             // Add typing indicator delay (200ms) - makes the AI feel "thoughtful"
             await new Promise(resolve => setTimeout(resolve, 200));
@@ -246,90 +298,20 @@ const GlobalChatOverlay: React.FC<GlobalChatOverlayProps> = ({
                 isStreaming: true
             }]);
 
-            // Set up RAG streaming listeners (RAF-batched)
             streamBuffer.reset();
-            // F-122: the rag:stream-* channels are SHARED by three scopes and
-            // main tags every payload ({meetingId} | {live:true} | {global:true}),
-            // but no consumer read the tag — so a meeting-scoped or live-scoped
-            // stream could paint into this overlay's bubble. GlobalChatOverlay and
-            // MeetingDetails are siblings in the same Launcher renderer, and
-            // abortPriorRAGQueriesOfClass only supersedes WITHIN a class, so two
-            // different-class queries can genuinely be in flight together.
-            const isGlobal = (d: any) => d?.global === true;
-            const tokenCleanup = window.electronAPI?.onRAGStreamChunk((data: { chunk: string }) => {
-                if (!isGlobal(data)) return;
-                setChatState('streaming_response');
-                streamBuffer.appendToken(data.chunk, (content) => {
-                    setMessages(prev => prev.map(msg =>
-                        msg.id === assistantMessageId
-                            ? { ...msg, content }
-                            : msg
-                    ));
-                });
-            });
+            activeAssistantIdRef.current = assistantMessageId;
 
-            const doneCleanup = window.electronAPI?.onRAGStreamComplete((data?: any) => {
-                if (data && !isGlobal(data)) return;   // F-122
-                // Deferred completion: finalize the bubble only once the paced
-                // reveal has drained the full answer — a provider that burst the
-                // whole text still types out instead of snapping in one paint.
-                streamBuffer.complete((finalContent) => {
-                    // The stream can legitimately complete with zero chunks (e.g. a
-                    // short non-question like "hi" fed through the strict RAG-grounding
-                    // prompt can make the model return an empty/degenerate completion).
-                    // Without this fallback, the bubble renders as nothing — no text,
-                    // no error — which reads as "the app didn't respond at all".
-                    const text = finalContent.trim()
-                        || "I'm not sure how to answer that from your meetings — try asking a more specific question.";
-                    setMessages(prev => prev.map(msg =>
-                        msg.id === assistantMessageId
-                            ? { ...msg, content: text, isStreaming: false }
-                            : msg
-                    ));
-                    setChatState('idle');
-                    streamBuffer.reset();
-                    tokenCleanup?.();
-                    doneCleanup?.();
-                    errorCleanup?.();
-                });
-            });
-
-            const errorCleanup = window.electronAPI?.onRAGStreamError((data: { error: string }) => {
-                if (!isGlobal(data)) return;   // F-122
-                console.error('[GlobalChat] RAG stream error:', data.error);
-                setMessages(prev => prev.filter(msg => msg.id !== assistantMessageId));
-                setErrorMessage("Couldn't get a response. Please try again.");
-                setChatState('error');
-                streamBuffer.reset();
-                tokenCleanup?.();
-                doneCleanup?.();
-                errorCleanup?.();
-            });
-
-            if (tokenCleanup) activeCleanups.push(tokenCleanup);
-            if (doneCleanup) activeCleanups.push(doneCleanup);
-            if (errorCleanup) activeCleanups.push(errorCleanup);
-
-            // Use global RAG query. Wrapped in a hard client-side ceiling — see
-            // RAG_QUERY_CLIENT_TIMEOUT_MS above for why this exists: nothing
-            // upstream of this call can guarantee the invoke() ever resolves.
-            let result: { fallback?: boolean; success?: boolean; error?: string } | undefined;
+            // Global RAG search through the unified entry. Wrapped in a hard
+            // client-side ceiling — see RAG_QUERY_CLIENT_TIMEOUT_MS above.
+            let result: { started: boolean; error?: string } | undefined;
             try {
-                const call = window.electronAPI?.ragQueryGlobal(question);
+                const call = window.electronAPI?.runIntelligence({ source: 'global_search', text: question });
                 result = call
-                    ? await withTimeout(call, RAG_QUERY_CLIENT_TIMEOUT_MS, 'ragQueryGlobal')
+                    ? await withTimeout(call, RAG_QUERY_CLIENT_TIMEOUT_MS, 'runIntelligence')
                     : undefined;
             } catch (timeoutErr) {
-                console.error('[GlobalChat] ragQueryGlobal client-side timeout:', timeoutErr);
-                // Tear down the RAG listeners we just registered — the main
-                // process may still respond well after this point (its own
-                // internal timeouts run on a longer clock), and a late
-                // rag:stream-chunk/-complete/-error must not land on a message
-                // this function has already abandoned.
-                tokenCleanup?.();
-                doneCleanup?.();
-                errorCleanup?.();
-                activeCleanups = [];
+                console.error('[GlobalChat] runIntelligence client-side timeout:', timeoutErr);
+                activeAssistantIdRef.current = null;
                 setMessages(prev => prev.map(msg =>
                     msg.id === assistantMessageId
                         ? { ...msg, content: "This is taking longer than expected. Please try again.", isStreaming: false }
@@ -340,92 +322,18 @@ const GlobalChatOverlay: React.FC<GlobalChatOverlayProps> = ({
                 return;
             }
 
-            // If electronAPI is unavailable or IPC failed, result will be undefined.
-            // Treat this as a fallback case to ensure the user gets SOME response.
-            if (!result || result.fallback) {
+            // If RAG is unavailable / not started, fall back to standard chat —
+            // same behavior as the old { fallback: true } branch.
+            if (!result || !result.started) {
                 console.log("[GlobalChat] RAG unavailable, falling back to standard chat");
-                // Cleanup RAG listeners
-                tokenCleanup?.();
-                doneCleanup?.();
-                errorCleanup?.();
-                activeCleanups = [];
-
-                // Setup fallback listeners (Standard Gemini)
-                streamBuffer.reset();
-                // Stream-id guard (2026-07-31): these fallback listeners used to
-                // ignore the streamId meta entirely, so tokens from an ABANDONED
-                // earlier stream (client timeout below leaves main streaming)
-                // landed in the next request's bubble. Adopt the first tagged id
-                // seen after registration; drop anything older.
-                let adoptedStreamId: number | null = null;
-                const acceptsMeta = (meta?: { streamId?: number }) => {
-                    const id = meta?.streamId;
-                    if (typeof id !== 'number') return true;      // legacy untagged
-                    if (adoptedStreamId === null || id > adoptedStreamId) { adoptedStreamId = id; return true; }
-                    return id === adoptedStreamId;
-                };
-                const oldTokenCleanup = window.electronAPI?.onGeminiStreamToken((token: string, meta?: { streamId?: number }) => {
-                    if (!acceptsMeta(meta)) return;
-                    setChatState('streaming_response');
-                    streamBuffer.appendToken(token, (content) => {
-                        setMessages(prev => prev.map(msg =>
-                            msg.id === assistantMessageId
-                                ? { ...msg, content }
-                                : msg
-                        ));
-                    });
-                });
-
-                const oldDoneCleanup = window.electronAPI?.onGeminiStreamDone((payload?: { streamId?: number }) => {
-                    if (!acceptsMeta(payload)) return;
-                    streamBuffer.complete((finalContent) => {
-                        // Same empty-completion guard as the RAG path above.
-                        const text = finalContent.trim()
-                            || "I'm not sure how to answer that — try rephrasing your question.";
-                        setMessages(prev => prev.map(msg =>
-                            msg.id === assistantMessageId
-                                ? { ...msg, content: text, isStreaming: false }
-                                : msg
-                        ));
-                        setChatState('idle');
-                        streamBuffer.reset();
-                        oldTokenCleanup?.();
-                        oldDoneCleanup?.();
-                        oldErrorCleanup?.();
-                    });
-                });
-
-                const oldErrorCleanup = window.electronAPI?.onGeminiStreamError((error: string, meta?: { streamId?: number | null; source?: string }) => {
-                    if (meta?.source === 'phone-mirror') return;
-                    if (typeof meta?.streamId === 'number' && adoptedStreamId !== null && meta.streamId !== adoptedStreamId) return;
-                    console.error('[GlobalChat] Gemini stream error:', error);
-                    setMessages(prev => prev.filter(msg => msg.id !== assistantMessageId));
-                    setErrorMessage("Couldn't get a response. Please check your settings.");
-                    setChatState('error');
-                    streamBuffer.reset();
-                    oldTokenCleanup?.();
-                    oldDoneCleanup?.();
-                    oldErrorCleanup?.();
-                });
-
-                if (oldTokenCleanup) activeCleanups.push(oldTokenCleanup);
-                if (oldDoneCleanup) activeCleanups.push(oldDoneCleanup);
-                if (oldErrorCleanup) activeCleanups.push(oldErrorCleanup);
-
-                // Call standard chat — same client-side ceiling as ragQueryGlobal above.
-                const fallbackCall = window.electronAPI?.streamGeminiChat(question, undefined, undefined, { skipSystemPrompt: false });
+                const fallbackCall = window.electronAPI?.runIntelligence({ source: 'manual_chat', text: question });
                 if (fallbackCall) {
                     try {
-                        await withTimeout(fallbackCall, RAG_QUERY_CLIENT_TIMEOUT_MS, 'streamGeminiChat');
+                        await withTimeout(fallbackCall, RAG_QUERY_CLIENT_TIMEOUT_MS, 'runIntelligence');
                     } catch (timeoutErr) {
-                        console.error('[GlobalChat] streamGeminiChat client-side timeout:', timeoutErr);
-                        // Abandoning without cancelling left main streaming into
-                        // listeners the NEXT submit registers.
+                        console.error('[GlobalChat] runIntelligence fallback client-side timeout:', timeoutErr);
                         try { (window.electronAPI as any)?.cancelChatStream?.(); } catch { /* best-effort */ }
-                        oldTokenCleanup?.();
-                        oldDoneCleanup?.();
-                        oldErrorCleanup?.();
-                        activeCleanups = [];
+                        activeAssistantIdRef.current = null;
                         setMessages(prev => prev.map(msg =>
                             msg.id === assistantMessageId
                                 ? { ...msg, content: "This is taking longer than expected. Please try again.", isStreaming: false }
@@ -443,20 +351,17 @@ const GlobalChatOverlay: React.FC<GlobalChatOverlayProps> = ({
             setErrorMessage("Something went wrong. Please try again.");
             setChatState('error');
         } finally {
-            // Always remove listeners and reset chatState — even if the
-            // IPC done/error callbacks never fired. Without this, a single
-            // hung stream leaves chatState stuck and silently drops every
-            // subsequent submitQuestion (no user-message push, no response).
-            activeCleanups.forEach(fn => fn());
-            activeCleanups = [];
+            // Reset the target row pointer once the invoke has settled; a
+            // deferred completion still draining keeps streaming state via the
+            // subscription above (it reads the ref captured at submit time).
+            activeAssistantIdRef.current = null;
             // Preserve an explicit 'error' state; keep 'streaming' while a deferred
             // completion is still draining the reveal (complete()'s callback sets
             // it to 'idle' once the reveal has caught up).
             setChatState(prev => (prev === 'error' || streamBuffer.isDraining() ? prev : 'idle'));
-            streamBuffer.reset();
             submitInFlightRef.current = false;
         }
-    }, []);
+    }, [streamBuffer]);
 
     return (
         <AnimatePresence

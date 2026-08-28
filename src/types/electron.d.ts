@@ -288,28 +288,11 @@ export interface ElectronAPI {
 
   getNativeAudioStatus: () => Promise<{ connected: boolean }>
 
-  // Intelligence Mode IPC
+  // Intelligence Mode IPC — UNIFIED PIPELINE (C6): the per-mode entries
+  // (generateWhatToSay/Clarify/CodeHint/Brainstorm/FollowUp/FollowUpQuestions/
+  // Recap, submitManualQuestion) are DELETED; every surface goes through
+  // runIntelligence. generateAssist / context probe / reset remain.
   generateAssist: () => Promise<{ insight: string | null }>
-  generateWhatToSay: (question?: string, imagePaths?: string[], options?: { promptInstruction?: string; domContext?: string; domContextEnvelope?: ContextEnvelope }) => Promise<{
-    answer: string | null;
-    question?: string;
-    error?: string;
-    /** Vision pipeline outcome — replaces legacy screenContextStatus/ocrTextLength fields */
-    screenContextStatus?: 'not_available' | 'available' | 'failed';
-    visionProviderUsed?: string;
-    visionModelUsed?: string;
-    visionAttempts?: number;
-    visionFailureReason?: 'no_vision_provider' | 'all_vision_failed' | 'privacy_blocked' | 'scope_blocked' | 'provider_timeout';
-    imageCount?: number;
-    usedImageInput?: boolean;
-  }>
-  generateClarify: () => Promise<{ clarification: string | null }>
-  generateCodeHint: (imagePaths?: string[], problemStatement?: string) => Promise<{ hint: string | null }>
-  generateBrainstorm: (imagePaths?: string[], problemStatement?: string) => Promise<{ script: string | null }>
-  generateFollowUp: (intent: string, userRequest?: string) => Promise<{ refined: string | null; intent: string }>
-  generateFollowUpQuestions: () => Promise<{ questions: string | null }>
-  generateRecap: () => Promise<{ summary: string | null }>
-  submitManualQuestion: (question: string) => Promise<{ answer: string | null; question: string }>
   getIntelligenceContext: () => Promise<{ context: string; lastAssistantMessage: string | null; activeMode: string }>
   resetIntelligence: () => Promise<{ success: boolean; error?: string }>
 
@@ -407,36 +390,52 @@ export interface ElectronAPI {
 
   // Intelligence Mode Events
   onIntelligenceAssistUpdate: (callback: (data: { insight: string }) => void) => () => void
-  onIntelligenceSuggestedAnswerToken: (callback: (data: { token: string; question: string; confidence: number }) => void) => () => void
-  onIntelligenceSuggestedAnswer: (callback: (data: { answer: string; question: string; confidence: number; generationId?: number; sourceLabel?: string; emittedAt?: number }) => void) => () => void
-  onIntelligenceSuggestedAnswerDiscard: (callback: (data: { reason: string }) => void) => () => void
-  // Verified code execution (background): ✓ badge + corrected message.
-  onIntelligenceCodeVerified: (callback: (data: { question: string; passed: number; total: number; language: string }) => void) => () => void
-  onIntelligenceCodeCorrection: (callback: (data: { question: string; answer: string; note: string; reVerified: boolean }) => void) => () => void
-  // Sprint 7: dedicated negotiation-coaching channel.
-  onIntelligenceNegotiationCoaching: (callback: (data: { payload: any }) => void) => () => void
-  // Sprint 9: time-batched IPC token channel.
-  onIntelligenceTokenBatch: (callback: (data: { kind: 'suggested_answer' | 'refined_answer' | 'recap' | 'clarify' | 'follow_up_questions'; items: any[] }) => void) => () => void
-  onIntelligenceRefinedAnswerToken: (callback: (data: { token: string; intent: string }) => void) => () => void
-  onIntelligenceRefinedAnswer: (callback: (data: { answer: string; intent: string }) => void) => () => void
-  onIntelligenceFollowUpQuestionsUpdate: (callback: (data: { questions: string }) => void) => () => void
-  onIntelligenceFollowUpQuestionsToken: (callback: (data: { token: string }) => void) => () => void
-  onIntelligenceRecap: (callback: (data: { summary: string }) => void) => () => void
-  onIntelligenceRecapToken: (callback: (data: { token: string }) => void) => () => void
-  onIntelligenceClarify: (callback: (data: { clarification: string }) => void) => () => void
-  onIntelligenceClarifyToken: (callback: (data: { token: string }) => void) => () => void
-  onIntelligenceManualStarted: (callback: () => void) => () => void
-  onIntelligenceManualResult: (callback: (data: { answer: string; question: string }) => void) => () => void
-  onIntelligenceModeChanged: (callback: (data: { mode: string }) => void) => () => void
-  onIntelligenceError: (callback: (data: { error: string, mode: string }) => void) => () => void;
+  // Intelligence stream listeners — UNIFIED PIPELINE (C6): the per-channel
+  // onIntelligence* entries are DELETED; every event arrives through
+  // onIntelligenceStream below.
   // Session Management
   onSessionReset: (callback: () => void) => () => void;
 
-  // Streaming listeners
-  streamGeminiChat: (message: string, imagePaths?: string[], context?: string, options?: { skipSystemPrompt?: boolean, ignoreKnowledgeMode?: boolean }) => Promise<void>
-  onGeminiStreamToken: (callback: (token: string, meta?: { streamId?: number }) => void) => () => void
-  onGeminiStreamDone: (callback: (data?: { finalText?: string; streamId?: number }) => void) => () => void
-  onGeminiStreamError: (callback: (error: string, meta?: { streamId?: number | null; source?: string }) => void) => () => void;
+  // Streaming listeners — legacy gemini-stream-* removed (UNIFIED C6).
+
+  // ── UNIFIED PIPELINE: the single intelligence stream (replaces the channels
+  // above + rag:stream-* + intelligence-token-batch). Delivered as batches of
+  // typed events; the callback fires once per event.
+  onIntelligenceStream: (callback: (event: {
+    type: 'start' | 'token' | 'done' | 'error' | 'meta'
+    generationId: number
+    surface: 'desktop' | 'phone'
+    intent: string
+    streamKey: string
+    text?: string
+    finalText?: string
+    incomplete?: boolean
+    incompleteReason?: string
+    emittedAt?: number
+    question?: string
+    error?: string
+    metaKind?: 'code_verified' | 'code_correction' | 'coaching' | 'scaffold_discard' | 'late_answer'
+    metaPayload?: unknown
+  }) => void) => () => void
+  // The ONE entry point for every chat surface (manual chat, WTA, quick
+  // actions, meeting/global search, phone mirror).
+  runIntelligence: (request: {
+    source: 'manual_chat' | 'what_to_say' | 'auto_transcript' | 'recap' | 'clarify' | 'follow_up' | 'follow_up_questions' | 'code_hint' | 'brainstorm' | 'meeting_search' | 'global_search' | 'phone_mirror'
+    surface?: 'desktop' | 'phone'
+    text?: string
+    imagePaths?: string[]
+    meetingId?: string
+    domContext?: string
+    domContextEnvelope?: unknown
+    screenContext?: unknown
+    promptInstruction?: string
+    skill?: { id: string; name: string; promptBlock: string }
+    pinnedModeId?: string | null
+    followUpIntent?: string
+    confidence?: number
+    context?: string
+    skipSystemPrompt?: boolean
+  }) => Promise<{ started: boolean; generationId: number | null; streamKey: string | null; answer?: string | null; question?: string | null; error?: string; diagnostics?: Record<string, unknown> }>
 
   // NOTE: onSkillsChanged broadcast subscription was removed. Skills are
   // toggled only via delete; the picker refreshes on Settings unmount, and
@@ -544,16 +543,11 @@ export interface ElectronAPI {
   testReleaseFetch: () => Promise<{ success: boolean; error?: string }>
 
   // RAG (Retrieval-Augmented Generation) API
-  ragQueryMeeting: (meetingId: string, query: string) => Promise<{ success?: boolean; fallback?: boolean; error?: string }>
-  ragQueryLive: (query: string) => Promise<{ success?: boolean; fallback?: boolean; error?: string }>
-  ragQueryGlobal: (query: string) => Promise<{ success?: boolean; fallback?: boolean; error?: string }>
-  ragCancelQuery: (options: { meetingId?: string; global?: boolean }) => Promise<{ success: boolean }>
+  // UNIFIED PIPELINE (C5): answering queries + stream listeners removed —
+  // they run inside runIntelligence and stream through onIntelligenceStream.
   ragIsMeetingProcessed: (meetingId: string) => Promise<boolean>
   ragGetQueueStatus: () => Promise<{ pending: number; processing: number; completed: number; failed: number }>
   ragRetryEmbeddings: () => Promise<{ success: boolean }>
-  onRAGStreamChunk: (callback: (data: { meetingId?: string; global?: boolean; chunk: string }) => void) => () => void
-  onRAGStreamComplete: (callback: (data: { meetingId?: string; global?: boolean }) => void) => () => void
-  onRAGStreamError: (callback: (data: { meetingId?: string; global?: boolean; error: string }) => void) => () => void
 
   // Donation API
   getDonationStatus: () => Promise<{ shouldShow: boolean; hasDonated: boolean; lifetimeShows: number }>;

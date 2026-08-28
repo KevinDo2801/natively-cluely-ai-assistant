@@ -1188,6 +1188,8 @@ import { KeybindManager } from "./services/KeybindManager"
 import { ProcessingHelper } from "./ProcessingHelper"
 
 import { IntelligenceManager } from "./IntelligenceManager"
+import { IntelligenceStreamBus, IntelligenceStreamBatcher } from "./intelligence/unified/streamBus"
+import type { IntelligenceStreamEvent } from "./intelligence/unified/types"
 import { SystemAudioCapture } from "./audio/SystemAudioCapture"
 import { MicrophoneCapture } from "./audio/MicrophoneCapture"
 import { AudioDevices } from "./audio/AudioDevices"
@@ -1315,6 +1317,10 @@ export class AppState {
   public processingHelper: ProcessingHelper
 
   private intelligenceManager: IntelligenceManager
+  // UNIFIED PIPELINE (C2): the one main-side stream registry for the
+  // 'intelligence-stream' channel. Intelligence events from the engine, manual
+  // chat, RAG and phone-mirror all emit through here (per-surface newest-wins).
+  private readonly intelligenceStreamBus = new IntelligenceStreamBus()
   private themeManager: ThemeManager
   private ragManager: RAGManager | null = null
   private modeReferenceRetryPromise: Promise<void> | null = null
@@ -6534,76 +6540,74 @@ export class AppState {
   }
 
   private setupIntelligenceEvents(): void {
-    const mainWindow = this.getMainWindow.bind(this)
-
-    // Sprint 9: time-batched IPC token sends.
-    //
-    // Each LLM streaming token previously fired one webContents.send → one
-    // structured-clone serialization → one IPC message. For a 400-token
-    // answer at 100 tok/s that's 400 IPC messages over 4 seconds. With
-    // Groq at 200+ tok/s the rate gets uncomfortable.
-    //
-    // Coalesce per-tick: a token arriving in the current libuv iteration
-    // adds to a per-kind buffer. The first add schedules a setImmediate
-    // flush that drains all buffers in one webContents.send per kind
-    // (carrying an items array). Net: ~3-5× fewer IPC messages on hot
-    // streams with no perceptible latency cost (sub-frame).
-    //
-    // The old per-token channels (intelligence-suggested-answer-token, etc.)
-    // are NO LONGER USED for these 5 streams. The single
-    // 'intelligence-token-batch' channel replaces them. The old channel
-    // names + preload bridges are kept (defense-in-depth, no callers).
-    type BatchKind = 'suggested_answer' | 'refined_answer' | 'recap' | 'clarify' | 'follow_up_questions';
-    const tokenBatches = new Map<BatchKind, any[]>();
-    let batchFlushScheduled = false;
-    // The queued flush must be CANCELLABLE, and a manual flush must re-open the
-    // gate. Without the handle, a token that arrives between a final-answer
-    // handler's flushBatchesNow() and its own send is swallowed by the stale
-    // immediate: queueBatch calls scheduleBatchFlush, which early-returns
-    // because batchFlushScheduled is still true, and the already-queued
-    // immediate then delivers that token AFTER the final answer. That is exactly
-    // the "(…, final answer, trailing tokens)" ordering the comment below this
-    // block says must never reach the renderer — it clobbers the just-finalized
-    // bubble.
-    let pendingFlushHandle: NodeJS.Immediate | null = null;
-    const flushBatchesNow = () => {
-      if (pendingFlushHandle) {
-        clearImmediate(pendingFlushHandle);
-        pendingFlushHandle = null;
-      }
-      // Reset here, not only in the immediate's callback: a manual flush has
-      // done the work the queued one was going to do, so the next queueBatch
-      // must be able to arm a fresh immediate rather than be dropped.
-      batchFlushScheduled = false;
-      const win = mainWindow();
-      if (!win) { tokenBatches.clear(); return; }
-      for (const [kind, items] of tokenBatches.entries()) {
-        if (items.length > 0) {
-          this.sendToWindow(win, 'intelligence-token-batch', { kind, items });
-        }
-      }
-      tokenBatches.clear();
-    };
-    const scheduleBatchFlush = () => {
-      if (batchFlushScheduled) return;
-      batchFlushScheduled = true;
-      pendingFlushHandle = setImmediate(() => {
-        pendingFlushHandle = null;
-        batchFlushScheduled = false;
-        flushBatchesNow();
+    // ── UNIFIED PIPELINE (C6): the single 'intelligence-stream' channel. ─────
+    // Every surface (engine intelligence events, manual chat, RAG search,
+    // phone mirror) emits typed events through IntelligenceStreamBatcher —
+    // token events batch per tick, done/error/meta flush the pending batch
+    // first. The legacy tokenBatches closure, the per-kind channels and the
+    // gemini-stream-* bridge are all DELETED.
+    const unifiedBatcher = new IntelligenceStreamBatcher((events: IntelligenceStreamEvent[]) => {
+      // The unified channel reaches BOTH windows: the overlay (meeting UI /
+      // NativelyInterface chat) and the launcher (GlobalChatOverlay /
+      // MeetingDetails search). getMainWindow() is NOT used here: it returns
+      // the launcher when no meeting is active, which would deliver events to
+      // the launcher twice and to the overlay zero times — the overlay bubble
+      // then blinks forever. sendToMeetingSurfaces() covers exactly these two
+      // windows with dedupe. Each renderer filters by intent/streamKey, so
+      // extra delivery is harmless.
+      this.sendToMeetingSurfaces('intelligence-stream', events);
+    });
+    const pushUnified = (event: IntelligenceStreamEvent) => unifiedBatcher.push(event);
+    // UNIFIED PIPELINE (C6-bugfix): the bus is the delivery path for the
+    // manual-chat / phone-mirror / RAG-search streams (they call
+    // streamBus.emit*), so those events MUST be piped into the SAME batcher
+    // that reaches the renderer. Without this subscription, manual chat emits
+    // into the void and the placeholder bubble blinks forever with no answer.
+    // Id-less and typed events flow through identically; the renderer filters
+    // by intent/streamKey.
+    const pipeBus = (event: IntelligenceStreamEvent) => unifiedBatcher.push(event);
+    this.intelligenceStreamBus.on('event', pipeBus);
+    const flushUnifiedBeforeFinal = () => unifiedBatcher.flushNow();
+    const unifiedToken = (intent: string, token: string, generationId?: number) => {
+      pushUnified({
+        type: 'token',
+        generationId: generationId ?? this.intelligenceManager.getCurrentGenerationId(),
+        surface: 'desktop',
+        intent,
+        streamKey: `desktop:${intent}`,
+        text: token,
       });
     };
-    const queueBatch = (kind: BatchKind, item: any) => {
-      let arr = tokenBatches.get(kind);
-      if (!arr) { arr = []; tokenBatches.set(kind, arr); }
-      arr.push(item);
-      scheduleBatchFlush();
+    const unifiedDone = (intent: string, answer: string, generationId?: number, extra?: Partial<IntelligenceStreamEvent>) => {
+      flushUnifiedBeforeFinal();
+      pushUnified({
+        type: 'done',
+        generationId: generationId ?? this.intelligenceManager.getCurrentGenerationId(),
+        surface: 'desktop',
+        intent,
+        streamKey: `desktop:${intent}`,
+        finalText: answer,
+        emittedAt: Date.now(),
+        ...extra,
+      });
     };
-    // ORDER: every final-answer handler must call this BEFORE its own send so
-    // the renderer sees (..., last tokens, final answer) and not (..., final
-    // answer, trailing tokens) — the latter would clobber the just-finalized
-    // row with appended text from a pending setImmediate batch.
-    const flushBatchesBeforeFinal = flushBatchesNow;
+    const unifiedMeta = (
+      intent: string,
+      metaKind: NonNullable<IntelligenceStreamEvent['metaKind']>,
+      metaPayload: unknown,
+      generationId?: number,
+    ) => {
+      flushUnifiedBeforeFinal();
+      pushUnified({
+        type: 'meta',
+        generationId: generationId ?? this.intelligenceManager.getCurrentGenerationId(),
+        surface: 'desktop',
+        intent,
+        streamKey: `desktop:${intent}`,
+        metaKind,
+        metaPayload,
+      });
+    };
 
     // Forward intelligence events to renderer
     this.intelligenceManager.on('assist_update', (insight: string) => {
@@ -6648,129 +6652,96 @@ export class AppState {
       // forward the optional sourceLabel the engine computes from the
       // TurnPlan. Falls back to 'General knowledge' for legacy emitters
       // (fallback paths, code-hint, brainstorm) that don't compute it.
-      flushBatchesBeforeFinal();
-      const win = mainWindow()
-      // emittedAt (2026-07-31): WTA supersession is generation-relative only —
-      // a slow generation stays "current" through any number of manual turns
-      // and mode switches, so a minutes-old answer appeared with no marker of
-      // what it answered (the live "late CGPA answer" report). The renderer
-      // uses this stamp to drop or visibly label stale finals.
-      this.sendToWindow(win, 'intelligence-suggested-answer', { answer, question, confidence, generationId, sourceLabel: sourceLabel ?? 'General knowledge', emittedAt: Date.now() })
+      unifiedDone('what_to_answer', answer, generationId, { question });
 
     })
 
     this.intelligenceManager.on('suggested_answer_token', (token: string, question: string, confidence: number, generationId?: number) => {
-      // Sprint 9: batch instead of per-token webContents.send.
-      // generationId (audit finding #3): carried per-item so the renderer can
-      // drop a batch belonging to a superseded live answer. Undefined for the
-      // other live streams (code hint / brainstorm) — id-less items are accepted.
-      queueBatch('suggested_answer', { token, question, confidence, generationId });
+      unifiedToken('what_to_answer', token, generationId);
     })
 
     // Orphaned-scaffold fix: a what-to-answer stream that already showed a
     // coding scaffold ended with no final answer (superseded/declined/errored).
-    // Tell the renderer to drop the open scaffold row. Flush pending token
-    // batches first so a late scaffold batch can't re-mount the row afterwards.
+    // Tell the renderer to drop the open scaffold row (meta event flushes
+    // pending tokens first, so a late scaffold batch can't re-mount the row).
     this.intelligenceManager.on('suggested_answer_discard', (reason: string) => {
-      flushBatchesBeforeFinal();
-      const win = mainWindow()
-      this.sendToWindow(win, 'intelligence-suggested-answer-discard', { reason })
+      unifiedMeta('what_to_answer', 'scaffold_discard', { reason });
     })
 
     // Verified code execution (background): a ✓ badge when the shown code passed
     // its executed test cases, and a NEW corrected message when it failed and a
     // re-verified fix was produced. Both arrive AFTER the answer was shown.
     this.intelligenceManager.on('code_verified', (info: { question: string; passed: number; total: number; language: string }) => {
-      const win = mainWindow()
-      this.sendToWindow(win, 'intelligence-code-verified', info)
+      unifiedMeta('what_to_answer', 'code_verified', info);
     })
     this.intelligenceManager.on('code_correction', (info: { question: string; answer: string; note: string; reVerified: boolean }) => {
-      flushBatchesBeforeFinal();
-      const win = mainWindow()
-      this.sendToWindow(win, 'intelligence-code-correction', info)
+      unifiedMeta('what_to_answer', 'code_correction', info);
     })
 
-    // Sprint 7: dedicated negotiation-coaching channel. Engine emits this
-    // INSTEAD of suggested_answer / suggested_answer_token when it detects
-    // the coaching sentinel, so the renderer no longer needs JSON.parse-
-    // every-token detection.
+    // Negotiation-coaching: engine emits this INSTEAD of suggested_answer /
+    // suggested_answer_token when it detects the coaching sentinel, so the
+    // renderer no longer needs JSON.parse-per-token detection.
     this.intelligenceManager.on('negotiation_coaching', (payload: unknown) => {
-      // Sprint 9: flush any pending batched tokens first so the renderer
-      // sees them before the coaching card swap.
-      flushBatchesBeforeFinal();
-      const win = mainWindow()
-      this.sendToWindow(win, 'intelligence-negotiation-coaching', { payload })
+      unifiedMeta('what_to_answer', 'coaching', payload);
     })
 
     this.intelligenceManager.on('refined_answer_token', (token: string, intent: string) => {
-      // Sprint 9: batch.
-      queueBatch('refined_answer', { token, intent });
+      unifiedToken(intent, token);
     })
 
     this.intelligenceManager.on('refined_answer', (answer: string, intent: string) => {
-      flushBatchesBeforeFinal();
-      const win = mainWindow()
-      this.sendToWindow(win, 'intelligence-refined-answer', { answer, intent })
-
+      unifiedDone(intent, answer);
     })
 
     this.intelligenceManager.on('recap', (summary: string) => {
-      flushBatchesBeforeFinal();
-      const win = mainWindow()
-      this.sendToWindow(win, 'intelligence-recap', { summary })
+      unifiedDone('recap', summary);
     })
 
     this.intelligenceManager.on('recap_token', (token: string) => {
-      // Sprint 9: batch.
-      queueBatch('recap', { token });
+      unifiedToken('recap', token);
     })
 
     this.intelligenceManager.on('clarify', (clarification: string) => {
-      flushBatchesBeforeFinal();
-      const win = mainWindow()
-      this.sendToWindow(win, 'intelligence-clarify', { clarification })
+      unifiedDone('clarify', clarification);
     })
 
     this.intelligenceManager.on('clarify_token', (token: string) => {
-      // Sprint 9: batch.
-      queueBatch('clarify', { token });
+      unifiedToken('clarify', token);
     })
 
     this.intelligenceManager.on('follow_up_questions_update', (questions: string) => {
-      flushBatchesBeforeFinal();
-      const win = mainWindow()
-      this.sendToWindow(win, 'intelligence-follow-up-questions-update', { questions })
+      unifiedDone('follow_up_questions', questions);
     })
 
     this.intelligenceManager.on('follow_up_questions_token', (token: string) => {
-      // Sprint 9: batch.
-      queueBatch('follow_up_questions', { token });
+      unifiedToken('follow_up_questions', token);
     })
 
     this.intelligenceManager.on('manual_answer_started', () => {
       // The hotkey/click commits whatever Auto Answer was offering.
       this.autoAnswerController.onManualAnswerStarted();
-      const win = mainWindow()
-      this.sendToWindow(win, 'intelligence-manual-started')
     })
 
     this.intelligenceManager.on('manual_answer_result', (answer: string, question: string) => {
-      const win = mainWindow()
-      this.sendToWindow(win, 'intelligence-manual-result', { answer, question })
-
+      unifiedDone('chat', answer);
     })
 
     this.intelligenceManager.on('mode_changed', (mode: string) => {
-      const win = mainWindow()
-      this.sendToWindow(win, 'intelligence-mode-changed', { mode })
       // A candidate parked because the engine was busy may now dispatch.
       if (mode === 'idle') this.autoAnswerController.onEngineIdle()
     })
 
     this.intelligenceManager.on('error', (error: Error, mode: string) => {
       console.error(`[IntelligenceManager] Error in ${mode}:`, error)
-      const win = mainWindow()
-      this.sendToWindow(win, 'intelligence-error', { error: error.message, mode })
+      unifiedBatcher.flushNow();
+      pushUnified({
+        type: 'error',
+        generationId: this.intelligenceManager.getCurrentGenerationId(),
+        surface: 'desktop',
+        intent: 'what_to_answer',
+        streamKey: 'desktop:what_to_answer',
+        error: error.message,
+      });
     })
   }
 
@@ -6870,6 +6841,11 @@ export class AppState {
 
   public getIntelligenceManager(): IntelligenceManager {
     return this.intelligenceManager
+  }
+
+  /** The unified stream bus (C2) — used by IPC handlers for manual/RAG/phone streams. */
+  public getIntelligenceStreamBus(): IntelligenceStreamBus {
+    return this.intelligenceStreamBus
   }
 
   public getThemeManager(): ThemeManager {

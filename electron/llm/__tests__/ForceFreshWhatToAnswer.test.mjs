@@ -98,8 +98,13 @@ describe('source: IPC handler always passes forceFresh on manual press', () => {
     // The "What to Say" handler MUST mark forceFresh — the user pressed a
     // button, they want a fresh answer. Without this flag the Jaccard gate
     // can match a previous question's speculative draft.
-    const handlerBody = extractSafeHandleBody(ipcSrc, 'generate-what-to-say');
-    assert.ok(handlerBody, 'generate-what-to-say handler must be locatable in ipcHandlers.ts');
+    // UNIFIED PIPELINE (C6): the channel registration is gone; the handler
+    // lives as `const _generateWhatToSayHandler` (the what_to_say branch of
+    // run-intelligence).
+    const constStart = ipcSrc.indexOf('const _generateWhatToSayHandler = async (');
+    assert.ok(constStart >= 0, '_generateWhatToSayHandler must be locatable in ipcHandlers.ts');
+    const constEnd = ipcSrc.indexOf('safeHandle(\'run-intelligence\'', constStart);
+    const handlerBody = ipcSrc.slice(constStart, constEnd > constStart ? constEnd : constStart + 30_000);
     assert.match(
       handlerBody,
       /forceFresh\s*:\s*true/,
@@ -198,6 +203,34 @@ function extractSafeHandleBody(source, channel) {
   );
   const match = re.exec(source);
   if (!match) return null;
+  // UNIFIED PIPELINE (C4): extracted handlers are registered one-line as
+  // safeHandle('<channel>', _<name>Handler); — walk back to the const body.
+  const regTail = source.slice(match.index + match[0].length, match.index + match[0].length + 160);
+  if (/,\s*_\w+Handler\s*\)/.test(regTail)) {
+    const constMatches = source.slice(0, match.index).match(/const\s+_\w+Handler\s*=\s*async\s*\(/g);
+    if (constMatches && constMatches.length > 0) {
+      const constStart = source.lastIndexOf(constMatches[constMatches.length - 1], match.index);
+      if (constStart >= 0) {
+        const arrowIdx = source.indexOf('=>', constStart);
+        if (arrowIdx >= 0) {
+          let i = arrowIdx + 2;
+          while (i < source.length && /\s/.test(source[i])) i++;
+          if (source[i] === '{') {
+            i++;
+            let depth = 1;
+            const start = i;
+            while (i < source.length && depth > 0) {
+              const ch = source[i];
+              if (ch === '{') depth++;
+              else if (ch === '}') depth--;
+              i++;
+            }
+            if (depth === 0) return source.slice(start, i - 1);
+          }
+        }
+      }
+    }
+  }
   const arrowIdx = source.indexOf('=>', match.index + match[0].length);
   if (arrowIdx < 0) return null;
   let i = arrowIdx + 2;

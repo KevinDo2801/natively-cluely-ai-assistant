@@ -84,8 +84,10 @@ test('IPC and meeting summary logs avoid answer and LLM response snippets', () =
   const persistence = read('electron/MeetingPersistence.ts');
   const intent = read('electron/llm/IntentClassifier.ts');
 
-  assert.match(ipc, /gemini - chat response received`, \{ length: result\?\.length \?\? 0 \}/);
-  assert.match(ipc, /Updated IntelligenceManager\.Last message`,[\s\S]{0,120}length: intelligenceManager\.getLastAssistantMessage\(\)\?\.length \?\? 0/);
+  // UNIFIED PIPELINE (C6): the non-stream gemini-chat handler (which owned
+  // the two length-only logs this test used to pin) is DELETED — its logs
+  // are gone with it. The no-raw-snippet invariants below still hold for
+  // every remaining log site in ipcHandlers.
   assert.doesNotMatch(ipc, /console\.log[\s\S]{0,140}result\.substring\(/);
   assert.doesNotMatch(ipc, /console\.log[\s\S]{0,140}getLastAssistantMessage\(\)\?\.substring\(/);
 

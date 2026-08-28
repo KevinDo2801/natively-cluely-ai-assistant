@@ -63,6 +63,26 @@ export class IntelligenceManager extends EventEmitter {
         this.engine.setRagRetrieverProvider(provider);
     }
 
+    // ── UNIFIED PIPELINE passthroughs ────────────────────────────────────────
+
+    /** The ONE entry point for every intelligence surface (C2). */
+    run(request: import('./intelligence/unified').IntelligenceRequest): Promise<import('./intelligence/unified').UnifiedRunResult> {
+        return this.engine.run(request);
+    }
+
+    /** Latest minted generation id (for tagging id-less legacy events). */
+    getCurrentGenerationId(): number {
+        return this.engine.getCurrentGenerationId();
+    }
+
+    setManualChatRunnerProvider(provider: (() => ((request: import('./intelligence/unified').IntelligenceRequest) => Promise<import('./intelligence/unified').UnifiedRunResult>) | null) | null): void {
+        this.engine.setManualChatRunnerProvider(provider);
+    }
+
+    setSearchRunnerProvider(provider: (() => ((request: import('./intelligence/unified').IntelligenceRequest) => Promise<import('./intelligence/unified').UnifiedRunResult>) | null) | null): void {
+        this.engine.setSearchRunnerProvider(provider);
+    }
+
     /**
      * Forward all events from IntelligenceEngine through this facade
      * so existing listeners on IntelligenceManager continue to work.

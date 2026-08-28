@@ -767,79 +767,19 @@ export function initializeIpcHandlers(appState: AppState): void {
     }
   });
 
-  safeHandle(
-    'gemini-chat',
-    async (
-      event,
-      message: string,
-      imagePaths?: string[],
-      context?: string,
-      options?: { skipSystemPrompt?: boolean },
-    ) => {
-      try {
-        // Symmetric strip on the non-stream path: defense-in-depth against any
-        // future channel that injects <answer_contract>...</answer_contract> into
-        // `message`. The renderer does NOT currently inject it on either path;
-        // both strips are belt-and-suspenders.
-        const strippedMessage = stripEmbeddedAnswerContract(message);
-        const result = await appState.processingHelper
-          .getLLMHelper()
-          .chatWithGemini(strippedMessage, imagePaths, context, options?.skipSystemPrompt);
-
-        console.log(`[IPC] gemini - chat response received`, { length: result?.length ?? 0 });
-
-        // Don't process empty responses
-        if (!result || result.trim().length === 0) {
-          console.warn('[IPC] Empty response from LLM, not updating IntelligenceManager');
-          return "I apologize, but I couldn't generate a response. Please try again.";
-        }
-
-        // Sync with IntelligenceManager so Follow-Up/Recap work
-        const intelligenceManager = appState.getIntelligenceManager();
-
-        // 1. Add user question to context (as 'user')
-        // CRITICAL: Skip refinement check to prevent auto-triggering follow-up logic
-        // The user's manual question is a NEW input, not a refinement of previous answer.
-        intelligenceManager.addTranscript(
-          {
-            text: message,
-            speaker: 'user',
-            timestamp: Date.now(),
-            final: true,
-            origin: 'manual_chat',
-          },
-          true,
-        );
-
-        // 2. Add assistant response and set as last message
-        console.log(`[IPC] Updating IntelligenceManager with assistant message...`);
-        intelligenceManager.addAssistantMessage(result, undefined, 'manual_chat');
-        console.log(`[IPC] Updated IntelligenceManager.Last message`, {
-          length: intelligenceManager.getLastAssistantMessage()?.length ?? 0,
-        });
-
-        // Log Usage
-        intelligenceManager.logUsage('chat', message, result);
-
-        return result;
-      } catch (error: any) {
-        // console.error("Error in gemini-chat handler:", error);
-        throw error;
-      }
-    },
-  );
+  // UNIFIED PIPELINE (C6): the non-stream 'gemini-chat' channel is DELETED —
+  // no renderer caller remains; every surface streams through run-intelligence.
 
   // Streaming IPC Handler
-  let _chatStreamId = 0;
-  // Keep IDs globally unique for phone/desktop message correlation; supersession is per sender.
+  // UNIFIED PIPELINE (C2c): stream ids come from IntelligenceStreamBus
+  // (`generationId` doubles as the legacy streamId). `_chatStreamsBySender`
+  // stays as a mirror registry so the ~20 existing supersession guards keep
+  // their exact semantics; the bus implements the same per-surface newest-wins.
   const _chatStreamsBySender = new Map<number, { streamId: number; controller: AbortController }>();
-  // Phone-mirror chat supersession is tracked SEPARATELY from the global id counter.
-  // `_chatStreamId` is shared with the desktop chat path purely to keep correlation ids
-  // globally unique, so checking it for phone supersession let a desktop message (which
-  // bumps the same counter) falsely abort an in-flight phone answer — and the phone user's
-  // answer would die mid-stream because the desktop user typed something on a different
-  // surface. Phone supersession compares against this dedicated latest-phone marker instead,
-  // so only a NEWER PHONE message supersedes a phone stream (desktop streams stay per-sender).
+  // Phone-mirror chat supersession is tracked SEPARATELY from the bus counter
+  // (`_phoneChatLatestId`): only a NEWER PHONE message supersedes a phone
+  // stream — desktop streams never do (F-303, preserved by the bus key
+  // 'phone:chat' too; the marker keeps the legacy guards deterministic).
   let _phoneChatLatestId = 0;
   // Per-process diversity guard for manual chat (manual regression 2026-06-12):
   // last-20 answer fingerprints; repeated answers across DIFFERENT questions are
@@ -884,6 +824,7 @@ export function initializeIpcHandlers(appState: AppState): void {
       options?: { skipSystemPrompt?: boolean; ignoreKnowledgeMode?: boolean },
     ): Promise<null> => {
       let myController: AbortController | null = null;
+      let myStreamId = 0; // assigned inside try; read by the finally cleanup
       let _manualFgToken: string | null = null;
       // Intelligence OS observe-only trace (Phase 1). Hoisted so the catch can record
       // an error + commit. Assigned to the real trace right after planAnswer; until
@@ -894,12 +835,20 @@ export function initializeIpcHandlers(appState: AppState): void {
         const llmHelper = appState.processingHelper.getLLMHelper();
 
         const senderId = event.sender.id;
-        const myStreamId = ++_chatStreamId;
+        // UNIFIED PIPELINE (C2c): stream identity + delivery come from the bus.
+        // `_chatStreamsBySender` remains as a mirror so every existing
+        // supersession guard (`_chatStreamsBySender.get(senderId)?.streamId !==
+        // myStreamId`) keeps its exact semantics — the bus key 'desktop:chat'
+        // implements the same per-surface newest-wins. `generationId` doubles as
+        // the legacy streamId for the renderer bridge in main.ts.
+        const streamBus = appState.getIntelligenceStreamBus();
         const priorStream = _chatStreamsBySender.get(senderId);
         if (priorStream) {
           try { priorStream.controller.abort(); } catch { /* noop */ }
         }
         myController = new AbortController();
+        const begun = streamBus.begin('desktop', 'chat', { controller: myController });
+        myStreamId = begun.generationId;
         _chatStreamsBySender.set(senderId, { streamId: myStreamId, controller: myController });
 
         // Skill invocation parsed EARLY (PR #429 Bug 003). It used to live ~35k
@@ -936,11 +885,12 @@ export function initializeIpcHandlers(appState: AppState): void {
               // Settings → Skills. Surface a clear error rather than silently
               // proceeding (which would invoke the skill anyway).
               if (skill.enabled === false) {
-                event.sender.send(
-                  'gemini-stream-error',
-                  `Skill "/${skill.id}" is disabled. Enable it in Settings → Skills.`,
-                  { streamId: myStreamId },
-                );
+                streamBus.emitError({
+                  generationId: myStreamId,
+                  surface: 'desktop',
+                  intent: 'chat',
+                  error: `Skill "/${skill.id}" is disabled. Enable it in Settings → Skills.`,
+                });
                 return null;  // sibling error paths return null; handler is typed `| null`
               }
               skillPromptBlock = SkillsManager.getInstance().buildPromptBlock(skill);
@@ -957,17 +907,55 @@ export function initializeIpcHandlers(appState: AppState): void {
               const available = allSkills.length
                 ? allSkills.map(s => `/${s.id}`).join(', ')
                 : 'none registered';
-              event.sender.send(
-                'gemini-stream-error',
-                `Skill "/${candidateId}" not found. Available: ${available}`,
-                { streamId: myStreamId },
-              );
+              streamBus.emitError({
+                generationId: myStreamId,
+                surface: 'desktop',
+                intent: 'chat',
+                error: `Skill "/${candidateId}" not found. Available: ${available}`,
+              });
               return null;  // sibling error paths return null; handler is typed `| null`
             }
           } catch (skillErr: any) {
             console.warn('[IPC] Skill lookup failed:', skillErr?.message || skillErr);
-            event.sender.send('gemini-stream-error', `Skill lookup failed: ${skillErr?.message || 'unknown error'}`, { streamId: myStreamId });
+            streamBus.emitError({
+              generationId: myStreamId,
+              surface: 'desktop',
+              intent: 'chat',
+              error: `Skill lookup failed: ${skillErr?.message || 'unknown error'}`,
+            });
             return null;  // sibling error paths return null; handler is typed `| null`
+          }
+        }
+
+        // ── UNIFIED PIPELINE (C5): JIT RAG preflight, moved here from the
+        // renderer's handleManualSubmit. Same contract: when the live meeting
+        // has queryable chunks and no screenshots are attached, RAG answers
+        // through the SAME bus stream (the renderer sees identical tokens);
+        // otherwise fall through to the LLM path below. RAG-answered turns
+        // never touch SessionTracker sinks, exactly like the old preflight.
+        if (!imagePaths?.length && !(options?.skipSystemPrompt === true && Boolean(context)) && typeof message === 'string' && message.trim().length > 0) {
+          try {
+            const ragManager = appState.getRAGManager();
+            if (
+              ragManager?.isReady?.() &&
+              ragManager.isLiveIndexingActive?.('live-meeting-current') &&
+              ragManager.hasLiveChunks?.()
+            ) {
+              const ragStream = ragManager.queryMeeting('live-meeting-current', message, myController.signal);
+              let answered = false;
+              for await (const chunk of ragStream) {
+                if (_chatStreamsBySender.get(senderId)?.streamId !== myStreamId) break;
+                answered = true;
+                streamBus.emitToken({ generationId: myStreamId, surface: 'desktop', intent: 'chat', text: chunk });
+              }
+              if (answered && _chatStreamsBySender.get(senderId)?.streamId === myStreamId) {
+                streamBus.emitDone({ generationId: myStreamId, surface: 'desktop', intent: 'chat' });
+                return null;
+              }
+            }
+          } catch {
+            // NO_RELEVANT_CONTEXT / NO_MEETING_EMBEDDINGS / aborts fall through
+            // to the regular chat path — the old { fallback: true } behavior.
           }
         }
 
@@ -1366,7 +1354,7 @@ export function initializeIpcHandlers(appState: AppState): void {
                   try { v3DebugCollector?.recordFirstToken(); } catch { /* noop */ }
                 }
                 finalText += tok;
-                event.sender.send('gemini-stream-token', tok, { streamId: myStreamId });
+                streamBus.emitToken({ generationId: myStreamId, surface: 'desktop', intent: 'chat', text: tok });
               }
             } catch (streamErr) {
               // Finalize the debug record with the partial answer, then let the
@@ -1424,9 +1412,11 @@ export function initializeIpcHandlers(appState: AppState): void {
                 chars: finalText.length,
               });
             }
-            event.sender.send('gemini-stream-done', {
+            streamBus.emitDone({
+              generationId: myStreamId,
+              surface: 'desktop',
+              intent: 'chat',
               finalText,
-              streamId: myStreamId,
               incomplete: v3Truncated,
               incompleteReason: v3Truncated ? v3Stream.outcome.reason : undefined,
             });
@@ -1612,8 +1602,8 @@ export function initializeIpcHandlers(appState: AppState): void {
               );
               return null;
             }
-            event.sender.send('gemini-stream-token', identityHit, { streamId: myStreamId });
-            event.sender.send('gemini-stream-done', { finalText: identityHit, streamId: myStreamId });
+            streamBus.emitToken({ generationId: myStreamId, surface: 'desktop', intent: 'chat', text: identityHit });
+            streamBus.emitDone({ generationId: myStreamId, surface: 'desktop', intent: 'chat', finalText: identityHit });
             try {
               PhoneMirrorService.getInstance().publishToken(String(myStreamId), identityHit);
             } catch (_) {
@@ -2274,8 +2264,8 @@ export function initializeIpcHandlers(appState: AppState): void {
           } catch { /* default manual */ }
           const clarification = buildContextFreeClarification(clarSurface);
           if (_chatStreamsBySender.get(senderId)?.streamId !== myStreamId) return null;
-          event.sender.send('gemini-stream-token', clarification, { streamId: myStreamId });
-          event.sender.send('gemini-stream-done', { finalText: clarification, streamId: myStreamId });
+          streamBus.emitToken({ generationId: myStreamId, surface: 'desktop', intent: 'chat', text: clarification });
+          streamBus.emitDone({ generationId: myStreamId, surface: 'desktop', intent: 'chat', finalText: clarification });
           try { PhoneMirrorService.getInstance().publishToken(String(myStreamId), clarification); } catch (_) { /* noop */ }
           try { PhoneMirrorService.getInstance().publishDone(String(myStreamId), clarification); } catch (_) { /* noop */ }
           intelligenceManager.addAssistantMessage(clarification, undefined, 'manual_chat');
@@ -2353,8 +2343,8 @@ export function initializeIpcHandlers(appState: AppState): void {
                 hasLiveTranscript: Boolean(intelligenceManager.getFormattedContext(100)?.trim()),
               });
             if (_chatStreamsBySender.get(senderId)?.streamId !== myStreamId) return null;
-            event.sender.send('gemini-stream-token', clarify, { streamId: myStreamId });
-            event.sender.send('gemini-stream-done', { finalText: clarify, streamId: myStreamId });
+            streamBus.emitToken({ generationId: myStreamId, surface: 'desktop', intent: 'chat', text: clarify });
+            streamBus.emitDone({ generationId: myStreamId, surface: 'desktop', intent: 'chat', finalText: clarify });
             try { PhoneMirrorService.getInstance().publishToken(String(myStreamId), clarify); } catch (_) { /* noop */ }
             try { PhoneMirrorService.getInstance().publishDone(String(myStreamId), clarify); } catch (_) { /* noop */ }
             const clarifyWrite = decideSessionWritePolicy({ finalGenerationMode: 'source_safe_refusal', validationOk: true, sourceContractHonored: true });
@@ -2584,8 +2574,8 @@ export function initializeIpcHandlers(appState: AppState): void {
             const { buildSourceSwitchClarification } = require('./llm/sourceOwnership');
             const clarify = buildSourceSwitchClarification(manualOwnership.owner);
             if (_chatStreamsBySender.get(senderId)?.streamId !== myStreamId) return null;
-            event.sender.send('gemini-stream-token', clarify, { streamId: myStreamId });
-            event.sender.send('gemini-stream-done', { finalText: clarify, streamId: myStreamId });
+            streamBus.emitToken({ generationId: myStreamId, surface: 'desktop', intent: 'chat', text: clarify });
+            streamBus.emitDone({ generationId: myStreamId, surface: 'desktop', intent: 'chat', finalText: clarify });
             try { PhoneMirrorService.getInstance().publishToken(String(myStreamId), clarify); } catch (_) { /* noop */ }
             try { PhoneMirrorService.getInstance().publishDone(String(myStreamId), clarify); } catch (_) { /* noop */ }
             const clarifyWrite = decideSessionWritePolicy({ finalGenerationMode: 'source_safe_refusal', validationOk: true, sourceContractHonored: true });
@@ -3443,7 +3433,7 @@ export function initializeIpcHandlers(appState: AppState): void {
             // renderer can drop tokens from a superseded chat stream. Backward
             // compatible: existing (token)=>… callbacks ignore the extra arg.
             iTrace.lifecycle('streaming');
-            event.sender.send('gemini-stream-token', visible, { streamId: myStreamId });
+            streamBus.emitToken({ generationId: myStreamId, surface: 'desktop', intent: 'chat', text: visible });
             try {
               PhoneMirrorService.getInstance().publishToken(String(myStreamId), visible);
             } catch (_) {
@@ -3591,7 +3581,7 @@ export function initializeIpcHandlers(appState: AppState): void {
             const gatedTail = codingGate.finish();
             const tail = chatSpecStripper ? (chatSpecStripper.push(gatedTail) + chatSpecStripper.finish()) : gatedTail;
             if (tail) {
-              event.sender.send('gemini-stream-token', tail, { streamId: myStreamId });
+              streamBus.emitToken({ generationId: myStreamId, surface: 'desktop', intent: 'chat', text: tail });
               try { PhoneMirrorService.getInstance().publishToken(String(myStreamId), tail); } catch (_) { /* noop */ }
             }
           }
@@ -5162,7 +5152,7 @@ export function initializeIpcHandlers(appState: AppState): void {
             // the streamed answer was already valid, finalText is undefined and the
             // already-streamed tokens stand. streamId (audit finding #3) lets the
             // renderer ignore a stale done from a superseded stream.
-            event.sender.send('gemini-stream-done', { ...(finalText ? { finalText } : {}), streamId: myStreamId });
+            streamBus.emitDone({ generationId: myStreamId, surface: 'desktop', intent: 'chat', finalText });
             chatTrace.mark('response_completed', { chars: fullResponse.length, repaired: Boolean(finalText) });
             chatTrace.finish({ chars: fullResponse.length });
             iTrace.setProvider({ provider: 'llm', model: undefined })
@@ -5435,8 +5425,8 @@ export function initializeIpcHandlers(appState: AppState): void {
                 validationOk: false,
                 criticalViolations: ['provider_error_no_answer'],
               });
-              event.sender.send('gemini-stream-token', safe, { streamId: myStreamId });
-              event.sender.send('gemini-stream-done', { finalText: safe, streamId: myStreamId });
+              streamBus.emitToken({ generationId: myStreamId, surface: 'desktop', intent: 'chat', text: safe });
+              streamBus.emitDone({ generationId: myStreamId, surface: 'desktop', intent: 'chat', finalText: safe });
               try { PhoneMirrorService.getInstance().publishToken(String(myStreamId), safe); PhoneMirrorService.getInstance().publishDone(String(myStreamId), safe); } catch (_) { /* noop */ }
               intelligenceManager.addAssistantMessage(safe, sessionWriteDecision, 'manual_chat');
               _emitAttr({ answer_type: answerPlan.answerType, profile_tree_used: false, profile_tree_fast_path_used: false, structured_resume_used: false });
@@ -5444,11 +5434,12 @@ export function initializeIpcHandlers(appState: AppState): void {
             }
           } catch (classifyErr: any) { console.warn('[IPC] provider-error classify/fallback skipped:', classifyErr?.message); }
           if (_chatStreamsBySender.get(senderId)?.streamId === myStreamId) {
-            event.sender.send(
-              'gemini-stream-error',
-              streamError.message || 'Unknown streaming error',
-              { streamId: myStreamId },
-            );
+            streamBus.emitError({
+              generationId: myStreamId,
+              surface: 'desktop',
+              intent: 'chat',
+              error: streamError.message || 'Unknown streaming error',
+            });
             try {
               PhoneMirrorService.getInstance().publishError(
                 String(myStreamId),
@@ -5476,24 +5467,214 @@ export function initializeIpcHandlers(appState: AppState): void {
           const current = _chatStreamsBySender.get(event.sender.id);
           if (current?.controller === myController) {
             _chatStreamsBySender.delete(event.sender.id);
+            appState.getIntelligenceStreamBus().end(myStreamId, 'desktop', 'chat');
           }
         }
       }
     };
-  // Register the manual chat handler; also expose it for the E2E manual-ask
-  // harness (test-only; NATIVELY_E2E gates the caller).
-  safeHandle('gemini-chat-stream', _geminiChatStreamHandler);
+  // UNIFIED PIPELINE (C6): the 'gemini-chat-stream' channel is DELETED — the
+  // manual-chat pipeline is invoked through `run-intelligence`. The const
+  // stays exported for the E2E manual-ask harness (NATIVELY_E2E gates it).
   if (process.env.NATIVELY_E2E === '1') {
     (globalThis as any).__nativelyGeminiChatStream = _geminiChatStreamHandler;
   }
 
   // Renderer-driven cancellation for the sender's active chat stream.
-  safeOn('gemini-chat-stream-stop', (event) => {
+  safeOn('intelligence-stream-stop', (event) => {
     const senderId = event.sender.id;
     const stream = _chatStreamsBySender.get(senderId);
     if (stream) {
       try { stream.controller.abort(); } catch { /* noop */ }
       _chatStreamsBySender.delete(senderId);
+      appState.getIntelligenceStreamBus().end(stream.streamId, 'desktop', 'chat');
+    }
+  });
+
+  // ── UNIFIED PIPELINE (C5): meeting/global search runner. ───────────────────
+  // RAG retrieval + synthesis now runs INSIDE the unified entry point and
+  // emits through the bus (intent 'meeting_search' | 'global_search'), so the
+  // dedicated rag:query-* IPC channels and their renderer listeners are gone.
+  const _searchRunner = async (request: {
+    source: 'meeting_search' | 'global_search';
+    text?: string;
+    meetingId?: string;
+  }): Promise<{
+    started: boolean;
+    generationId: number | null;
+    streamKey: string | null;
+    question?: string | null;
+    error?: string;
+  }> => {
+    const bus = appState.getIntelligenceStreamBus();
+    const intent = request.source;
+    const surface = 'desktop' as const;
+    const ragManager = appState.getRAGManager();
+    const query = (request.text ?? '').trim();
+
+    if (!ragManager || !ragManager.isReady()) {
+      // Fallback to regular chat (mirrors the old { fallback: true }).
+      return { started: false, generationId: null, streamKey: null, question: query, error: 'rag_unavailable' };
+    }
+    if (
+      request.source === 'meeting_search' &&
+      !request.meetingId
+    ) {
+      return { started: false, generationId: null, streamKey: null, question: query, error: 'meeting_id_required' };
+    }
+    if (
+      request.source === 'meeting_search' &&
+      !ragManager.isMeetingProcessed(request.meetingId!) &&
+      !ragManager.isLiveIndexingActive(request.meetingId!)
+    ) {
+      return { started: false, generationId: null, streamKey: null, question: query, error: 'meeting_not_indexed' };
+    }
+
+    // Newest-wins per streamKey: a new query on the same key supersedes the
+    // previous one deterministically (the old abortPriorRAGQueriesOfClass).
+    const { generationId, controller } = bus.begin(surface, intent);
+    try {
+      const stream = request.source === 'meeting_search'
+        ? ragManager.queryMeeting(request.meetingId!, query, controller.signal)
+        : ragManager.queryGlobal(query, controller.signal);
+
+      for await (const chunk of stream) {
+        if (!bus.isCurrent(generationId, surface, intent)) break;
+        bus.emitToken({ generationId, surface, intent, text: chunk });
+      }
+
+      // A stale complete must not finalize a newer placeholder (the old
+      // `!abortController.signal.aborted` gate, expressed via the bus).
+      if (bus.isCurrent(generationId, surface, intent)) {
+        bus.emitDone({ generationId, surface, intent });
+      }
+      return { started: true, generationId, streamKey: `desktop:${intent}`, question: query };
+    } catch (error: any) {
+      if (error?.name !== 'AbortError' && bus.isCurrent(generationId, surface, intent)) {
+        const msg = error?.message || '';
+        if (msg.includes('NO_RELEVANT_CONTEXT') || msg.includes('NO_MEETING_EMBEDDINGS')) {
+          // Fallback to regular chat (mirrors the old { fallback: true }).
+          return { started: false, generationId: null, streamKey: null, question: query, error: 'no_relevant_context' };
+        }
+        bus.emitError({ generationId, surface, intent, error: msg || 'RAG query error' });
+        return { started: false, generationId, streamKey: `desktop:${intent}`, question: query, error: msg || 'rag_error' };
+      }
+      return { started: false, generationId: null, streamKey: null, question: query, error: 'aborted' };
+    } finally {
+      bus.end(generationId, surface, intent);
+    }
+  };
+
+  // ── UNIFIED PIPELINE (C4): the ONE entry point for every chat surface. ─────
+  // Manual chat reuses the migrated gemini-chat-stream pipeline (emitting
+  // through the bus); WTA-style surfaces route through the engine's unified
+  // dispatcher; meeting/global search get their runner in C5.
+  safeHandle('run-intelligence', async (event, requestPayload: any) => {
+    const { normalizeRequest } = require('./intelligence/unified/requestNormalizer') as typeof import('./intelligence/unified/requestNormalizer');
+    const request = normalizeRequest(requestPayload ?? {});
+    const intelligenceManager = appState.getIntelligenceManager();
+
+    // SECURITY (P0): validate image paths BEFORE any vision/LLM work — the
+    // same userData-scope check every deleted per-mode handler used to run.
+    if (request.imagePaths && request.imagePaths.length > 0) {
+      const { app } = require('electron');
+      const { validateImagePath } = require('./utils/curlUtils');
+      const userDataDir = app.getPath('userData');
+      for (const imagePath of request.imagePaths) {
+        const validation = validateImagePath(imagePath, userDataDir);
+        if (!validation.isValid) {
+          console.warn(
+            `[IPC] run-intelligence: invalid image path rejected: ${validation.reason}`,
+          );
+          return {
+            started: false,
+            generationId: null,
+            streamKey: null,
+            question: request.text ?? null,
+            error: `Invalid image path: ${validation.reason}`,
+          };
+        }
+      }
+    }
+
+    switch (request.source) {
+      case 'manual_chat': {
+        // The migrated manual-chat pipeline (identity + delivery on the bus).
+        try {
+          await _geminiChatStreamHandler(
+            { sender: event.sender },
+            request.text ?? '',
+            request.imagePaths,
+            request.context, // rolling-context derivation lives inside the handler when absent
+            { skipSystemPrompt: request.skipSystemPrompt === true },
+          );
+          return {
+            started: true,
+            generationId: null,
+            streamKey: 'desktop:chat',
+            question: request.text ?? null,
+          };
+        } catch (error: any) {
+          return {
+            started: false,
+            generationId: null,
+            streamKey: 'desktop:chat',
+            question: request.text ?? null,
+            error: error?.message || String(error),
+          };
+        }
+      }
+      case 'phone_mirror': {
+        // Phone commands enter through PhoneMirrorService, not this IPC.
+        return { started: false, generationId: null, streamKey: null, error: 'phone_mirror requests arrive via the phone service, not IPC' };
+      }
+      case 'what_to_say': {
+        // Keep the proven WTA button pipeline (image validation + screen
+        // understanding + engine dispatch) verbatim.
+        try {
+          const result = await _generateWhatToSayHandler(
+            event,
+            request.text,
+            request.imagePaths,
+            request.domContext || request.promptInstruction || request.domContextEnvelope
+              ? {
+                  ...(request.promptInstruction ? { promptInstruction: request.promptInstruction } : {}),
+                  ...(request.domContext ? { domContext: request.domContext } : {}),
+                  ...(request.domContextEnvelope !== undefined ? { domContextEnvelope: request.domContextEnvelope } : {}),
+                }
+              : undefined,
+          );
+          return {
+            started: true,
+            generationId: null,
+            streamKey: 'desktop:what_to_answer',
+            answer: result?.answer ?? null,
+            question: result?.question ?? request.text ?? null,
+            error: (result as any)?.error,
+            diagnostics: {
+              screenContextStatus: result?.screenContextStatus,
+              visionProviderUsed: result?.visionProviderUsed,
+              visionModelUsed: result?.visionModelUsed,
+              imageCount: result?.imageCount,
+              usedImageInput: result?.usedImageInput,
+            },
+          };
+        } catch (error: any) {
+          return { started: false, generationId: null, streamKey: null, error: error?.message || String(error) };
+        }
+      }
+      case 'meeting_search':
+      case 'global_search': {
+        return _searchRunner({
+          source: request.source,
+          text: request.text,
+          meetingId: request.meetingId,
+        });
+      }
+      default: {
+        // recap / clarify / follow_up / follow_up_questions / code_hint /
+        // brainstorm / auto_transcript → the engine's unified dispatcher.
+        return intelligenceManager.run(request);
+      }
     }
   });
 
@@ -9510,15 +9691,15 @@ export function initializeIpcHandlers(appState: AppState): void {
   // here to run Tesseract OCR before answering. That path is now removed from the runtime —
   // Natively answers from the image directly via a vision-capable provider. Do not re-introduce
   // OCR here unless a future explicit OCR-only mode is reintroduced.
-  safeHandle(
-    'generate-what-to-say',
-    async (
-      _,
-      question?: string,
-      imagePaths?: string[],
-      options?: { promptInstruction?: string; domContext?: string; domContextEnvelope?: unknown },
-    ) => {
-      return _tracked(async () => {
+  // Extracted so the unified `run-intelligence` entry (C4) reuses the exact
+  // validation + screen-understanding + engine dispatch of the WTA button.
+  const _generateWhatToSayHandler = async (
+    _event: any,
+    question?: string,
+    imagePaths?: string[],
+    options?: { promptInstruction?: string; domContext?: string; domContextEnvelope?: unknown },
+  ) => {
+    return _tracked(async () => {
       // Auto Answer V3: a manual What-to-Answer (hotkey, button, or an accepted
       // offer card) commits whatever Auto Answer was offering — retract the card.
       try { appState.onManualWhatToAnswer?.(); } catch { /* never block the answer */ }
@@ -9726,187 +9907,14 @@ export function initializeIpcHandlers(appState: AppState): void {
         };
       }
       });
-    },
-  );
+  };
+  // UNIFIED PIPELINE (C6): the generate-what-to-say channel is DELETED — the
+  // const remains as the what_to_say branch of `run-intelligence`.
 
-  safeHandle('generate-clarify', async () => {
-    return _tracked(async () => {
-    try {
-      const intelligenceManager = appState.getIntelligenceManager();
-      const clarification = await intelligenceManager.runClarify();
-      // If null returned without throwing, the engine already set mode to idle.
-      // We must still ensure the frontend un-sticks — emit an error so onIntelligenceError fires.
-      if (clarification === null) {
-        const win = appState.getMainWindow();
-        win?.webContents.send('intelligence-error', {
-          error:
-            'Could not generate a clarifying question. Try again after some audio context is available.',
-          mode: 'clarify',
-        });
-      } else {
-        try {
-          PhoneMirrorService.getInstance().publishAssistantMessage(
-            crypto.randomUUID(),
-            clarification,
-            'Clarify',
-          );
-        } catch (_) {}
-      }
-      return { clarification };
-    } catch (error: any) {
-      throw error;
-    }
-    }, (r: any) => !r || r.clarification === null || r.clarification === undefined);
-  });
-
-  // Shared helper: validate, then run images through the vision-first ImageOptimizer
-  // so downstream provider calls send compressed JPEG payloads instead of raw retina PNGs.
-  // Falls back to the original paths if optimization fails — image input is more important
-  // than payload size, so a Sharp failure must not block the request.
-  async function optimizeImagesForVision(
-    paths: string[],
-    handlerLabel: string,
-    profile: 'fast' | 'balanced' | 'technical' | 'best' = 'technical',
-  ): Promise<string[]> {
-    if (paths.length === 0) return paths;
-    try {
-      const { getImageOptimizer } = require('./services/screen/ImageOptimizer');
-      const optimizer = getImageOptimizer();
-      const optimized: string[] = [];
-      for (const p of paths) {
-        try {
-          const out = await optimizer.optimize(p, { profile, provider: 'openai', cacheKey: p });
-          optimized.push(out.path);
-        } catch (err: any) {
-          console.warn(
-            `[IPC] ${handlerLabel}: image optimization failed for ${p}, using original`,
-            { errorClass: err?.name },
-          );
-          optimized.push(p);
-        }
-      }
-      return optimized;
-    } catch {
-      return paths;
-    }
-  }
-
-  safeHandle('generate-code-hint', async (_, imagePaths?: string[], problemStatement?: string) => {
-    return _tracked(async () => {
-    try {
-      // If no explicit images were passed from the frontend, fall back to the
-      // screenshot queue so the AI can always "see" the user's screen.
-      const screenshotQueue = appState.getScreenshotQueue();
-      const resolvedImagePaths: string[] =
-        imagePaths && imagePaths.length > 0 ? imagePaths : screenshotQueue;
-
-      // SECURITY (P0): Validate image paths if provided from renderer
-      if (imagePaths && imagePaths.length > 0) {
-        const { app } = require('electron');
-        const { validateImagePath } = require('./utils/curlUtils');
-        const userDataDir = app.getPath('userData');
-
-        for (const imagePath of imagePaths) {
-          const validation = validateImagePath(imagePath, userDataDir);
-          if (!validation.isValid) {
-            console.warn(
-              `[IPC] generate-code-hint: invalid image path rejected: ${validation.reason}`,
-            );
-            return { error: `Invalid image path: ${validation.reason}`, hint: null };
-          }
-        }
-      }
-
-      console.log(
-        `[IPC] generate-code-hint: using ${resolvedImagePaths.length} image(s) (${imagePaths?.length ? 'explicit' : 'queue fallback'})`,
-      );
-
-      // VISION-FIRST: optimize the screenshot(s) with Sharp before they reach the LLM,
-      // using the 'technical' profile so code text stays sharp at 1536px.
-      const optimizedPaths = await optimizeImagesForVision(
-        resolvedImagePaths,
-        'generate-code-hint',
-        'technical',
-      );
-
-      const intelligenceManager = appState.getIntelligenceManager();
-      const hint = await intelligenceManager.runCodeHint(
-        optimizedPaths.length > 0 ? optimizedPaths : undefined,
-        problemStatement,
-      );
-      if (hint) {
-        try {
-          PhoneMirrorService.getInstance().publishAssistantMessage(
-            crypto.randomUUID(),
-            hint,
-            'Code Hint',
-          );
-        } catch (_) {}
-      }
-      return { hint };
-    } catch (error: any) {
-      throw error;
-    }
-    });
-  });
-
-  safeHandle('generate-brainstorm', async (_, imagePaths?: string[], problemStatement?: string) => {
-    return _tracked(async () => {
-    try {
-      // If no explicit images were passed from the frontend, fall back to the
-      // screenshot queue so the AI can always "see" the user's screen.
-      const screenshotQueue = appState.getScreenshotQueue();
-      const resolvedImagePaths: string[] =
-        imagePaths && imagePaths.length > 0 ? imagePaths : screenshotQueue;
-
-      // SECURITY (P0): Validate image paths if provided from renderer
-      if (imagePaths && imagePaths.length > 0) {
-        const { app } = require('electron');
-        const { validateImagePath } = require('./utils/curlUtils');
-        const userDataDir = app.getPath('userData');
-
-        for (const imagePath of imagePaths) {
-          const validation = validateImagePath(imagePath, userDataDir);
-          if (!validation.isValid) {
-            console.warn(
-              `[IPC] generate-brainstorm: invalid image path rejected: ${validation.reason}`,
-            );
-            return { error: `Invalid image path: ${validation.reason}`, script: null };
-          }
-        }
-      }
-
-      console.log(
-        `[IPC] generate-brainstorm: using ${resolvedImagePaths.length} image(s) (${imagePaths?.length ? 'explicit' : 'queue fallback'})`,
-      );
-
-      // VISION-FIRST: balanced profile (1280px) — brainstorm doesn't need code-sharp text.
-      const optimizedPaths = await optimizeImagesForVision(
-        resolvedImagePaths,
-        'generate-brainstorm',
-        'balanced',
-      );
-
-      const intelligenceManager = appState.getIntelligenceManager();
-      const script = await intelligenceManager.runBrainstorm(
-        optimizedPaths.length > 0 ? optimizedPaths : undefined,
-        problemStatement,
-      );
-      if (script) {
-        try {
-          PhoneMirrorService.getInstance().publishAssistantMessage(
-            crypto.randomUUID(),
-            script,
-            'Brainstorm',
-          );
-        } catch (_) {}
-      }
-      return { script };
-    } catch (error: any) {
-      throw error;
-    }
-    });
-  });
+  // UNIFIED PIPELINE (C6): generate-code-hint / generate-brainstorm /
+  // generate-follow-up / generate-recap / generate-follow-up-questions /
+  // submit-manual-question channels are DELETED — they route through
+  // `run-intelligence` (engine.run dispatcher) now.
 
   // Dynamic Action Button Mode (Recap vs Brainstorm)
   safeHandle('get-action-button-mode', () => {
@@ -9934,92 +9942,9 @@ export function initializeIpcHandlers(appState: AppState): void {
     return { success: true };
   });
 
-  // MODE 3: Follow-Up (Refinement)
-  safeHandle('generate-follow-up', async (_, intent: string, userRequest?: string) => {
-    return _tracked(async () => {
-    try {
-      const intelligenceManager = appState.getIntelligenceManager();
-      const refined = await intelligenceManager.runFollowUp(intent, userRequest);
-      if (refined) {
-        try {
-          PhoneMirrorService.getInstance().publishAssistantMessage(
-            crypto.randomUUID(),
-            refined,
-            'Follow Up',
-          );
-        } catch (_) {}
-      }
-      return { refined, intent };
-    } catch (error: any) {
-      throw error;
-    }
-    }, (r: any) => !r || r.refined === null || r.refined === undefined);
-  });
-
-  // MODE 4: Recap (Summary)
-  safeHandle('generate-recap', async () => {
-    return _tracked(async () => {
-    try {
-      const intelligenceManager = appState.getIntelligenceManager();
-      const summary = await intelligenceManager.runRecap();
-      if (summary) {
-        try {
-          PhoneMirrorService.getInstance().publishAssistantMessage(
-            crypto.randomUUID(),
-            summary,
-            'Recap',
-          );
-        } catch (_) {}
-      }
-      return { summary };
-    } catch (error: any) {
-      throw error;
-    }
-    }, (r: any) => !r || r.summary === null || r.summary === undefined);
-  });
-
-  // MODE 6: Follow-Up Questions
-  safeHandle('generate-follow-up-questions', async () => {
-    return _tracked(async () => {
-    try {
-      const intelligenceManager = appState.getIntelligenceManager();
-      const questions = await intelligenceManager.runFollowUpQuestions();
-      if (questions) {
-        try {
-          PhoneMirrorService.getInstance().publishAssistantMessage(
-            crypto.randomUUID(),
-            questions,
-            'Follow-Up Questions',
-          );
-        } catch (_) {}
-      }
-      return { questions };
-    } catch (error: any) {
-      throw error;
-    }
-    }, (r: any) => !r || r.questions === null || r.questions === undefined);
-  });
-
-  // MODE 5: Manual Answer (Fallback)
-  safeHandle('submit-manual-question', async (_, question: string) => {
-    try {
-      const intelligenceManager = appState.getIntelligenceManager();
-      const answer = await intelligenceManager.runManualAnswer(question);
-      if (answer) {
-        try {
-          PhoneMirrorService.getInstance().publishUserMessage(crypto.randomUUID(), question);
-          PhoneMirrorService.getInstance().publishAssistantMessage(
-            crypto.randomUUID(),
-            answer,
-            'Answer',
-          );
-        } catch (_) {}
-      }
-      return { answer, question };
-    } catch (error: any) {
-      throw error;
-    }
-  });
+  // UNIFIED PIPELINE (C6): generate-follow-up / generate-recap /
+  // generate-follow-up-questions / submit-manual-question channels are
+  // DELETED — they route through `run-intelligence` now.
 
   // Get current intelligence context
   safeHandle('get-intelligence-context', async () => {
@@ -10333,234 +10258,11 @@ export function initializeIpcHandlers(appState: AppState): void {
   // RAG (Retrieval-Augmented Generation) Handlers
   // ==========================================
 
-  // Store active query abort controllers for cancellation
-  const activeRAGQueries = new Map<string, AbortController>();
-
-  // Phase 6 (answer-pipeline-rebuild) concurrency fix: a NEW query of the same
-  // class (same meetingId, or live, or global) starting while a PRIOR one of
-  // that class is still streaming previously had no backend-side supersession
-  // at all — only the renderer finalized its own stale message bubble
-  // (forceFinalizeStaleRagStream in NativelyInterface.tsx), while the old
-  // backend generator kept running and kept emitting rag:stream-chunk events.
-  // Those late chunks then got appended into whatever text buffer was current
-  // by the time they arrived — corrupting the NEW answer with leftover tokens
-  // from the abandoned one. rag:cancel-query exists but is never invoked by
-  // any renderer call site, and (by its own pre-existing comment) can't even
-  // reach `live-` keys. Fixed at the source: abort any still-active query
-  // matching this class BEFORE minting a new one, mirroring the same
-  // "abort the old, start the new" pattern ipcHandlers.ts's manual-chat
-  // stream supersession (_chatStreamsBySender) already uses.
-  function abortPriorRAGQueriesOfClass(matchesClass: (key: string) => boolean): void {
-    for (const [key, controller] of activeRAGQueries) {
-      if (matchesClass(key)) {
-        try { controller.abort(); } catch { /* noop */ }
-        activeRAGQueries.delete(key);
-      }
-    }
-  }
-
-  // Query meeting with RAG (meeting-scoped)
-  safeHandle(
-    'rag:query-meeting',
-    async (event, { meetingId, query }: { meetingId: string; query: string }) => {
-      const ragManager = appState.getRAGManager();
-
-      if (!ragManager || !ragManager.isReady()) {
-        // Fallback to regular chat if RAG not available
-        console.log('[RAG] Not ready, falling back to regular chat');
-        return { fallback: true };
-      }
-
-      // For completed meetings, check if post-meeting RAG is processed.
-      // For live meetings with JIT indexing, let RAGManager.queryMeeting() decide.
-      if (
-        !ragManager.isMeetingProcessed(meetingId) &&
-        !ragManager.isLiveIndexingActive(meetingId)
-      ) {
-        console.log(
-          `[RAG] Meeting ${meetingId} not processed and no JIT indexing, falling back to regular chat`,
-        );
-        return { fallback: true };
-      }
-
-      abortPriorRAGQueriesOfClass((key) => key.startsWith(`meeting-${meetingId}-`));
-      const abortController = new AbortController();
-      const queryKey = `meeting-${meetingId}-${crypto.randomUUID()}`;
-      activeRAGQueries.set(queryKey, abortController);
-
-      try {
-        const stream = ragManager.queryMeeting(meetingId, query, abortController.signal);
-
-        for await (const chunk of stream) {
-          if (abortController.signal.aborted) break;
-          event.sender.send('rag:stream-chunk', { meetingId, chunk });
-        }
-
-        // Code-review finding (2026-07-28): RAGManager's generator `break`s
-        // (returns normally) rather than throwing when aborted, so this line
-        // was previously reached unconditionally even for a query that was
-        // just superseded by abortPriorRAGQueriesOfClass above. The renderer
-        // has no per-query correlation for rag:stream-complete (it acts on
-        // "whatever is currently the last streaming message"), so a stale
-        // complete event for the OLD query could finalize the NEW,
-        // still-empty placeholder as done — silently swallowing the new
-        // answer. Gate on the same abort check the chunk loop already uses.
-        if (!abortController.signal.aborted) {
-          event.sender.send('rag:stream-complete', { meetingId });
-        }
-        return { success: true };
-      } catch (error: any) {
-        if (error.name !== 'AbortError') {
-          const msg = error.message || '';
-          // If specific RAG failures, return fallback to use transcript window
-          if (msg.includes('NO_RELEVANT_CONTEXT') || msg.includes('NO_MEETING_EMBEDDINGS')) {
-            console.log(`[RAG] Query failed with '${msg}', falling back to regular chat`);
-            return { fallback: true };
-          }
-
-          console.error('[RAG] Query error:', error);
-          event.sender.send('rag:stream-error', { meetingId, error: msg });
-        }
-        return { success: false, error: error.message };
-      } finally {
-        activeRAGQueries.delete(queryKey);
-      }
-    },
-  );
-
-  // Query live meeting with JIT RAG
-  safeHandle('rag:query-live', async (event, { query }: { query: string }) => {
-    const ragManager = appState.getRAGManager();
-
-    if (!ragManager || !ragManager.isReady()) {
-      return { fallback: true };
-    }
-
-    // Check if JIT indexing is active AND has at least one embedded chunk.
-    // isLiveIndexingActive() only tells us the indexer is running — it may have
-    // received segments but not yet produced queryable embeddings. Calling
-    // queryMeeting() with zero chunks throws NO_MEETING_EMBEDDINGS, adding
-    // ~300ms of wasted try/catch overhead before the fallback fires.
-    if (!ragManager.isLiveIndexingActive('live-meeting-current') || !ragManager.hasLiveChunks()) {
-      return { fallback: true };
-    }
-
-    // Auto-supersede any still-active LIVE query before starting this one —
-    // see abortPriorRAGQueriesOfClass's doc comment. rag:cancel-query can't
-    // reach `live-` keys (its own comment below), so this is the ONLY
-    // supersession path for this class; without it a rapid-fire follow-up
-    // question mid-stream would leave the old generator running forever,
-    // its late chunks bleeding into whatever answer is on screen by then.
-    abortPriorRAGQueriesOfClass((key) => key.startsWith('live-'));
-    const abortController = new AbortController();
-    // Date.now() alone collides when two queries fire in the same ms — the
-    // second `set` would overwrite the first AbortController, the first
-    // stream would become un-cancellable, and the `finally` `delete` would
-    // evict the wrong entry. UUID guarantees uniqueness.
-    // (Note: rag:cancel-query only matches `meeting-` and `global` prefixes,
-    // so `live-` keys aren't cancellable through THAT path — mitigated above
-    // by auto-superseding on the next live query instead.)
-    const queryKey = `live-${crypto.randomUUID()}`;
-    activeRAGQueries.set(queryKey, abortController);
-
-    try {
-      const stream = ragManager.queryMeeting('live-meeting-current', query, abortController.signal);
-
-      for await (const chunk of stream) {
-        if (abortController.signal.aborted) break;
-        event.sender.send('rag:stream-chunk', { live: true, chunk });
-      }
-
-      // See the meeting-scoped handler's identical comment above — a stale
-      // complete event for a superseded live query would otherwise finalize
-      // the NEW placeholder as done before its first real chunk arrives.
-      if (!abortController.signal.aborted) {
-        event.sender.send('rag:stream-complete', { live: true });
-      }
-      return { success: true };
-    } catch (error: any) {
-      if (error.name !== 'AbortError') {
-        const msg = error.message || '';
-        // If JIT RAG failed (no embeddings yet, no relevant context), fallback to regular chat
-        if (msg.includes('NO_RELEVANT_CONTEXT') || msg.includes('NO_MEETING_EMBEDDINGS')) {
-          console.log(`[RAG] JIT query failed with '${msg}', falling back to regular live chat`);
-          return { fallback: true };
-        }
-        console.error('[RAG] Live query error:', error);
-        // No rag:stream-error here (F-118): the {success:false} return below
-        // makes the renderer fall through to regular live chat, so a terminal
-        // error event would DOUBLE-SIGNAL — the error handler stapled
-        // "[RAG Error: …]" into the bubble and cleared streaming state, and
-        // the fallback then streamed fresh tokens into that torn-down row.
-        // For the live class the fallback owns the UX; the meeting/global
-        // handlers keep their terminal events because nothing falls back.
-        // Live-reproduced in scripts/audit/F-118-repro.mjs.
-      }
-      return { success: false, error: error.message };
-    } finally {
-      activeRAGQueries.delete(queryKey);
-    }
-  });
-
-  // Query global (cross-meeting search)
-  safeHandle('rag:query-global', async (event, { query }: { query: string }) => {
-    const ragManager = appState.getRAGManager();
-
-    if (!ragManager || !ragManager.isReady()) {
-      return { fallback: true };
-    }
-
-    abortPriorRAGQueriesOfClass((key) => key.startsWith('global-'));
-    const abortController = new AbortController();
-    // See live-${...} comment above for why Date.now() alone is unsafe.
-    const queryKey = `global-${crypto.randomUUID()}`;
-    activeRAGQueries.set(queryKey, abortController);
-
-    try {
-      const stream = ragManager.queryGlobal(query, abortController.signal);
-
-      for await (const chunk of stream) {
-        if (abortController.signal.aborted) break;
-        event.sender.send('rag:stream-chunk', { global: true, chunk });
-      }
-
-      // See the meeting-scoped handler's identical comment above.
-      if (!abortController.signal.aborted) {
-        event.sender.send('rag:stream-complete', { global: true });
-      }
-      return { success: true };
-    } catch (error: any) {
-      if (error.name !== 'AbortError') {
-        event.sender.send('rag:stream-error', { global: true, error: error.message });
-      }
-      return { success: false, error: error.message };
-    } finally {
-      activeRAGQueries.delete(queryKey);
-    }
-  });
-
-  // Cancel active RAG query
-  safeHandle(
-    'rag:cancel-query',
-    async (_, { meetingId, global }: { meetingId?: string; global?: boolean }) => {
-      if (!global && !meetingId) {
-        return { success: false, error: 'meetingId is required' };
-      }
-
-      const queryKey = global ? 'global' : `meeting-${meetingId}`;
-
-      // Cancel any matching key
-      for (const [key, controller] of activeRAGQueries) {
-        const matchesQuery = global ? key.startsWith('global-') : key.startsWith(`${queryKey}-`);
-        if (matchesQuery) {
-          controller.abort();
-          activeRAGQueries.delete(key);
-        }
-      }
-
-      return { success: true };
-    },
-  );
+  // UNIFIED PIPELINE (C5): the rag:query-meeting / rag:query-live /
+  // rag:query-global answering handlers and their per-class abort registry
+  // are DELETED — meeting/global search and the live JIT preflight now run
+  // inside `run-intelligence` (_searchRunner and the manual-chat preflight),
+  // emitting through IntelligenceStreamBus with per-streamKey supersession.
 
   // Check if meeting has RAG embeddings
   safeHandle('rag:is-meeting-processed', async (_, meetingId: string) => {
@@ -11781,6 +11483,9 @@ export function initializeIpcHandlers(appState: AppState): void {
       {
         const { abortAndInvalidateChatStreams } = require('./services/chatStreamRegistry') as typeof import('./services/chatStreamRegistry');
         abortAndInvalidateChatStreams(_chatStreamsBySender);
+        // UNIFIED PIPELINE (C2c): invalidate the bus entries too, so the
+        // bus-level delivery (and the renderer bridge) is equally deterministic.
+        appState.getIntelligenceStreamBus().abortAll();
       }
       // BUG-MODE-BLEEDING fix: clear mode-specific session context BEFORE switching modes
       // so Interview mode resume/JD context doesn't bleed into the new mode's responses.
@@ -12665,11 +12370,14 @@ export function initializeIpcHandlers(appState: AppState): void {
       // but without requiring a renderer event sender. Tokens are pushed directly to
       // the phone over WebSocket; desktop renderer also receives them so both views
       // stay in sync.
-      // myStreamId is the globally-unique correlation id (shared counter with desktop
-      // chat). myPhoneId is the phone-only supersession marker — a later phone message
-      // bumps it, a desktop message does NOT, so cross-surface false supersession can't
-      // happen (audit RC-1 / finding #2).
-      const myStreamId = ++_chatStreamId;
+      // myStreamId is the globally-unique correlation id (shared bus counter with
+      // desktop chat). myPhoneId is the phone-only supersession marker — a later
+      // phone message bumps it, a desktop message does NOT, so cross-surface false
+      // supersession can't happen (audit RC-1 / finding #2). The bus key
+      // 'phone:chat' implements the same per-surface newest-wins.
+      const phoneController = new AbortController();
+      const streamBus = appState.getIntelligenceStreamBus();
+      const myStreamId = streamBus.begin('phone', 'chat', { controller: phoneController }).generationId;
       const myPhoneId = ++_phoneChatLatestId;
       // Symmetric strip on the phone-mirror chat path (defense-in-depth; see
       // stripEmbeddedAnswerContract for the contract-block leak rationale).
@@ -12740,8 +12448,8 @@ export function initializeIpcHandlers(appState: AppState): void {
       try {
         const llmHelper = appState.processingHelper.getLLMHelper();
         // AbortController so the live-deadline driver can cancel a stalled provider
-        // request (not just stop emitting) — mirrors the desktop chat path.
-        const phoneController = new AbortController();
+        // request (not just stop emitting) — mirrors the desktop chat path. The
+        // controller was created above and registered with the bus (phone:chat).
         // Compute the same routing decision the desktop gemini-chat-stream uses
         // (ipcHandlers.ts ~959) so the phone-chat path applies the active custom
         // mode's voice + retrieved product material just like the desktop surface.
@@ -12846,8 +12554,8 @@ export function initializeIpcHandlers(appState: AppState): void {
             const clarify = buildSourceSwitchClarification(_pOwn.owner, _pExplicitSwitch);
             try { phoneMirror.publishToken(String(myStreamId), clarify); } catch (_) {}
             try { phoneMirror.publishDone(String(myStreamId), clarify); } catch (_) {}
-            win?.webContents.send('gemini-stream-token', clarify, { streamId: myStreamId, source: 'phone' });
-            win?.webContents.send('gemini-stream-done', { streamId: myStreamId, source: 'phone' });
+            streamBus.emitToken({ generationId: myStreamId, surface: 'phone', intent: 'chat', text: clarify });
+            streamBus.emitDone({ generationId: myStreamId, surface: 'phone', intent: 'chat', finalText: clarify });
             intelligenceManager.addAssistantMessage(clarify, undefined, 'phone_mirror');
             intelligenceManager.logUsage('chat', message, clarify);
             if (isIntelligenceFlagEnabled('trace')) {
@@ -12895,7 +12603,7 @@ export function initializeIpcHandlers(appState: AppState): void {
             try { phoneMirror.publishToken(String(myStreamId), token); } catch (_) {}
             // streamId lets the desktop renderer drop tokens from a superseded
             // chat stream (audit finding #3); backward-compatible optional arg.
-            win?.webContents.send('gemini-stream-token', token, { streamId: myStreamId, source: 'phone' });
+            streamBus.emitToken({ generationId: myStreamId, surface: 'phone', intent: 'chat', text: token });
             full += token;
           },
           onCleanup: () => { try { phoneController.abort(); } catch { /* noop */ } },
@@ -12905,7 +12613,8 @@ export function initializeIpcHandlers(appState: AppState): void {
           try {
             phoneMirror.publishDone(String(myStreamId), full);
           } catch (_) {}
-          win?.webContents.send('gemini-stream-done', { streamId: myStreamId, source: 'phone' });
+          streamBus.emitDone({ generationId: myStreamId, surface: 'phone', intent: 'chat', finalText: full });
+          streamBus.end(myStreamId, 'phone', 'chat');
           // Document-grounded: block a greeting/empty answer from SessionTracker
           // so it can't contaminate the next turn (same backstop as the desktop
           // path, minus the regenerate — the phone surface keeps it simple).
@@ -12932,7 +12641,8 @@ export function initializeIpcHandlers(appState: AppState): void {
           // Tagged so the desktop renderer can tell this is a PHONE stream's
           // failure: untagged, it defaced whatever desktop bubble happened to
           // be streaming ("[Error: …]" appended to an unrelated answer).
-          win?.webContents.send('gemini-stream-error', err?.message || 'stream error', { streamId: null, source: 'phone-mirror' });
+          streamBus.emitError({ generationId: myStreamId, surface: 'phone', intent: 'chat', error: err?.message || 'stream error' });
+          streamBus.end(myStreamId, 'phone', 'chat');
         }
       }
     } else if (cmd.type === 'screenshot') {

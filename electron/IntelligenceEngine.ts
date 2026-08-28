@@ -56,6 +56,8 @@ import * as contextOsStatic from './intelligence/context-os';
 import { isIntelligenceFlagEnabled } from './intelligence/intelligenceFlags';
 import { applyAnswerContract } from './intelligence/OutputShapeNormalizer';
 import { LiveTranscriptBrain } from './intelligence/LiveTranscriptBrain';
+import type { IntelligenceRequest, UnifiedRunResult } from './intelligence/unified';
+import { streamIntentFor } from './intelligence/unified/requestNormalizer';
 import { recordAttribution } from './intelligence/IntelligenceAttribution';
 // `getKnowledgeOrchestrator()` is declared `: any`. The premium ContextAssembler
 // type it used to import is gone (premium/ removed), so the orchestrator result
@@ -234,6 +236,14 @@ export class IntelligenceEngine extends EventEmitter {
      * RAG import — it only calls what it is handed.
      */
     private ragRetrieverProvider: (() => unknown) | null = null;
+
+    // ── UNIFIED PIPELINE (C2) — injected runners for the surfaces that live
+    // outside this class today (manual chat gates in ipcHandlers, meeting/global
+    // search over RAGManager). IntelligenceManager wires these once the services
+    // exist; the engine itself keeps no RAG/PhoneMirror import. Same provider
+    // pattern as ragRetrieverProvider above.
+    private manualChatRunnerProvider: (() => ((request: IntelligenceRequest) => Promise<UnifiedRunResult>) | null) | null = null;
+    private searchRunnerProvider: (() => ((request: IntelligenceRequest) => Promise<UnifiedRunResult>) | null) | null = null;
 
     private lastTranscriptTime: number = 0;
     private lastTriggerTime: number = 0;
@@ -866,6 +876,151 @@ export class IntelligenceEngine extends EventEmitter {
         this.whatToAnswerCancellationToken.abort(reason);
         this.automaticGenerationId = null;
         return true;
+    }
+
+    // ── UNIFIED PIPELINE — the ONE entry point ────────────────────────────────
+    //
+    // Every intelligence surface enters here. WTA-style sources map onto the
+    // existing run methods (same planner, same evidence, same stream — only the
+    // contract differs); manual chat / phone mirror / meeting & global search
+    // delegate to the injected runners (C2c/C4/C5) so the whole product shares
+    // one request shape and one delivery path.
+
+    async run(request: IntelligenceRequest): Promise<UnifiedRunResult> {
+        const base: UnifiedRunResult = {
+            started: true,
+            generationId: null,
+            streamKey: null,
+            question: request.text ?? null,
+        };
+        try {
+            switch (request.source) {
+                case 'manual_chat':
+                case 'phone_mirror': {
+                    const runner = this.manualChatRunnerProvider?.() ?? null;
+                    if (!runner) {
+                        return { ...base, started: false, error: 'unified manual-chat runner is not wired yet' };
+                    }
+                    return runner(request);
+                }
+                case 'meeting_search':
+                case 'global_search': {
+                    const runner = this.searchRunnerProvider?.() ?? null;
+                    if (!runner) {
+                        return { ...base, started: false, error: 'unified search runner is not wired yet' };
+                    }
+                    return runner(request);
+                }
+                case 'what_to_say': {
+                    const answer = await this.runWhatShouldISay(
+                        request.text,
+                        request.confidence ?? 0.8,
+                        request.imagePaths,
+                        {
+                            // A manual button/hotkey press is explicit user intent:
+                            // never throttled by the auto-trigger cooldown, and
+                            // always fresh (no speculative Jaccard reuse).
+                            skipCooldown: true,
+                            forceFresh: true,
+                            screenContext: request.screenContext,
+                            promptInstruction: request.promptInstruction,
+                            activeSkill: request.skill,
+                            domContext: request.domContext,
+                        },
+                    );
+                    return {
+                        ...base,
+                        generationId: this.currentGenerationId,
+                        streamKey: `${request.surface}:${streamIntentFor(request)}`,
+                        answer,
+                    };
+                }
+                case 'auto_transcript': {
+                    await this.runAutoAnswer(
+                        {
+                            id: request.questionId ?? `auto-${Date.now()}`,
+                            text: request.text ?? '',
+                            confidence: request.confidence ?? 0,
+                            answerability: request.answerability ?? 0,
+                            dialogueAct: request.dialogueAct ?? 'unknown',
+                            isFollowUp: request.isFollowUp ?? false,
+                            endpointSource: request.endpointSource,
+                            candidateGeneration: request.candidateGeneration ?? 0,
+                        },
+                        {
+                            reuseSpeculative: request.reuseSpeculative ?? false,
+                            context: this.session.getFormattedContext(120),
+                        },
+                    );
+                    return {
+                        ...base,
+                        generationId: this.currentGenerationId,
+                        streamKey: `${request.surface}:${streamIntentFor(request)}`,
+                    };
+                }
+                case 'recap': {
+                    const answer = await this.runRecap();
+                    return {
+                        ...base,
+                        generationId: this.currentGenerationId,
+                        streamKey: `${request.surface}:${streamIntentFor(request)}`,
+                        answer,
+                    };
+                }
+                case 'clarify': {
+                    const answer = await this.runClarify();
+                    return {
+                        ...base,
+                        generationId: this.currentGenerationId,
+                        streamKey: `${request.surface}:${streamIntentFor(request)}`,
+                        answer,
+                    };
+                }
+                case 'follow_up': {
+                    const answer = await this.runFollowUp(request.followUpIntent ?? 'rephrase', request.text);
+                    return {
+                        ...base,
+                        generationId: this.currentGenerationId,
+                        streamKey: `${request.surface}:${streamIntentFor(request)}`,
+                        answer,
+                    };
+                }
+                case 'follow_up_questions': {
+                    const answer = await this.runFollowUpQuestions();
+                    return {
+                        ...base,
+                        generationId: this.currentGenerationId,
+                        streamKey: `${request.surface}:${streamIntentFor(request)}`,
+                        answer,
+                    };
+                }
+                case 'code_hint': {
+                    const answer = await this.runCodeHint(request.imagePaths, request.text);
+                    return {
+                        ...base,
+                        generationId: this.currentGenerationId,
+                        streamKey: `${request.surface}:${streamIntentFor(request)}`,
+                        answer,
+                    };
+                }
+                case 'brainstorm': {
+                    const answer = await this.runBrainstorm(request.imagePaths, request.text);
+                    return {
+                        ...base,
+                        generationId: this.currentGenerationId,
+                        streamKey: `${request.surface}:${streamIntentFor(request)}`,
+                        answer,
+                    };
+                }
+                default: {
+                    const source: unknown = (request as { source?: unknown }).source;
+                    return { ...base, started: false, error: `unsupported intelligence source: ${String(source)}` };
+                }
+            }
+        } catch (error) {
+            const message = error instanceof Error ? error.message : String(error);
+            return { ...base, started: false, error: message };
+        }
     }
 
     private async planSuggestionTrigger(trigger: SuggestionTrigger): Promise<PlannerDecision> {
@@ -5099,6 +5254,21 @@ export class IntelligenceEngine extends EventEmitter {
     /** Injected by IntelligenceManager once the RAG stack is up. */
     setRagRetrieverProvider(provider: (() => unknown) | null): void {
         this.ragRetrieverProvider = provider;
+    }
+
+    /** Latest minted generation id — used by main.ts to tag id-less legacy events. */
+    getCurrentGenerationId(): number {
+        return this.currentGenerationId;
+    }
+
+    /** Unified manual-chat runner (manual_chat / phone_mirror surfaces). */
+    setManualChatRunnerProvider(provider: (() => ((request: IntelligenceRequest) => Promise<UnifiedRunResult>) | null) | null): void {
+        this.manualChatRunnerProvider = provider;
+    }
+
+    /** Unified search runner (meeting_search / global_search surfaces). */
+    setSearchRunnerProvider(provider: (() => ((request: IntelligenceRequest) => Promise<UnifiedRunResult>) | null) | null): void {
+        this.searchRunnerProvider = provider;
     }
 
     // ── CONTEXT INTELLIGENCE V3 — shared adoption plumbing (Phase 6) ─────────

@@ -349,18 +349,22 @@ describe('#3 — live tokens carry the generationId end-to-end', () => {
     assert.ok(emits.length >= 3, `at least the stream + 2 flush emits must carry generationId (found ${emits.length})`);
   });
 
-  test('main forwards generationId per item on the token batch', () => {
+  test('main forwards generationId end-to-end on the unified stream', () => {
     const src = read('../../main.ts');
     assert.match(src, /on\('suggested_answer_token', \(token: string, question: string, confidence: number, generationId\?: number\)/,
       'the main listener must accept generationId');
-    assert.match(src, /queueBatch\('suggested_answer', \{ token, question, confidence, generationId \}\)/,
-      'the batch item must carry generationId');
+    assert.match(src, /unifiedToken\('what_to_answer', token, generationId\)/,
+      'the unified token must carry generationId');
   });
 
-  test('renderer drops superseded live batches via resolveLiveAnswerBatch', () => {
+  test('renderer drops superseded live batches via the unified stream guard', () => {
+    // UNIFIED PIPELINE (C3): resolveLiveAnswerBatch was folded into the
+    // per-streamKey IntelligenceStreamGuard — the what_to_answer token path
+    // resolves every event through the same guard and drops stale generations.
     const src = read('../../../src/components/NativelyInterface.tsx');
-    assert.match(src, /resolveLiveAnswerBatch/, 'renderer must use the live-answer batch guard');
-    assert.match(src, /liveAnswerGenIdRef/, 'renderer must track an active live-answer generation id');
-    assert.match(src, /\(it as any\)\.generationId/, 'the guard must read the per-item generationId');
+    assert.match(src, /unifiedGuardRef\.current\.resolve\(ev\)/, 'renderer must resolve every event through the unified guard');
+    assert.match(src, /queueToken\('what_to_answer', ev\.text \?\? ''\)/, 'accepted what_to_answer tokens must enter the queue');
+    const guardSrc = read('../../../src/lib/intelligenceStreamGuard.mjs');
+    assert.match(guardSrc, /generationId/, 'the guard must read the per-event generationId');
   });
 });

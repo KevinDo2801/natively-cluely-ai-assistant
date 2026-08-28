@@ -14,7 +14,20 @@ export function sliceSafeHandleBlock(source, channel) {
   const searchFrom = start + startMatch[0].length;
   const nextRel = source.slice(searchFrom).search(/safeHandle\s*\(\s*['"]/);
   const end = nextRel === -1 ? source.length : searchFrom + nextRel;
-  return source.slice(start, end);
+  const block = source.slice(start, end);
+  // UNIFIED PIPELINE (C4): some handlers are now extracted as
+  //   const _<name>Handler = async (...) => { ... };
+  //   safeHandle('<channel>', _<name>Handler);
+  // The safeHandle block is then a one-liner — return the CONST body instead
+  // so source-assert tests keep asserting the actual implementation.
+  if (!/async\s*\(/.test(block)) {
+    const constMatches = source.slice(0, start).match(/const\s+_\w+Handler\s*=\s*async\s*\(/g);
+    if (constMatches && constMatches.length > 0) {
+      const constStart = source.lastIndexOf(constMatches[constMatches.length - 1], start);
+      if (constStart >= 0) return source.slice(constStart, end);
+    }
+  }
+  return block;
 }
 
 export function safeHandlePattern(channel) {

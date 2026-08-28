@@ -89,18 +89,18 @@ describe('#7 main-side partial transcript throttle (finals pass through)', () =>
   });
 });
 
-describe('#3 stream id is emitted on the wire (backward-compatible 2nd arg)', () => {
+describe('#3 stream id is emitted on the wire (UNIFIED: bus generationId doubles as streamId)', () => {
   const src = read('../../ipcHandlers.ts');
-  test('chat tokens carry { streamId }', () => {
-    assert.match(src, /send\('gemini-stream-token',\s*visible,\s*\{\s*streamId:\s*myStreamId\s*\}\)/,
-      'desktop sendChunk must include streamId');
+  test('chat tokens carry { streamId } (as generationId through the bus)', () => {
+    assert.match(src, /streamBus\.emitToken\(\{\s*generationId:\s*myStreamId,\s*surface:\s*'desktop',\s*intent:\s*'chat',\s*text:\s*visible\s*\}/,
+      'desktop sendChunk must emit through the bus with generationId');
   });
-  test('phone tokens carry { streamId }', () => {
-    // F-303: the phone payload also carries `source: 'phone'` so the renderer
-    // can scope supersession to a surface. The invariant this test protects is
-    // that phone tokens carry a streamId — assert that without pinning the
-    // payload to EXACTLY one field.
-    assert.match(src, /send\('gemini-stream-token',\s*token,\s*\{\s*streamId:\s*myStreamId\b/,
-      'phone onToken must include streamId');
+  test('phone tokens carry { streamId } (as generationId through the bus)', () => {
+    // F-303: the phone emit keeps surface 'phone' so the renderer can scope
+    // supersession to a surface. The invariant this test protects is that phone
+    // tokens carry a generationId — assert that without pinning the payload to
+    // EXACTLY one field.
+    assert.match(src, /streamBus\.emitToken\(\{\s*generationId:\s*myStreamId,\s*surface:\s*'phone',\s*intent:\s*'chat',\s*text:\s*token\s*\}/,
+      'phone onToken must emit through the bus with generationId');
   });
 });

@@ -232,37 +232,37 @@ test('gemini-chat-stream handler supersedes only the current sender and passes s
     );
 });
 
-test('gemini-chat-stream-stop handler aborts only the requesting sender stream', () => {
-    const stopRegPattern = /safeOn\s*\(\s*['"]gemini-chat-stream-stop['"]\s*,/;
+test('intelligence-stream-stop handler aborts only the requesting sender stream', () => {
+    const stopRegPattern = /safeOn\s*\(\s*['"]intelligence-stream-stop['"]\s*,/;
     assert.ok(
         stopRegPattern.test(ipcHandlersSrc),
-        "BUG: ipcMain.on('gemini-chat-stream-stop', ...) must be registered so the renderer's cancelChatStream can reach the main process.",
+        "BUG: ipcMain.on('intelligence-stream-stop', ...) must be registered so the renderer's cancelChatStream can reach the main process.",
     );
 
     const stopHandlerBody = extractBalancedBody(
         ipcHandlersSrc,
         stopRegPattern,
-        "gemini-chat-stream-stop handler",
+        "intelligence-stream-stop handler",
     );
     assert.ok(
         /_chatStreamsBySender\.get\s*\(\s*senderId\s*\)/.test(stopHandlerBody),
-        'BUG: gemini-chat-stream-stop must look up the stream for the captured senderId only.',
+        'BUG: intelligence-stream-stop must look up the stream for the captured senderId only.',
     );
     assert.ok(
         /stream\.controller\.abort\s*\(\s*\)/.test(stopHandlerBody),
-        'BUG: gemini-chat-stream-stop handler must abort the sender-owned controller.',
+        'BUG: intelligence-stream-stop handler must abort the sender-owned controller.',
     );
     assert.ok(
         /const\s+senderId\s*=\s*event\.sender\.id/.test(stopHandlerBody),
-        'BUG: gemini-chat-stream-stop must capture event.sender.id before cancelling.',
+        'BUG: intelligence-stream-stop must capture event.sender.id before cancelling.',
     );
     assert.ok(
         /_chatStreamsBySender\.delete\s*\(\s*senderId\s*\)/.test(stopHandlerBody),
-        'BUG: gemini-chat-stream-stop handler must remove only the sender-owned stream entry.',
+        'BUG: intelligence-stream-stop handler must remove only the sender-owned stream entry.',
     );
     assert.ok(
         !/_chatStreamsBySender\.clear\s*\(/.test(stopHandlerBody),
-        'BUG: gemini-chat-stream-stop must not clear streams owned by other renderers.',
+        'BUG: intelligence-stream-stop must not clear streams owned by other renderers.',
     );
 });
 
@@ -270,16 +270,16 @@ test('gemini-chat-stream-stop handler aborts only the requesting sender stream',
 // preload.ts — cancelChatStream binding.
 // ---------------------------------------------------------------------------
 
-test('preload exposes cancelChatStream mapped to ipcRenderer.send("gemini-chat-stream-stop")', () => {
+test('preload exposes cancelChatStream mapped to ipcRenderer.send("intelligence-stream-stop")', () => {
     // The binding must use .send (not .invoke) because the main-side handler
     // is registered with ipcMain.on, not ipcMain.handle / safeHandle.
     const cancelBindingPattern =
-        /cancelChatStream\s*:\s*\(\s*\)\s*=>\s*\{[\s\S]*?ipcRenderer\.send\s*\(\s*['"]gemini-chat-stream-stop['"]\s*\)/;
+        /cancelChatStream\s*:\s*\(\s*\)\s*=>\s*\{[\s\S]*?ipcRenderer\.send\s*\(\s*['"]intelligence-stream-stop['"]\s*\)/;
     assert.ok(
         cancelBindingPattern.test(preloadSrc),
-        "BUG: preload.ts must expose cancelChatStream as () => ipcRenderer.send('gemini-chat-stream-stop'). " +
+        "BUG: preload.ts must expose cancelChatStream as () => ipcRenderer.send('intelligence-stream-stop'). " +
         'Using ipcRenderer.invoke would deadlock the renderer (no main-side handle), and any other ' +
-        'channel name would silently miss the gemini-chat-stream-stop handler.',
+        'channel name would silently miss the intelligence-stream-stop handler.',
     );
 });
 

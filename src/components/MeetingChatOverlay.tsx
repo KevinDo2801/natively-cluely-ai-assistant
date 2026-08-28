@@ -1,5 +1,6 @@
 import React, { useState, useEffect, useRef, useCallback } from 'react';
 import { useStreamBuffer } from '../hooks/useStreamBuffer';
+import { IntelligenceStreamGuard } from '../lib/intelligenceStreamGuard.mjs';
 import { X, Copy, Check } from 'lucide-react';
 import { motion, AnimatePresence } from 'framer-motion';
 import { genMessageId } from '../utils/messageId';
@@ -337,75 +338,75 @@ const MeetingChatOverlay: React.FC<MeetingChatOverlayProps> = ({
                 isStreaming: true
             }]);
 
-            // Set up RAG streaming listeners (RAF-batched to avoid per-token re-renders)
+            // Set up the unified stream subscription (RAF-batched to avoid
+            // per-token re-renders). UNIFIED PIPELINE (C5): the old F-122 tag
+            // filter is replaced by intent routing + a per-streamKey guard.
             streamBuffer.reset();
-            // F-122: see GlobalChatOverlay — the rag:stream-* channels are shared
-            // by three scopes and main tags every payload, but no consumer read
-            // the tag. Accept only this meeting's stream.
-            const isThisMeeting = (d: any) =>
-                d?.global !== true && d?.live !== true
-                && (d?.meetingId == null || d.meetingId === meetingContext?.id);
-            const tokenCleanup = window.electronAPI?.onRAGStreamChunk((data: { chunk: string }) => {
-                if (!isThisMeeting(data)) return;
-                setChatState('streaming_response');
-                streamBuffer.appendToken(data.chunk, (content) => {
-                    setMessages(prev => prev.map(msg =>
-                        msg.id === assistantMessageId
-                            ? { ...msg, content }
-                            : msg
-                    ));
-                });
-            });
-
-            const doneCleanup = window.electronAPI?.onRAGStreamComplete((data?: any) => {
-                if (data && !isThisMeeting(data)) return;   // F-122
-                // Deferred completion: finalize the bubble only once the paced
-                // reveal has drained the full answer — a provider that burst the
-                // whole text still types out instead of snapping in one paint.
-                streamBuffer.complete((finalContent) => {
-                    setMessages(prev => prev.map(msg =>
-                        msg.id === assistantMessageId
-                            ? { ...msg, content: finalContent, isStreaming: false }
-                            : msg
-                    ));
-                    setChatState('idle');
+            const meetingGuard = new IntelligenceStreamGuard();
+            const tokenCleanup = window.electronAPI?.onIntelligenceStream((ev: any) => {
+                if (ev.intent !== 'meeting_search') return;
+                if (ev.type === 'token') {
+                    const decision = meetingGuard.resolve(ev);
+                    if (!decision.accept) return;
+                    setChatState('streaming_response');
+                    streamBuffer.appendToken(ev.text ?? '', (content) => {
+                        setMessages(prev => prev.map(msg =>
+                            msg.id === assistantMessageId
+                                ? { ...msg, content }
+                                : msg
+                        ));
+                    });
+                    return;
+                }
+                if (ev.type === 'done') {
+                    const decision = meetingGuard.resolve(ev);
+                    if (!decision.honor) return;
+                    // Deferred completion: finalize the bubble only once the paced
+                    // reveal has drained the full answer — a provider that burst the
+                    // whole text still types out instead of snapping in one paint.
+                    streamBuffer.complete((finalContent) => {
+                        setMessages(prev => prev.map(msg =>
+                            msg.id === assistantMessageId
+                                ? { ...msg, content: finalContent, isStreaming: false }
+                                : msg
+                        ));
+                        setChatState('idle');
+                        streamBuffer.reset();
+                        tokenCleanup?.();
+                    });
+                    return;
+                }
+                if (ev.type === 'error') {
+                    if (ev.surface === 'phone') return;
+                    const decision = meetingGuard.resolve(ev);
+                    if (!decision.accept) return;
+                    console.error('[MeetingChat] stream error:', ev.error);
+                    setMessages(prev => prev.filter(msg => msg.id !== assistantMessageId));
+                    setErrorMessage("Couldn't get a response. Please try again.");
+                    setChatState('error');
                     streamBuffer.reset();
                     tokenCleanup?.();
-                    doneCleanup?.();
-                    errorCleanup?.();
-                });
-            });
-
-            const errorCleanup = window.electronAPI?.onRAGStreamError((data: { error: string }) => {
-                if (!isThisMeeting(data)) return;   // F-122
-                console.error('[MeetingChat] RAG stream error:', data.error);
-                setMessages(prev => prev.filter(msg => msg.id !== assistantMessageId));
-                setErrorMessage("Couldn't get a response. Please try again.");
-                setChatState('error');
-                streamBuffer.reset();
-                tokenCleanup?.();
-                doneCleanup?.();
-                errorCleanup?.();
+                }
             });
 
             if (tokenCleanup) activeCleanups.push(tokenCleanup);
-            if (doneCleanup) activeCleanups.push(doneCleanup);
-            if (errorCleanup) activeCleanups.push(errorCleanup);
 
             // Get meeting ID from context for RAG queries
             const meetingId = meetingContext.id;
 
             if (meetingId) {
-                // Use RAG-powered meeting query
-                const result = await window.electronAPI?.ragQueryMeeting(meetingId, question);
+                // Use RAG-powered meeting query through the UNIFIED entry point.
+                const result = await window.electronAPI?.runIntelligence({
+                    source: 'meeting_search',
+                    meetingId,
+                    text: question,
+                });
 
                 // If RAG not available (or failed), fall back to context-window chat
-                if (result?.fallback) {
+                if (!result?.started) {
                     console.log("[MeetingChat] RAG unavailable, using context window fallback");
                     // Cleanup RAG listeners since we won't use them
                     tokenCleanup?.();
-                    doneCleanup?.();
-                    errorCleanup?.();
                     activeCleanups = [];
 
                     // FALLBACK LOGIC
@@ -415,29 +416,87 @@ const MeetingChatOverlay: React.FC<MeetingChatOverlayProps> = ({
 ${contextString}`;
 
                     streamBuffer.reset();
-                    // Stream-id guard (2026-07-31) — see GlobalChatOverlay: drop
-                    // tokens/done/error belonging to an older abandoned stream.
-                    let adoptedStreamId: number | null = null;
-                    const acceptsMeta = (meta?: { streamId?: number }) => {
-                        const id = meta?.streamId;
-                        if (typeof id !== 'number') return true;
-                        if (adoptedStreamId === null || id > adoptedStreamId) { adoptedStreamId = id; return true; }
-                        return id === adoptedStreamId;
-                    };
-                    const oldTokenCleanup = window.electronAPI?.onGeminiStreamToken((token: string, meta?: { streamId?: number }) => {
-                        if (!acceptsMeta(meta)) return;
+                    // UNIFIED PIPELINE (C5): chat fallback events with a
+                    // per-streamKey generation guard (replaces the old
+                    // adoptedStreamId acceptsMeta helper).
+                    const fallbackGuard = new IntelligenceStreamGuard();
+                    const oldTokenCleanup = window.electronAPI?.onIntelligenceStream((ev: any) => {
+                        if (ev.intent !== 'chat') return;
+                        const decision = fallbackGuard.resolve(ev);
+                        if (ev.type === 'token') {
+                            if (!decision.accept) return;
+                            setChatState('streaming_response');
+                            streamBuffer.appendToken(ev.text ?? '', (content) => {
+                                setMessages(prev => prev.map(msg =>
+                                    msg.id === assistantMessageId
+                                        ? { ...msg, content }
+                                        : msg
+                                ));
+                            });
+                            return;
+                        }
+                        if (ev.type === 'done') {
+                            if (!decision.honor) return;
+                            streamBuffer.complete((finalContent) => {
+                                setMessages(prev => prev.map(msg =>
+                                    msg.id === assistantMessageId
+                                        ? { ...msg, content: finalContent, isStreaming: false }
+                                        : msg
+                                ));
+                                setChatState('idle');
+                                streamBuffer.reset();
+                                oldTokenCleanup?.();
+                            });
+                            return;
+                        }
+                        if (ev.type === 'error') {
+                            if (ev.surface === 'phone') return;
+                            if (!decision.accept) return;
+                            console.error('[MeetingChat] stream error (fallback):', ev.error);
+                            setMessages(prev => prev.filter(msg => msg.id !== assistantMessageId));
+                            setErrorMessage("Couldn't get a response. Please check your settings.");
+                            setChatState('error');
+                            streamBuffer.reset();
+                            oldTokenCleanup?.();
+                        }
+                    });
+
+                    if (oldTokenCleanup) activeCleanups.push(oldTokenCleanup);
+
+                    await window.electronAPI?.runIntelligence({
+                        source: 'manual_chat',
+                        text: question,
+                        context: systemPrompt,
+                        skipSystemPrompt: true,
+                    });
+                }
+            } else {
+                // No meeting ID, standard fallback
+                const contextString = buildContextString();
+                const systemPrompt = `You are recalling a specific meeting. Answer questions ONLY about this meeting. Be concise (2-4 sentences). Sound natural, like a human recalling. If information is not present, say so briefly. Never guess.
+
+${contextString}`;
+
+                // Switch to unified chat streaming (RAF-batched)
+                streamBuffer.reset();
+                const fallbackGuard = new IntelligenceStreamGuard();
+                const oldTokenCleanup = window.electronAPI?.onIntelligenceStream((ev: any) => {
+                    if (ev.intent !== 'chat') return;
+                    const decision = fallbackGuard.resolve(ev);
+                    if (ev.type === 'token') {
+                        if (!decision.accept) return;
                         setChatState('streaming_response');
-                        streamBuffer.appendToken(token, (content) => {
+                        streamBuffer.appendToken(ev.text ?? '', (content) => {
                             setMessages(prev => prev.map(msg =>
                                 msg.id === assistantMessageId
                                     ? { ...msg, content }
                                     : msg
                             ));
                         });
-                    });
-
-                    const oldDoneCleanup = window.electronAPI?.onGeminiStreamDone((payload?: { streamId?: number }) => {
-                        if (!acceptsMeta(payload)) return;
+                        return;
+                    }
+                    if (ev.type === 'done') {
+                        if (!decision.honor) return;
                         streamBuffer.complete((finalContent) => {
                             setMessages(prev => prev.map(msg =>
                                 msg.id === assistantMessageId
@@ -447,102 +506,29 @@ ${contextString}`;
                             setChatState('idle');
                             streamBuffer.reset();
                             oldTokenCleanup?.();
-                            oldDoneCleanup?.();
-                            oldErrorCleanup?.();
                         });
-                    });
-
-                    const oldErrorCleanup = window.electronAPI?.onGeminiStreamError((error: string, meta?: { streamId?: number | null; source?: string }) => {
-                        if (meta?.source === 'phone-mirror') return;
-                        if (typeof meta?.streamId === 'number' && adoptedStreamId !== null && meta.streamId !== adoptedStreamId) return;
-                        console.error('[MeetingChat] Gemini stream error (fallback):', error);
+                        return;
+                    }
+                    if (ev.type === 'error') {
+                        if (ev.surface === 'phone') return;
+                        if (!decision.accept) return;
+                        console.error('[MeetingChat] stream error:', ev.error);
                         setMessages(prev => prev.filter(msg => msg.id !== assistantMessageId));
                         setErrorMessage("Couldn't get a response. Please check your settings.");
                         setChatState('error');
                         streamBuffer.reset();
                         oldTokenCleanup?.();
-                        oldDoneCleanup?.();
-                        oldErrorCleanup?.();
-                    });
-
-                    if (oldTokenCleanup) activeCleanups.push(oldTokenCleanup);
-                    if (oldDoneCleanup) activeCleanups.push(oldDoneCleanup);
-                    if (oldErrorCleanup) activeCleanups.push(oldErrorCleanup);
-
-                    await window.electronAPI?.streamGeminiChat(
-                        question,
-                        undefined,
-                        systemPrompt,
-                        { skipSystemPrompt: true }
-                    );
-                }
-            } else {
-                // No meeting ID, standard fallback
-                const contextString = buildContextString();
-                const systemPrompt = `You are recalling a specific meeting. Answer questions ONLY about this meeting. Be concise (2-4 sentences). Sound natural, like a human recalling. If information is not present, say so briefly. Never guess.
-
-${contextString}`;
-
-                // Switch to Gemini streaming (RAF-batched)
-                streamBuffer.reset();
-                let adoptedStreamId: number | null = null;
-                const acceptsMeta = (meta?: { streamId?: number }) => {
-                    const id = meta?.streamId;
-                    if (typeof id !== 'number') return true;
-                    if (adoptedStreamId === null || id > adoptedStreamId) { adoptedStreamId = id; return true; }
-                    return id === adoptedStreamId;
-                };
-                const oldTokenCleanup = window.electronAPI?.onGeminiStreamToken((token: string, meta?: { streamId?: number }) => {
-                    if (!acceptsMeta(meta)) return;
-                    setChatState('streaming_response');
-                    streamBuffer.appendToken(token, (content) => {
-                        setMessages(prev => prev.map(msg =>
-                            msg.id === assistantMessageId
-                                ? { ...msg, content }
-                                : msg
-                        ));
-                    });
-                });
-
-                const oldDoneCleanup = window.electronAPI?.onGeminiStreamDone((payload?: { streamId?: number }) => {
-                    if (!acceptsMeta(payload)) return;
-                    streamBuffer.complete((finalContent) => {
-                        setMessages(prev => prev.map(msg =>
-                            msg.id === assistantMessageId
-                                ? { ...msg, content: finalContent, isStreaming: false }
-                                : msg
-                        ));
-                        setChatState('idle');
-                        streamBuffer.reset();
-                        oldTokenCleanup?.();
-                        oldDoneCleanup?.();
-                        oldErrorCleanup?.();
-                    });
-                });
-
-                const oldErrorCleanup = window.electronAPI?.onGeminiStreamError((error: string, meta?: { streamId?: number | null; source?: string }) => {
-                    if (meta?.source === 'phone-mirror') return;
-                    if (typeof meta?.streamId === 'number' && adoptedStreamId !== null && meta.streamId !== adoptedStreamId) return;
-                    console.error('[MeetingChat] Gemini stream error:', error);
-                    setMessages(prev => prev.filter(msg => msg.id !== assistantMessageId));
-                    setErrorMessage("Couldn't get a response. Please check your settings.");
-                    setChatState('error');
-                    streamBuffer.reset();
-                    oldTokenCleanup?.();
-                    oldDoneCleanup?.();
-                    oldErrorCleanup?.();
+                    }
                 });
 
                 if (oldTokenCleanup) activeCleanups.push(oldTokenCleanup);
-                if (oldDoneCleanup) activeCleanups.push(oldDoneCleanup);
-                if (oldErrorCleanup) activeCleanups.push(oldErrorCleanup);
 
-                await window.electronAPI?.streamGeminiChat(
-                    question,
-                    undefined,
-                    systemPrompt,
-                    { skipSystemPrompt: true }
-                );
+                await window.electronAPI?.runIntelligence({
+                    source: 'manual_chat',
+                    text: question,
+                    context: systemPrompt,
+                    skipSystemPrompt: true,
+                });
             }
 
         } catch (error) {

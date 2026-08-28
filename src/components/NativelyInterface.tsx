@@ -273,7 +273,7 @@ import {
   splitStreamingCodeLines,
 } from '../lib/overlayStreamingCodeUi.mjs';
 import { widthDerivedScrollMax, verticalScrollCap } from '../lib/overlayScrollBudget.mjs';
-import { resolveChatStreamToken, resolveChatStreamDone, resolveLiveAnswerBatch, resolveChatStreamSurfaceError } from '../lib/chatStreamGuard.mjs';
+import { IntelligenceStreamGuard } from '../lib/intelligenceStreamGuard.mjs';
 import {
   applyFirstStreamingToken,
   commitStreamingFlush,
@@ -3709,82 +3709,6 @@ const NativelyInterface: React.FC<NativelyInterfaceProps> = ({
   // per the comment above); also used by ensureRevealTicker to detect "this
   // is a new stream" and reset the pacer state.
   const revealTickerMsgIdRef = useRef<string | null>(null);
-  // PERF: onRAGStreamChunk previously called setMessages() (full array clone +
-  // per-token re-render) on every chunk — the same per-token cost the Gemini
-  // token stream above was already fixed for via rAF coalescing. RAG chunks
-  // come from the same SSE-derived async generator (ipcHandlers.ts `for await
-  // (const chunk of stream) event.sender.send(...)`), so a long meeting-recall
-  // answer hit the identical N-renders-per-answer cost.
-  //
-  // ragArrivedTextRef accumulates the FULL text that has arrived for the
-  // current RAG answer — never truncated, mirroring streamingTextRef in the
-  // main path. This bubble is rendered through normal React state
-  // (lastMsg.text), not a DOM ref, so committing text to state IS the
-  // "paint" step: each tick, ragRevealTick commits `ragArrivedTextRef.current
-  // .slice(0, ragPacerRef.current.revealedLen)` — the same rate-capped
-  // cursor-over-accumulated-text shape as the main streaming path, so a
-  // burst of RAG chunks paces identically instead of dumping into the bubble
-  // at once. (An earlier version kept a SHRINKING queue instead — sliced the
-  // revealed prefix off the front of the buffer every tick — which doesn't
-  // carry per-stream pacer state cleanly and could stall permanently if a
-  // boundary-holdback made zero progress against a buffer that never grows
-  // again before the stream ends. The cursor shape has no such failure
-  // mode: forward progress is guaranteed by tickPacer/snapRevealBoundary
-  // against the same accumulated text every time.)
-  const ragArrivedTextRef = useRef<string>('');
-  const ragPacerRef = useRef(createPacerState());
-  const ragLastTsRef = useRef<number | null>(null);
-  const ragChunkRafRef = useRef<number | null>(null);
-  // True once onRAGStreamComplete has fired for the CURRENT RAG answer but
-  // the reveal ticker hasn't yet caught up to the full arrived text — i.e.
-  // "the provider is done, keep draining, then finalize." Per
-  // STREAM_RENDER_CONFIG.flushImmediatelyOnComplete (default false), the
-  // isStreaming:false commit is deferred to ragRevealTick's own catch-up
-  // check rather than happening the instant the network signals done — see
-  // that function below. Reset to false whenever the RAG state is reset
-  // (flushRagChunkBuffer, forceFinalizeStaleRagStream, or the catch-up commit
-  // itself), so a new RAG answer never inherits a stale "done" flag.
-  const ragDoneRef = useRef(false);
-
-  // A NEW RAG query can start (a new placeholder about to be pushed as "the
-  // last message") while a PREVIOUS RAG answer's deferred drain is still in
-  // flight — plausible in a live interview via a rapid follow-up question.
-  // RAG has no explicit per-message id (unlike the main streaming path's
-  // streamingMsgIdRef); it operates positionally on "the last isStreaming
-  // system message", so a still-draining old stream and a brand-new
-  // placeholder would otherwise collide: the old stream's ticker would keep
-  // committing ITS text onto whatever is now the LAST message — the new
-  // placeholder. Call this immediately before pushing a new RAG placeholder
-  // / invoking ragQueryLive to force the old stream to its final state
-  // first (same "abandon whatever was there" pattern as flushToken /
-  // queueToken's shouldFlushPreviousStream branch on the main path).
-  const forceFinalizeStaleRagStream = useCallback(() => {
-    if (ragChunkRafRef.current !== null) {
-      cancelAnimationFrame(ragChunkRafRef.current);
-      ragChunkRafRef.current = null;
-    }
-    const fullText = ragArrivedTextRef.current;
-    if (fullText) {
-      setMessages((prev) => {
-        const lastMsg = prev[prev.length - 1];
-        if (lastMsg && lastMsg.isStreaming && lastMsg.role === 'system') {
-          const updated = [...prev];
-          updated[prev.length - 1] = {
-            ...lastMsg,
-            text: fullText,
-            isStreaming: false,
-            isCode: fullText.includes('```'),
-          };
-          return updated;
-        }
-        return prev;
-      });
-    }
-    ragArrivedTextRef.current = '';
-    ragPacerRef.current = createPacerState();
-    ragLastTsRef.current = null;
-    ragDoneRef.current = false;
-  }, []);
 
   // Active chat stream id (audit finding #3). The main process emits chat tokens
   // on one channel from both the desktop and phone-mirror paths; this lets us drop
@@ -3798,11 +3722,15 @@ const NativelyInterface: React.FC<NativelyInterfaceProps> = ({
   // answer path streams on `intelligence-token-batch` (kind='suggested_answer')
   // keyed only on intent, so two back-to-back live answers share the same intent
   // and a superseded answer's already-queued batch could merge into the new
-  // answer's bubble. Each item now carries a generationId; resolveLiveAnswerBatch
-  // (same "newest wins" policy as chatStreamGuard) drops items from an older
-  // generation. null = no id adopted yet (id-less items are always accepted →
-  // backward compatible with the code-hint / brainstorm streams that omit it).
+  // answer's bubble. Each item now carries a generationId; the unified guard
+  // (intelligenceStreamGuard) drops items from an older generation (id-less
+  // items are always accepted → backward compatible with the code-hint /
+  // brainstorm streams that omit it).
   const liveAnswerGenIdRef = useRef<number | null>(null);
+  // UNIFIED PIPELINE (C3): the ONE renderer-side supersession guard, keyed by
+  // streamKey (`${surface}:${intent}`). Submit paths claim a surface here (R-17)
+  // and the single intelligence-stream subscription resolves every event.
+  const unifiedGuardRef = useRef<IntelligenceStreamGuard>(new IntelligenceStreamGuard());
   // Deferred-finalize bookkeeping. THE ONE mechanism for "commit this row's
   // final isStreaming:false only once the reveal ticker has actually caught
   // up to the full text" — used by BOTH:
@@ -4963,290 +4891,312 @@ const NativelyInterface: React.FC<NativelyInterfaceProps> = ({
       }),
     );
 
+    // ── UNIFIED PIPELINE (C3): ONE subscription for every surface. ───────────
+    // Replaces the per-channel intelligence listeners and the gemini-stream
+    // listeners with a single event router: one guard (per streamKey), the
+    // existing queueToken/pacer, and the same finalize semantics.
     cleanups.push(
-      window.electronAPI.onIntelligenceSuggestedAnswerToken((data) => {
-        pinAnswerPanel();
-        // Coaching now arrives via onIntelligenceNegotiationCoaching only —
-        // sentinel detection on this stream has been removed.
-        queueToken('what_to_answer', data.token);
-      }),
-    );
+      window.electronAPI.onIntelligenceStream((ev: any) => {
+        const intent: string = typeof ev.intent === 'string' ? ev.intent : 'chat';
+        const surface: string = typeof ev.surface === 'string' ? ev.surface : 'desktop';
 
-    cleanups.push(
-      window.electronAPI.onIntelligenceSuggestedAnswer((data) => {
-        // Phase 4 defense-in-depth (forensic-report §6b): drop a final answer
-        // belonging to a generation that's already been superseded by a newer
-        // one — same supersession guard the streaming token path applies via
-        // resolveLiveAnswerBatch. Id-less final answers (legacy answerLLM,
-        // code-hint, brainstorm) are always accepted.
-        const decision = resolveLiveAnswerBatch(
-          liveAnswerGenIdRef.current,
-          (data as { generationId?: number }).generationId,
-        );
-        liveAnswerGenIdRef.current = decision.activeId;
-        if (!decision.accept) return;
-        // Staleness bound (2026-07-31): generation supersession is WTA-relative
-        // only, so a slow generation stays "current" through manual turns and
-        // mode switches — a minutes-old answer then appears with nothing saying
-        // which question it answers (the live "late CGPA answer"). Old finals
-        // are labelled with their question instead of dropped: the answer may
-        // still be wanted, but it must not read as a reply to the latest turn.
-        const emittedAt = (data as { emittedAt?: number }).emittedAt;
-        const STALE_ANSWER_MS = 30_000;
-        const isStale = typeof emittedAt === 'number' && Date.now() - emittedAt > STALE_ANSWER_MS;
-        const answerText = isStale && data.question
-          ? `(Late answer to: "${data.question}")\n\n${data.answer}`
-          : data.answer;
-        setIsProcessing(false);
-        pinAnswerPanel();
-        finalizeStreamingByIntent('what_to_answer', answerText);
-      }),
-    );
-
-    // Orphaned-scaffold fix: a WTA stream that showed a coding scaffold ended
-    // with no final answer (superseded / declined / errored). Drop the open
-    // scaffold row so the user never sees a permanent "Working on…" card.
-    // Clear streaming refs FIRST (same ordering rationale as the null-feedback
-    // path) so a late token batch can't append onto a row we're removing.
-    cleanups.push(
-      window.electronAPI.onIntelligenceSuggestedAnswerDiscard?.(() => {
-        setIsProcessing(false);
-        if (streamingNodeRef.current) streamingNodeRef.current.innerHTML = '';
-        streamingNodeRef.current = null;
-        streamingTextRef.current = '';
-        streamingMsgIdRef.current = null;
-        streamingIntentRef.current = null;
-        streamingRenderModeRef.current = 'imperative';
-        eagerCodeExpansionHoldRef.current = false;
-        if (streamingRafRef.current !== null) {
-          cancelAnimationFrame(streamingRafRef.current);
-          streamingRafRef.current = null;
-        }
-        if (streamingCodeRafRef.current !== null) {
-          cancelAnimationFrame(streamingCodeRafRef.current);
-          streamingCodeRafRef.current = null;
-        }
-        setMessages((prev) => discardStreamingByIntentMessages(prev, 'what_to_answer'));
-      }) ?? (() => {}),
-    );
-
-    // Verified code execution: the shown code passed its executed test cases.
-    // Attach a ✓ badge to the most recent assistant (system) message — but ONLY
-    // if it is still the LAST message. If a newer user turn arrived since (the
-    // last row is a user/interviewer message), this badge belongs to a now-
-    // superseded answer, so we drop it rather than badge the wrong row. (The
-    // engine also guards by generationId; this is the renderer-side backstop.)
-    cleanups.push(
-      window.electronAPI.onIntelligenceCodeVerified?.((data) => {
-        setMessages((prev) => {
-          const last = prev[prev.length - 1];
-          if (!last || last.role !== 'system') return prev; // superseded by a newer turn
-          const next = [...prev];
-          next[next.length - 1] = { ...last, codeVerified: { passed: data.passed, total: data.total, language: data.language } };
-          return next;
-        });
-      }) ?? (() => {}),
-    );
-
-    // Verified code execution: the shown code FAILED and a (re-verified) fix was
-    // produced. REPLACE the wrong answer IN PLACE (same markdown coding card, same
-    // format) so the compact overlay doesn't grow — the user always ends on the
-    // CORRECT code, marked with a small "corrected" header + ✓ verified badge.
-    // Only replace when the wrong card is still the LAST message (same
-    // supersession guard as the badge); if a newer turn arrived, append instead
-    // so a genuine correction is never silently dropped.
-    cleanups.push(
-      window.electronAPI.onIntelligenceCodeCorrection?.((data) => {
-        setMessages((prev) => {
-          const last = prev[prev.length - 1];
-          const corrected = {
-            text: data.answer,
-            isCode: true,
-            isCorrection: true,
-            correctionNote: data.note,
-            codeVerified: data.reVerified ? { passed: 1, total: 1, language: 'verified' } : undefined,
-          };
-          if (last && last.role === 'system' && !last.isStreaming) {
-            // In-place swap: keep the same message id so React reuses the row.
-            const next = [...prev];
-            next[next.length - 1] = { ...last, ...corrected };
-            return next;
+        // ── token ──────────────────────────────────────────────────────────
+        if (ev.type === 'token') {
+          if (intent === 'chat') {
+            const decision = unifiedGuardRef.current.resolve(ev);
+            if (!decision.accept) return;
+            queueToken('chat', ev.text ?? '');
+            return;
           }
-          // Superseded / not a finalized system row → append (never lose the fix).
-          return [...prev, { id: `correction-${Date.now()}`, role: 'system', ...corrected }];
-        });
-      }) ?? (() => {}),
-    );
-
-    // Sprint 9: time-batched token channel — single subscription that
-    // unrolls a kind-tagged items array onto the existing queueToken path.
-    // The 5 per-token channels (intelligence-suggested-answer-token,
-    // intelligence-refined-answer-token, etc.) are no longer being sent
-    // by main.ts for these streams — their handlers above are now inert
-    // safety nets and only fire if some other code path emits them.
-    cleanups.push(
-      window.electronAPI.onIntelligenceTokenBatch((data) => {
-        const { kind, items } = data;
-        if (!items || items.length === 0) return;
-        if (kind === 'suggested_answer') {
-          pinAnswerPanel();
-          for (const it of items) {
-            // #3 (full): drop tokens belonging to a superseded live answer so a
-            // stale batch (already queued in main when a newer answer started)
-            // can't merge into the new same-intent ('what_to_answer') bubble.
-            // id-less items (code-hint/brainstorm/older builds) are always kept.
-            const decision = resolveLiveAnswerBatch(
-              liveAnswerGenIdRef.current,
-              (it as any).generationId,
-            );
-            liveAnswerGenIdRef.current = decision.activeId;
-            if (!decision.accept) continue;
-            queueToken('what_to_answer', (it as any).token);
+          if (intent === 'what_to_answer') {
+            const decision = unifiedGuardRef.current.resolve(ev);
+            if (!decision.accept) return;
+            pinAnswerPanel();
+            queueToken('what_to_answer', ev.text ?? '');
+            return;
           }
-        } else if (kind === 'refined_answer') {
-          for (const it of items) queueToken((it as any).intent, (it as any).token);
-        } else if (kind === 'recap') {
-          for (const it of items) queueToken('recap', (it as any).token);
-        } else if (kind === 'clarify') {
-          for (const it of items) queueToken('clarify', (it as any).token);
-        } else if (kind === 'follow_up_questions') {
-          for (const it of items) queueToken('follow_up_questions', (it as any).token);
+          // refined intents (shorten/rephrase/…), recap, clarify, follow-ups.
+          const decision = unifiedGuardRef.current.resolve(ev);
+          if (!decision.accept) return;
+          queueToken(intent, ev.text ?? '');
+          return;
         }
-      }),
-    );
 
-    // Sprint 7: dedicated negotiation-coaching channel.
-    // The engine now intercepts the coaching sentinel server-side and
-    // emits this event INSTEAD of suggested_answer / suggested_answer_token.
-    // Renderer no longer needs JSON.parse-per-token detection (the
-    // existing prefix-gated detection paths above are kept as defense-
-    // in-depth — they are inert because the engine never sends sentinel
-    // tokens through suggested_answer anymore).
-    cleanups.push(
-      window.electronAPI.onIntelligenceNegotiationCoaching((data) => {
-        // Flush any pending streamed tokens before swapping the streaming
-        // row to a coaching card; otherwise rAF-buffered text would be
-        // appended onto the card row's empty text after this setMessages.
-        flushToken();
-        setIsProcessing(false);
-        const coaching = data.payload;
-        setMessages((prev) => {
-          const lastMsg = prev[prev.length - 1];
-          // If a what_to_answer streaming row is in flight, replace it
-          // with the coaching card so the user doesn't see two bubbles.
-          if (lastMsg && lastMsg.isStreaming && lastMsg.intent === 'what_to_answer') {
-            const updated = [...prev];
-            updated[prev.length - 1] = {
-              ...lastMsg,
-              text: '',
-              isStreaming: false,
-              isNegotiationCoaching: true,
-              negotiationCoachingData: coaching,
-            };
-            return updated;
+        // ── done ───────────────────────────────────────────────────────────
+        if (ev.type === 'done') {
+          if (intent === 'chat') {
+            const decision = unifiedGuardRef.current.resolve(ev);
+            if (!decision.honor) {
+              // CR-01: a done we do not honor still ends the request THIS
+              // surface started, or the spinner runs forever.
+              if (decision.release) setIsProcessing(false);
+              return;
+            }
+            const finalText = ev.finalText;
+            const pendingTextSnapshot = streamingTextRef.current;
+            const pendingMsgIdSnapshot = streamingMsgIdRef.current;
+            const authoritativeText = finalText || pendingTextSnapshot;
+
+            setIsProcessing(false);
+
+            let latency = 0;
+            if (requestStartTimeRef.current) {
+              latency = Date.now() - requestStartTimeRef.current;
+              requestStartTimeRef.current = null;
+            }
+            analytics.trackModelUsed({
+              model_name: currentModel,
+              provider_type: detectProviderType(currentModel),
+              latency_ms: latency,
+            });
+
+            const finalTextDiverges = Boolean(finalText) && finalText !== pendingTextSnapshot;
+            if (
+              pendingMsgIdSnapshot != null &&
+              authoritativeText &&
+              !STREAM_RENDER_CONFIG.flushImmediatelyOnComplete &&
+              !finalTextDiverges
+            ) {
+              // Deferred: the reveal ticker drains to the last character before
+              // committing isStreaming:false.
+              finalizeWhenRevealCaughtUp(pendingMsgIdSnapshot, 'chat', authoritativeText);
+              return;
+            }
+
+            // Instant path (flushImmediatelyOnComplete, diverged finalText, or
+            // no live row to defer).
+            if (streamingRafRef.current !== null) {
+              cancelAnimationFrame(streamingRafRef.current);
+              streamingRafRef.current = null;
+            }
+            if (streamingCodeRafRef.current !== null) {
+              cancelAnimationFrame(streamingCodeRafRef.current);
+              streamingCodeRafRef.current = null;
+            }
+            streamingNodeRef.current = null;
+            pendingFinalizeRef.current = null;
+            if (pendingFinalizeTimeoutRef.current !== null) {
+              clearTimeout(pendingFinalizeTimeoutRef.current);
+              pendingFinalizeTimeoutRef.current = null;
+            }
+            queueMicrotask(() => {
+              streamingTextRef.current = '';
+              streamingMsgIdRef.current = null;
+              streamingIntentRef.current = null;
+              streamingRenderModeRef.current = 'imperative';
+            });
+
+            setMessages((prev) => {
+              const idx =
+                pendingMsgIdSnapshot != null
+                  ? prev.findLastIndex((m) => m.id === pendingMsgIdSnapshot)
+                  : -1;
+              const target = idx !== -1 ? prev[idx] : prev[prev.length - 1];
+              if (target && target.role === 'system') {
+                const text = finalText || target.text || pendingTextSnapshot;
+                if (!text) return prev;
+                const isCode =
+                  text.includes('```') || text.includes('def ') || text.includes('function ');
+                if (idx !== -1) {
+                  const updated = [...prev];
+                  updated[idx] = { ...target, text, isStreaming: false, isCode };
+                  return updated;
+                }
+                return [...prev.slice(0, -1), { ...target, text, isStreaming: false, isCode }];
+              }
+              const text = finalText || pendingTextSnapshot;
+              if (!text) return prev;
+              const isCode =
+                text.includes('```') || text.includes('def ') || text.includes('function ');
+              return [
+                ...prev,
+                { id: genMessageId(), role: 'system', text, isStreaming: false, isCode },
+              ];
+            });
+            return;
           }
-          return [
+
+          if (intent === 'what_to_answer') {
+            const decision = unifiedGuardRef.current.resolve(ev);
+            if (!decision.honor) {
+              if (decision.release) setIsProcessing(false);
+              return;
+            }
+            // Staleness bound: a minutes-old answer is labelled with its
+            // question instead of dropped (the live "late CGPA answer" fix).
+            const emittedAt = typeof ev.emittedAt === 'number' ? ev.emittedAt : undefined;
+            const STALE_ANSWER_MS = 30_000;
+            const isStale = emittedAt !== undefined && Date.now() - emittedAt > STALE_ANSWER_MS;
+            const answerText = isStale && ev.question
+              ? `(Late answer to: "${ev.question}")\n\n${ev.finalText ?? ''}`
+              : (ev.finalText ?? '');
+            setIsProcessing(false);
+            pinAnswerPanel();
+            finalizeStreamingByIntent('what_to_answer', answerText);
+            return;
+          }
+
+          if (intent === 'clarify') {
+            setIsProcessing(false);
+            finalizeStreamingByIntent('clarify', ev.finalText ?? '');
+            return;
+          }
+          if (intent === 'recap') {
+            setIsProcessing(false);
+            finalizeStreamingByIntent('recap', ev.finalText ?? '');
+            return;
+          }
+          if (intent === 'follow_up_questions') {
+            setIsProcessing(false);
+            finalizeStreamingByIntent('follow_up_questions', ev.finalText ?? '');
+            return;
+          }
+          // refined intents (shorten/rephrase/…) finalize under their intent.
+          const decision = unifiedGuardRef.current.resolve(ev);
+          if (!decision.honor) {
+            if (decision.release) setIsProcessing(false);
+            return;
+          }
+          setIsProcessing(false);
+          finalizeStreamingByIntent(intent, ev.finalText ?? '');
+          return;
+        }
+
+        // ── error ──────────────────────────────────────────────────────────
+        if (ev.type === 'error') {
+          if (intent === 'chat') {
+            const decision = unifiedGuardRef.current.resolve(ev);
+            // Phone-mirror failure must not deface a desktop bubble; it must
+            // still RELEASE the phone guard (R-02) so nothing spins forever.
+            if (surface === 'phone') {
+              if (decision.release) unifiedGuardRef.current.release('phone');
+              return;
+            }
+            if (!decision.accept) return;
+            flushToken();
+            setIsProcessing(false);
+            requestStartTimeRef.current = null;
+            unifiedGuardRef.current.release('desktop');
+            setMessages((prev) => {
+              const lastMsg = prev[prev.length - 1];
+              if (lastMsg && lastMsg.isStreaming) {
+                const updated = [...prev];
+                updated[prev.length - 1] = {
+                  ...lastMsg,
+                  isStreaming: false,
+                  text: lastMsg.text + `\n\n[Error: ${ev.error ?? 'Unknown error'}]`,
+                };
+                return updated;
+              }
+              return [
+                ...prev,
+                { id: genMessageId(), role: 'system', text: `❌ Error: ${ev.error ?? 'Unknown error'}` },
+              ];
+            });
+            return;
+          }
+          setIsProcessing(false);
+          setMessages((prev) => [
             ...prev,
             {
               id: genMessageId(),
               role: 'system',
-              text: '',
-              intent: 'what_to_answer',
-              isNegotiationCoaching: true,
-              negotiationCoachingData: coaching,
+              text: `❌ Error (${intent}): ${ev.error ?? 'Unknown error'}`,
             },
-          ];
-        });
-      }),
-    );
+          ]);
+          return;
+        }
 
-    // STREAMING: Refinement
-    cleanups.push(
-      window.electronAPI.onIntelligenceRefinedAnswerToken((data) => {
-        // PERF: rAF-coalesce per-token state updates.
-        queueToken(data.intent, data.token);
-      }),
-    );
-
-    cleanups.push(
-      window.electronAPI.onIntelligenceRefinedAnswer((data) => {
-        setIsProcessing(false);
-        finalizeStreamingByIntent(data.intent, data.answer);
-      }),
-    );
-
-    // STREAMING: Recap
-    cleanups.push(
-      window.electronAPI.onIntelligenceRecapToken((data) => {
-        queueToken('recap', data.token);
-      }),
-    );
-
-    cleanups.push(
-      window.electronAPI.onIntelligenceRecap((data) => {
-        setIsProcessing(false);
-        finalizeStreamingByIntent('recap', data.summary);
-      }),
-    );
-
-    // STREAMING: Follow-Up Questions (Rendered as message? Or specific UI?)
-    // Currently interface typically renders follow-up Qs as a message or button update.
-    // Let's assume message for now based on existing 'follow_up_questions_update' handling
-    // But wait, existing handle just sets state?
-    // Let's check how 'follow_up_questions_update' was handled.
-    // It was handled separate locally in this component maybe?
-    // Ah, I need to see the existing listener for 'onIntelligenceFollowUpQuestionsUpdate'
-
-    // Let's implemented token streaming for it anyway, likely it updates a message bubble
-    // OR it might update a specialized "Suggested Questions" area.
-    // Assuming it's a message for consistency with "Copilot" approach.
-
-    cleanups.push(
-      window.electronAPI.onIntelligenceFollowUpQuestionsToken((data) => {
-        queueToken('follow_up_questions', data.token);
-      }),
-    );
-
-    cleanups.push(
-      window.electronAPI.onIntelligenceFollowUpQuestionsUpdate((data) => {
-        setIsProcessing(false);
-        finalizeStreamingByIntent('follow_up_questions', data.questions);
-      }),
-    );
-
-    cleanups.push(
-      window.electronAPI.onIntelligenceClarify((data) => {
-        setIsProcessing(false);
-        finalizeStreamingByIntent('clarify', data.clarification);
-      }),
-    );
-
-    cleanups.push(
-      window.electronAPI.onIntelligenceManualStarted(() => {
-        setIsExpanded(true);
-        setIsProcessing(true);
-        prepareIntelligenceStreamPlaceholder('chat');
-      }),
-    );
-
-    cleanups.push(
-      window.electronAPI.onIntelligenceManualResult((data) => {
-        setIsProcessing(false);
-        finalizeStreamingByIntent('chat', `🎯 **Answer:**\n\n${data.answer}`);
-      }),
-    );
-
-    cleanups.push(
-      window.electronAPI.onIntelligenceError((data) => {
-        setIsProcessing(false);
-        setMessages((prev) => [
-          ...prev,
-          {
-            id: genMessageId(),
-            role: 'system',
-            text: `❌ Error (${data.mode}): ${data.error}`,
-          },
-        ]);
+        // ── meta (coaching / code badges / scaffold discard) ───────────────
+        if (ev.type === 'meta') {
+          if (ev.metaKind === 'scaffold_discard') {
+            // Orphaned-scaffold fix: drop the open scaffold row; clear streaming
+            // refs FIRST so a late token can't re-mount the row.
+            setIsProcessing(false);
+            if (streamingNodeRef.current) streamingNodeRef.current.innerHTML = '';
+            streamingNodeRef.current = null;
+            streamingTextRef.current = '';
+            streamingMsgIdRef.current = null;
+            streamingIntentRef.current = null;
+            streamingRenderModeRef.current = 'imperative';
+            eagerCodeExpansionHoldRef.current = false;
+            if (streamingRafRef.current !== null) {
+              cancelAnimationFrame(streamingRafRef.current);
+              streamingRafRef.current = null;
+            }
+            if (streamingCodeRafRef.current !== null) {
+              cancelAnimationFrame(streamingCodeRafRef.current);
+              streamingCodeRafRef.current = null;
+            }
+            setMessages((prev) => discardStreamingByIntentMessages(prev, 'what_to_answer'));
+            return;
+          }
+          if (ev.metaKind === 'code_verified') {
+            const data = (ev.metaPayload ?? {}) as { passed: number; total: number; language: string };
+            setMessages((prev) => {
+              const last = prev[prev.length - 1];
+              if (!last || last.role !== 'system') return prev; // superseded by a newer turn
+              const next = [...prev];
+              next[next.length - 1] = {
+                ...last,
+                codeVerified: { passed: data.passed, total: data.total, language: data.language },
+              };
+              return next;
+            });
+            return;
+          }
+          if (ev.metaKind === 'code_correction') {
+            const data = (ev.metaPayload ?? {}) as { answer: string; note: string; reVerified: boolean };
+            setMessages((prev) => {
+              const last = prev[prev.length - 1];
+              const corrected = {
+                text: data.answer,
+                isCode: true,
+                isCorrection: true,
+                correctionNote: data.note,
+                codeVerified: data.reVerified ? { passed: 1, total: 1, language: 'verified' } : undefined,
+              };
+              if (last && last.role === 'system' && !last.isStreaming) {
+                const next = [...prev];
+                next[next.length - 1] = { ...last, ...corrected };
+                return next;
+              }
+              return [...prev, { id: `correction-${Date.now()}`, role: 'system', ...corrected }];
+            });
+            return;
+          }
+          if (ev.metaKind === 'coaching') {
+            flushToken();
+            setIsProcessing(false);
+            const coaching = ev.metaPayload;
+            setMessages((prev) => {
+              const lastMsg = prev[prev.length - 1];
+              if (lastMsg && lastMsg.isStreaming && lastMsg.intent === 'what_to_answer') {
+                const updated = [...prev];
+                updated[prev.length - 1] = {
+                  ...lastMsg,
+                  text: '',
+                  isStreaming: false,
+                  isNegotiationCoaching: true,
+                  negotiationCoachingData: coaching,
+                };
+                return updated;
+              }
+              return [
+                ...prev,
+                {
+                  id: genMessageId(),
+                  role: 'system',
+                  text: '',
+                  intent: 'what_to_answer',
+                  isNegotiationCoaching: true,
+                  negotiationCoachingData: coaching,
+                },
+              ];
+            });
+            return;
+          }
+        }
       }),
     );
     return () => {
@@ -5256,7 +5206,7 @@ const NativelyInterface: React.FC<NativelyInterfaceProps> = ({
       }
       cleanups.forEach((fn) => fn());
     };
-  }, [queueToken, flushToken, applyRollingPartialPreview, flushRollingPartialPreview, pinAnswerPanel, finalizeStreamingByIntent, prepareIntelligenceStreamPlaceholder]);
+  }, [queueToken, flushToken, applyRollingPartialPreview, flushRollingPartialPreview, pinAnswerPanel, finalizeStreamingByIntent, prepareIntelligenceStreamPlaceholder, currentModel]);
 
   // Stable mount-only effect for screenshot listeners.
   // These MUST NOT be inside the [isExpanded] effect — when a screenshot is
@@ -5448,26 +5398,25 @@ const NativelyInterface: React.FC<NativelyInterfaceProps> = ({
         console.debug(`[DOM Context] Forwarding captured active-tab DOM structure (${domContext.length} chars)`);
       }
 
-      const options =
-        dynamicPromptInstruction || domContext
-          ? {
-              ...(dynamicPromptInstruction ? { promptInstruction: dynamicPromptInstruction } : {}),
-              ...(domContext ? { domContext } : {}),
-              ...(domContextEnvelope ? { domContextEnvelope } : {}),
-            }
-          : undefined;
-
-      // Pass imagePath if attached
-      const result = await window.electronAPI.generateWhatToSay(
-        undefined,
-        currentAttachments.length > 0 ? currentAttachments.map((s) => s.path) : undefined,
-        options,
+      // Pass imagePath if attached — through the UNIFIED entry point (C4).
+      const result = await window.electronAPI.runIntelligence({
+        source: 'what_to_say',
+        imagePaths: currentAttachments.length > 0 ? currentAttachments.map((s) => s.path) : undefined,
+        domContext,
+        domContextEnvelope,
+        promptInstruction: dynamicPromptInstruction,
+      });
+      const diagnostics = (result.diagnostics ?? {}) as Record<string, unknown>;
+      const screenStatus = (diagnostics.screenContextStatus as string) || 'not_available';
+      setScreenContextStatus(
+        screenStatus === 'available' || screenStatus === 'failed' || screenStatus === 'not_available'
+          ? screenStatus
+          : 'not_available',
       );
-      setScreenContextStatus(result.screenContextStatus || 'not_available');
-      setLatestUsedImageInput(Boolean(result.usedImageInput));
-      setLatestVisionProviderUsed(result.visionProviderUsed);
-      setLatestVisionModelUsed(result.visionModelUsed);
-      setLatestVisionFailureReason(result.visionFailureReason);
+      setLatestUsedImageInput(Boolean(diagnostics.usedImageInput));
+      setLatestVisionProviderUsed(diagnostics.visionProviderUsed as string | undefined);
+      setLatestVisionModelUsed(diagnostics.visionModelUsed as string | undefined);
+      setLatestVisionFailureReason(diagnostics.visionFailureReason as string | undefined);
       if (result.answer == null) {
         const feedback =
           result.error ??
@@ -5532,7 +5481,8 @@ const NativelyInterface: React.FC<NativelyInterfaceProps> = ({
     analytics.trackCommandExecuted('follow_up_' + intent);
 
     try {
-      await window.electronAPI.generateFollowUp(intent);
+      // UNIFIED PIPELINE (C4): follow-up through the single entry point.
+      await window.electronAPI.runIntelligence({ source: 'follow_up', followUpIntent: intent });
     } catch (err) {
       setMessages((prev) => [
         ...prev,
@@ -5562,14 +5512,22 @@ const NativelyInterface: React.FC<NativelyInterfaceProps> = ({
         meetingCtx = intel?.context ?? '';
       } catch { /* non-fatal */ }
       // Claim the desktop chat surface (same as the manual chat submit) so the
-      // stream supersedes cleanly via the chat-stream guard.
+      // stream supersedes cleanly via the unified stream guard (R-17).
       chatStreamIdRef.current = null;
       chatStreamSourceRef.current = 'desktop';
+      unifiedGuardRef.current.claim({ surface: 'desktop' });
       requestStartTimeRef.current = Date.now();
       const systemPrompt = `You are a helpful assistant.${
         meetingCtx ? `\n\nUse the following meeting context when it is relevant to the request:\n${meetingCtx}` : ''
       }`;
-      await window.electronAPI?.streamGeminiChat(instruction, imagePaths, systemPrompt, { skipSystemPrompt: true });
+      // UNIFIED PIPELINE (C4): caller-owned prompt on the single entry point.
+      await window.electronAPI?.runIntelligence({
+        source: 'manual_chat',
+        text: instruction,
+        imagePaths,
+        context: systemPrompt,
+        skipSystemPrompt: true,
+      });
     },
     [],
   );
@@ -5708,9 +5666,11 @@ const NativelyInterface: React.FC<NativelyInterfaceProps> = ({
     }
 
     try {
-      await window.electronAPI.generateCodeHint(
-        currentAttachments.length > 0 ? currentAttachments.map((s) => s.path) : undefined,
-      );
+      // UNIFIED PIPELINE (C4): code hint through the single entry point.
+      await window.electronAPI.runIntelligence({
+        source: 'code_hint',
+        imagePaths: currentAttachments.length > 0 ? currentAttachments.map((s) => s.path) : undefined,
+      });
     } catch (err) {
       setMessages((prev) => [
         ...prev,
@@ -5766,9 +5726,11 @@ const NativelyInterface: React.FC<NativelyInterfaceProps> = ({
     prepareIntelligenceStreamPlaceholder('what_to_answer');
 
     try {
-      await window.electronAPI.generateBrainstorm(
-        currentAttachments.length > 0 ? currentAttachments.map((s) => s.path) : undefined,
-      );
+      // UNIFIED PIPELINE (C4): brainstorm through the single entry point.
+      await window.electronAPI.runIntelligence({
+        source: 'brainstorm',
+        imagePaths: currentAttachments.length > 0 ? currentAttachments.map((s) => s.path) : undefined,
+      });
     } catch (err) {
       setMessages((prev) => [
         ...prev,
@@ -5786,230 +5748,11 @@ const NativelyInterface: React.FC<NativelyInterfaceProps> = ({
   useEffect(() => {
     const cleanups: (() => void)[] = [];
 
-    // Stream Token — rAF-coalesced via queueToken (same path as intelligence streams).
-    // streamId guard (audit finding #3): drop tokens from a superseded chat stream so
-    // a phone-mirror or stale desktop stream can't bleed into the active bubble. Tokens
-    // without a streamId (back-compat) are always accepted.
-    cleanups.push(
-      window.electronAPI.onGeminiStreamToken((token, meta) => {
-        const decision = resolveChatStreamToken(
-          chatStreamIdRef.current, meta?.streamId,
-          chatStreamSourceRef.current, (meta as any)?.source,
-        );
-        chatStreamIdRef.current = decision.activeId;
-        chatStreamSourceRef.current = decision.activeSource ?? null;
-        if (!decision.accept) return;
-        queueToken('chat', token);
-      }),
-    );
+    // Chat (manual/phone) token/done/error now arrive on the UNIFIED
+    // 'intelligence-stream' subscription registered above (C3) — one guard,
+    // one queue, one pacer. No per-channel gemini listeners remain.
 
-    // Stream Done
-    cleanups.push(
-      window.electronAPI.onGeminiStreamDone((data) => {
-        // Ignore a done from a superseded stream (audit finding #3) so it can't
-        // tear down a newer stream's row. A done without a streamId is honored
-        // (back-compat). On an honored done we clear the adopted id.
-        const doneDecision = resolveChatStreamDone(
-          chatStreamIdRef.current, data?.streamId,
-          chatStreamSourceRef.current, (data as any)?.source,
-        );
-        chatStreamIdRef.current = doneDecision.activeId;
-        chatStreamSourceRef.current = doneDecision.activeSource ?? null;
-        if (!doneDecision.honor) {
-          // CR-01: a done we do not honor still ends the request THIS surface
-          // started. Without this the spinner runs forever whenever the user
-          // types while a phone-mirror answer is streaming.
-          if (doneDecision.release) setIsProcessing(false);
-          return;
-        }
-        // finalText is set ONLY when the backend's coding validate→repair changed
-        // the streamed answer — it authoritatively REPLACES the streamed row text
-        // (in-place, by id) so the user sees the corrected six-section markdown.
-        // Absent in the common case, where the streamed tokens already stand.
-        const finalText = data?.finalText;
-        // Capture pending text/id BEFORE any clearing. The capture happens
-        // synchronously here, but a late-arriving token between this line and
-        // the eventual React flush could otherwise clobber streamingTextRef —
-        // snapshotting locally means even a racing token can't drop the last
-        // few chars from what gets (instantly or eventually) committed.
-        const pendingTextSnapshot = streamingTextRef.current;
-        const pendingMsgIdSnapshot = streamingMsgIdRef.current;
-        const authoritativeText = finalText || pendingTextSnapshot;
-
-        setIsProcessing(false);
-
-        // Calculate latency if we have a start time
-        let latency = 0;
-        if (requestStartTimeRef.current) {
-          latency = Date.now() - requestStartTimeRef.current;
-          requestStartTimeRef.current = null;
-        }
-
-        // Track Usage
-        analytics.trackModelUsed({
-          model_name: currentModel,
-          provider_type: detectProviderType(currentModel),
-          latency_ms: latency,
-        });
-
-        // Deferred path: the provider is done, but per
-        // STREAM_RENDER_CONFIG.flushImmediatelyOnComplete (default false) the
-        // reveal ticker keeps draining at the same deterministic rate all the
-        // way to the last character instead of snapping to complete just
-        // because the network did. Requires an actual live row to defer
-        // (pendingMsgIdSnapshot) and — same rule as finalizeStreamingByIntent
-        // — that finalText, if present, isn't a REWRITE of what was already
-        // streamed (continuing to paint over already-read text would be a
-        // visible, confusing rewrite, not a smooth finish).
-        const finalTextDiverges = Boolean(finalText) && finalText !== pendingTextSnapshot;
-        if (
-          pendingMsgIdSnapshot != null &&
-          authoritativeText &&
-          !STREAM_RENDER_CONFIG.flushImmediatelyOnComplete &&
-          !finalTextDiverges
-        ) {
-          // Do NOT cancel streamingRafRef/streamingCodeRafRef, null
-          // streamingNodeRef, or clear streamingMsgIdRef/streamingTextRef —
-          // all four would stop the ticker or make paintRevealedNow/revealTick
-          // treat this stream as already torn down (see the advisor note this
-          // fix is based on). The stream stays fully "live" until
-          // finalizeWhenRevealCaughtUp's deferred commit fires.
-          finalizeWhenRevealCaughtUp(pendingMsgIdSnapshot, 'chat', authoritativeText);
-          return;
-        }
-
-        // Instant path (flushImmediatelyOnComplete=true, finalText diverged,
-        // or there was no live row to defer at all).
-        if (streamingRafRef.current !== null) {
-          cancelAnimationFrame(streamingRafRef.current);
-          streamingRafRef.current = null;
-        }
-        if (streamingCodeRafRef.current !== null) {
-          cancelAnimationFrame(streamingCodeRafRef.current);
-          streamingCodeRafRef.current = null;
-        }
-        streamingNodeRef.current = null;
-        pendingFinalizeRef.current = null;
-        if (pendingFinalizeTimeoutRef.current !== null) {
-          clearTimeout(pendingFinalizeTimeoutRef.current);
-          pendingFinalizeTimeoutRef.current = null;
-        }
-        // Clear in the next microtask so any token already in the IPC queue
-        // before this done arrived is still visible to setMessages. The setMessages
-        // callback below reads the snapshot from the closure variable, so this
-        // ref clear only affects subsequent question turns.
-        queueMicrotask(() => {
-          streamingTextRef.current = '';
-          streamingMsgIdRef.current = null;
-          streamingIntentRef.current = null;
-          streamingRenderModeRef.current = 'imperative';
-        });
-
-        setMessages((prev) => {
-          const idx =
-            pendingMsgIdSnapshot != null
-              ? prev.findLastIndex((m) => m.id === pendingMsgIdSnapshot)
-              : -1;
-          const target = idx !== -1 ? prev[idx] : prev[prev.length - 1];
-          if (target && target.role === 'system') {
-            const text = finalText || target.text || pendingTextSnapshot;
-            if (!text) return prev;
-            const isCode =
-              text.includes('```') || text.includes('def ') || text.includes('function ');
-            if (idx !== -1) {
-              const updated = [...prev];
-              updated[idx] = { ...target, text, isStreaming: false, isCode };
-              return updated;
-            }
-            return [...prev.slice(0, -1), { ...target, text, isStreaming: false, isCode }];
-          }
-          // Silent no-op fallback (audit 2026-06-27): previously `return prev`
-          // caused streamed answers to be silently blanked whenever the
-          // placeholder bubble's role was not 'system' (e.g. a mid-stream
-          // renderer remount or a superseded chat stream). When the answer is
-          // non-empty, append it as a fresh system message so the user always
-          // sees the response. Empty answers are dropped so we don't emit a
-          // blank bubble.
-          const text = finalText || pendingTextSnapshot;
-          if (!text) return prev;
-          const isCode =
-            text.includes('```') || text.includes('def ') || text.includes('function ');
-          return [
-            ...prev,
-            {
-              id: genMessageId(),
-              role: 'system',
-              text,
-              isStreaming: false,
-              isCode,
-            },
-          ];
-        });
-      }),
-    );
-
-    // Stream Error
-    cleanups.push(
-      window.electronAPI.onGeminiStreamError((error, meta?: { streamId?: number | null; source?: string }) => {
-        // Guard (2026-07-31): a tagged error belonging to another stream must
-        // not tear down the one we're rendering. A phone-mirror failure carries
-        // source:'phone-mirror' and no streamId; a desktop failure carries the
-        // originating streamId — drop it unless it matches the adopted stream.
-        // Untagged errors keep the legacy behavior exactly.
-        if (meta?.source === 'phone-mirror') {
-          // R-02: this branch deliberately keeps a phone failure out of the
-          // desktop UI, but it must still RELEASE the stream guard. Phone
-          // tokens are tagged source:'phone' (ipcHandlers.ts:12814) while this
-          // error is tagged 'phone-mirror' (:12851), and a provider that throws
-          // AFTER committing tokens never sends a `done` — so a phone turn that
-          // failed mid-answer left the guard pinned to the phone surface
-          // forever. Every later DESKTOP stream was then rejected as a
-          // cross-surface supersession (accept:false / honor:false): no text at
-          // all and a spinner that never stopped, until the user hit Escape.
-          // Releasing is safe here because this phone stream is definitively over.
-          if (resolveChatStreamSurfaceError(chatStreamSourceRef.current, meta.source).release) {
-            chatStreamIdRef.current = null;
-            chatStreamSourceRef.current = null;
-          }
-          return;
-        }
-        if (typeof meta?.streamId === 'number'
-          && chatStreamIdRef.current !== null
-          && meta.streamId !== chatStreamIdRef.current) return;
-        flushToken();
-        setIsProcessing(false);
-        requestStartTimeRef.current = null; // Clear timer on error
-        // Symmetry with the done handler: release the adopted chat stream id so the
-        // next stream starts clean (audit finding #3). Safe today because ids are
-        // monotonic, but keeps token/done/error ref management consistent.
-        chatStreamIdRef.current = null;
-      chatStreamSourceRef.current = null;
-        setMessages((prev) => {
-          // Append error to the current message or add new one?
-          // Let's add a new error block if the previous one confusing,
-          // or just update status.
-          // Ideally we want to show the partial response AND the error.
-          const lastMsg = prev[prev.length - 1];
-          if (lastMsg && lastMsg.isStreaming) {
-            const updated = [...prev];
-            updated[prev.length - 1] = {
-              ...lastMsg,
-              isStreaming: false,
-              text: lastMsg.text + `\n\n[Error: ${error}]`,
-            };
-            return updated;
-          }
-          return [
-            ...prev,
-            {
-              id: genMessageId(),
-              role: 'system',
-              text: `❌ Error: ${error}`,
-            },
-          ];
-        });
-      }),
-    );
+    // Stream Done / Stream Error — handled by the unified subscription above.
 
     // Phone-initiated chat: main process streams tokens via gemini-stream-*; this
     // event adds the user turn + streaming placeholder before tokens arrive.
@@ -6042,183 +5785,6 @@ const NativelyInterface: React.FC<NativelyInterfaceProps> = ({
         }, 50);
       }),
     );
-
-    // JIT RAG Stream listeners (for live meeting RAG responses)
-    //
-    // Same deterministic-reveal treatment as the main streaming path (see
-    // the "Deterministic reveal" comment block above queueToken) — rate-
-    // capped, word-aware, provider-independent — adapted to the fact that
-    // this bubble commits through normal React state (lastMsg.text) rather
-    // than a direct DOM ref: committing the revealed prefix to state IS the
-    // paint step, no separate render call needed.
-    const cancelRagChunkRaf = () => {
-      if (ragChunkRafRef.current !== null) {
-        cancelAnimationFrame(ragChunkRafRef.current);
-        ragChunkRafRef.current = null;
-      }
-    };
-    // Sets the bubble's text to exactly `revealedText` (the full revealed
-    // PREFIX so far, not a delta to append) — the cursor-over-accumulated-
-    // text shape means each tick recomputes the whole visible slice, not an
-    // incremental splice.
-    const commitRagText = (revealedText: string) => {
-      setMessages((prev) => {
-        const lastMsg = prev[prev.length - 1];
-        if (lastMsg && lastMsg.isStreaming && lastMsg.role === 'system') {
-          if (lastMsg.text === revealedText) return prev; // no-op, skip a redundant re-render
-          const updated = [...prev];
-          updated[prev.length - 1] = { ...lastMsg, text: revealedText, isCode: revealedText.includes('```') };
-          return updated;
-        }
-        return prev;
-      });
-    };
-    const ragRevealTick = (ts: number) => {
-      ragChunkRafRef.current = null;
-      const fullText = ragArrivedTextRef.current;
-      const pacer = ragPacerRef.current;
-      const deltaMs = ragLastTsRef.current === null ? 1000 / 60 : Math.max(0, ts - ragLastTsRef.current);
-      ragLastTsRef.current = ts;
-      const prevLen = pacer.revealedLen;
-      tickPacer(pacer, fullText, ts, deltaMs, { reducedMotion: prefersReducedMotionRef.current });
-      if (pacer.revealedLen !== prevLen) {
-        commitRagText(fullText.slice(0, pacer.revealedLen));
-      }
-      if (pacer.revealedLen < fullText.length) {
-        ragChunkRafRef.current = requestAnimationFrame(ragRevealTick);
-        return;
-      }
-      // Caught up to everything that has arrived. If the provider hasn't
-      // signaled done yet (ragDoneRef false), self-terminate — onRAGStreamChunk's
-      // ensureRagRevealTicker restarts this the moment more text arrives.
-      // If the provider HAS signaled done, per
-      // STREAM_RENDER_CONFIG.flushImmediatelyOnComplete (default false) THIS
-      // is the moment to actually commit isStreaming:false — deferred all
-      // the way until the reveal genuinely caught up, not the instant the
-      // network finished (see onRAGStreamComplete below).
-      if (ragDoneRef.current) {
-        ragDoneRef.current = false;
-        setMessages((prev) => {
-          const lastMsg = prev[prev.length - 1];
-          if (lastMsg && lastMsg.isStreaming && lastMsg.role === 'system') {
-            return [...prev.slice(0, -1), { ...lastMsg, isStreaming: false }];
-          }
-          if (lastMsg && lastMsg.isStreaming) {
-            const updated = [...prev];
-            updated[prev.length - 1] = { ...lastMsg, isStreaming: false };
-            return updated;
-          }
-          return prev;
-        });
-        ragArrivedTextRef.current = '';
-        ragPacerRef.current = createPacerState();
-        ragLastTsRef.current = null;
-      }
-    };
-    const ensureRagRevealTicker = () => {
-      if (ragChunkRafRef.current === null) {
-        ragChunkRafRef.current = requestAnimationFrame(ragRevealTick);
-      }
-    };
-    // Stream-end flush: any backlog still un-revealed must appear INSTANTLY,
-    // not paced — used for the error path (always instant — see
-    // onRAGStreamError below) and for the flushImmediatelyOnComplete=true
-    // config branch of onRAGStreamComplete. Also resets the pacer/
-    // accumulator/done-flag for the NEXT RAG answer, so a fresh stream never
-    // inherits stale state from this one.
-    const flushRagChunkBuffer = () => {
-      cancelRagChunkRaf();
-      const fullText = ragArrivedTextRef.current;
-      if (ragPacerRef.current.revealedLen < fullText.length) {
-        commitRagText(fullText);
-      }
-      ragArrivedTextRef.current = '';
-      ragPacerRef.current = createPacerState();
-      ragLastTsRef.current = null;
-      ragDoneRef.current = false;
-    };
-
-    if (window.electronAPI.onRAGStreamChunk) {
-      cleanups.push(
-        window.electronAPI.onRAGStreamChunk((data: { chunk: string }) => {
-          ragArrivedTextRef.current += data.chunk;
-          ensureRagRevealTicker();
-        }),
-      );
-    }
-
-    if (window.electronAPI.onRAGStreamComplete) {
-      cleanups.push(
-        window.electronAPI.onRAGStreamComplete(() => {
-          setIsProcessing(false);
-          requestStartTimeRef.current = null;
-          if (STREAM_RENDER_CONFIG.flushImmediatelyOnComplete) {
-            // Flush any chunk(s) still buffered for the current frame BEFORE
-            // marking the stream as done, so the final commit never drops
-            // the last few characters of the answer.
-            flushRagChunkBuffer();
-            setMessages((prev) => {
-              const lastMsg = prev[prev.length - 1];
-              if (lastMsg && lastMsg.isStreaming && lastMsg.role === 'system') {
-                return [...prev.slice(0, -1), { ...lastMsg, isStreaming: false }];
-              }
-              if (lastMsg && lastMsg.isStreaming) {
-                const updated = [...prev];
-                updated[prev.length - 1] = { ...lastMsg, isStreaming: false };
-                return updated;
-              }
-              return prev;
-            });
-            return;
-          }
-          // Deferred (default): the provider is done, but the ANIMATION
-          // keeps draining at the same deterministic rate all the way to
-          // the last character — mark it and let ragRevealTick's own
-          // catch-up branch perform the actual isStreaming:false commit.
-          // ensureRagRevealTicker guarantees at least one more tick runs
-          // even if the ticker had already self-terminated (the reveal
-          // fully caught up to whatever had arrived BEFORE this done event
-          // — without this, nothing would ever wake it to notice
-          // ragDoneRef and finalize).
-          ragDoneRef.current = true;
-          ensureRagRevealTicker();
-        }),
-      );
-    }
-
-    if (window.electronAPI.onRAGStreamError) {
-      cleanups.push(
-        window.electronAPI.onRAGStreamError((data: { error: string }) => {
-          // Errors are always instant, never deferred — flushRagChunkBuffer
-          // resets ragDoneRef/accumulator/pacer so a still-running ticker
-          // (if any) can't later overwrite the error text appended below
-          // with a stale `fullText.slice(0, revealedLen)` commit.
-          flushRagChunkBuffer();
-          setIsProcessing(false);
-          requestStartTimeRef.current = null;
-          setMessages((prev) => {
-            const lastMsg = prev[prev.length - 1];
-            if (lastMsg && lastMsg.isStreaming) {
-              const updated = [...prev];
-              updated[prev.length - 1] = {
-                ...lastMsg,
-                isStreaming: false,
-                text: lastMsg.text + `\n\n[RAG Error: ${data.error}]`,
-              };
-              return updated;
-            }
-            return prev;
-          });
-        }),
-      );
-    }
-    // Cleanup: cancel any pending RAF and drop buffered (unflushed) text if
-    // this effect tears down mid-stream (component unmount, deps change).
-    cleanups.push(() => {
-      cancelRagChunkRaf();
-      ragArrivedTextRef.current = '';
-      ragDoneRef.current = false;
-    });
 
     return () => cleanups.forEach((fn) => fn());
   }, [currentModel, queueToken, flushToken]); // Ensure tracking captures correct model
@@ -6297,10 +5863,6 @@ const NativelyInterface: React.FC<NativelyInterfaceProps> = ({
           messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
         }, 50);
 
-        // A previous turn's RAG answer may still be deferred-draining (see
-        // forceFinalizeStaleRagStream's declaration) — force it to its final
-        // state before this new placeholder can become "the last message".
-        forceFinalizeStaleRagStream();
         const placeholderId = genMessageId();
         streamingMsgIdRef.current = placeholderId;
         streamingIntentRef.current = 'chat';
@@ -6336,11 +5898,9 @@ Instructions:
 2. Provide a direct, helpful answer.
 3. Be concise.`;
           } else {
-            const ragResult = await window.electronAPI.ragQueryLive?.(question);
-            if (ragResult?.success) {
-              return;
-            }
-
+            // UNIFIED PIPELINE (C5): the JIT RAG preflight now lives inside the
+            // manual-chat runner — the same question is answered from the live
+            // meeting index when available, else by the LLM below.
             prompt = `You are a real-time interview assistant. The user just repeated or paraphrased a question from their interviewer.
 Instructions:
 1. Extract the core question being asked
@@ -6355,18 +5915,21 @@ Provide only the answer, nothing else.`;
           // R-17: claim the desktop surface BEFORE the round-trip. The stream's
           // id does not exist until main allocates it, so without a claim a
           // phone turn still streaming owns the guard and swallows this whole
-          // answer (see chatStreamGuard.mjs). Claiming also evicts that phone
-          // stream from the bubble, which is correct: the user just chose this
-          // surface. The desktop done/error handlers both clear it again.
+          // answer (see intelligenceStreamGuard.mjs). Claiming also evicts that
+          // phone stream from the bubble, which is correct: the user just chose
+          // this surface. The desktop done/error handlers both clear it again.
           chatStreamIdRef.current = null;
           chatStreamSourceRef.current = 'desktop';
+          unifiedGuardRef.current.claim({ surface: 'desktop' });
           requestStartTimeRef.current = Date.now();
-          await window.electronAPI.streamGeminiChat(
-            question,
-            currentAttachments.length > 0 ? currentAttachments.map((s) => s.path) : undefined,
-            prompt,
-            { skipSystemPrompt: true },
-          );
+          // UNIFIED PIPELINE (C4): caller-owned prompt on the single entry point.
+          await window.electronAPI.runIntelligence({
+            source: 'manual_chat',
+            text: question,
+            imagePaths: currentAttachments.length > 0 ? currentAttachments.map((s) => s.path) : undefined,
+            context: prompt,
+            skipSystemPrompt: true,
+          });
         } catch (err) {
           // R-17: a throw from invoke() never reaches the main process, so no
           // gemini-stream-error follows and nothing else releases the claim we
@@ -6374,6 +5937,7 @@ Provide only the answer, nothing else.`;
           // every phone turn — the bug this fix removes, inverted.
           chatStreamIdRef.current = null;
           chatStreamSourceRef.current = null;
+          unifiedGuardRef.current.release('desktop');
           setIsProcessing(false);
           setMessages((prev) => {
             const last = prev[prev.length - 1];
@@ -6499,10 +6063,6 @@ Provide only the answer, nothing else.`;
       messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
     }, 50);
 
-    // A previous turn's RAG answer may still be deferred-draining (see
-    // forceFinalizeStaleRagStream's declaration) — force it to its final
-    // state before this new placeholder can become "the last message".
-    forceFinalizeStaleRagStream();
     // Add placeholder for streaming response — wire queueToken to this row so
     // the first gemini-stream-token does not spawn a second streaming bubble.
     const placeholderId = genMessageId();
@@ -6535,30 +6095,30 @@ Provide only the answer, nothing else.`;
     pinAnswerPanel();
 
     try {
-      // JIT RAG pre-flight: try to use indexed meeting context first
-      if (currentAttachments.length === 0) {
-        const ragResult = await window.electronAPI.ragQueryLive?.(userText || '');
-        if (ragResult?.success) {
-          // JIT RAG handled it — response streamed via rag:stream-chunk events
-          return;
-        }
-      }
+      // UNIFIED PIPELINE (C5): the JIT RAG preflight now lives inside the
+      // manual-chat runner (main process), so the renderer submits once and
+      // the engine decides RAG-vs-LLM.
 
       // Pass imagePath if attached, AND conversation context
       // R-17: claim the desktop surface before the round-trip (see the note at
       // the other streamGeminiChat call site).
       chatStreamIdRef.current = null;
       chatStreamSourceRef.current = 'desktop';
+      unifiedGuardRef.current.claim({ surface: 'desktop' });
       requestStartTimeRef.current = Date.now();
-      await window.electronAPI.streamGeminiChat(
-        userText || 'Analyze this screenshot',
-        currentAttachments.length > 0 ? currentAttachments.map((s) => s.path) : undefined,
-        conversationContextForSubmit, // Pass freshly-derived context so "answer this" works
-      );
+      // UNIFIED PIPELINE (C4): single entry point; conversation context rides
+      // the request so "answer this" keeps working.
+      await window.electronAPI.runIntelligence({
+        source: 'manual_chat',
+        text: userText || 'Analyze this screenshot',
+        imagePaths: currentAttachments.length > 0 ? currentAttachments.map((s) => s.path) : undefined,
+        context: conversationContextForSubmit,
+      });
     } catch (err) {
       // R-17: release the claim taken above — see the note at the other call site.
       chatStreamIdRef.current = null;
       chatStreamSourceRef.current = null;
+      unifiedGuardRef.current.release('desktop');
       setIsProcessing(false);
       setMessages((prev) => {
         const last = prev[prev.length - 1];

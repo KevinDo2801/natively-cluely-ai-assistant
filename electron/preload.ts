@@ -402,26 +402,12 @@ interface ElectronAPI {
   ) => () => void;
 
   // Intelligence Mode IPC
+  // UNIFIED PIPELINE (C4/C6): the per-mode entry points (generateWhatToSay,
+  // generateFollowUp/Recap/Clarify/FollowUpQuestions, generateCodeHint,
+  // generateBrainstorm, submitManualQuestion) are DELETED — every surface
+  // goes through runIntelligence. generateAssist / test helpers / context
+  // probes remain.
   generateAssist: () => Promise<{ insight: string | null }>;
-  generateWhatToSay: (
-    question?: string,
-    imagePaths?: string[],
-    options?: { promptInstruction?: string; domContext?: string; domContextEnvelope?: unknown },
-  ) => Promise<{
-    answer: string | null;
-    question?: string;
-    error?: string;
-    screenContextStatus?: 'not_available' | 'available' | 'failed';
-    ocrTextLength?: number;
-    imageCount?: number;
-    usedImageInput?: boolean;
-  }>;
-  generateFollowUp: (
-    intent: string,
-    userRequest?: string,
-  ) => Promise<{ refined: string | null; intent: string }>;
-  generateRecap: () => Promise<{ summary: string | null }>;
-  submitManualQuestion: (question: string) => Promise<{ answer: string | null; question: string }>;
   getIntelligenceContext: () => Promise<{
     context: string;
     lastAssistantMessage: string | null;
@@ -494,45 +480,10 @@ interface ElectronAPI {
   // Bulk delete (launcher multi-select, v32). Atomic in main — all or nothing.
   deleteMeetings: (ids: string[]) => Promise<{ success: boolean; deleted?: number }>;
 
-  // Intelligence Mode Events
-  onIntelligenceAssistUpdate: (callback: (data: { insight: string }) => void) => () => void;
-  onIntelligenceSuggestedAnswer: (
-    callback: (data: { answer: string; question: string; confidence: number; sourceLabel?: string; generationId?: number }) => void,
-  ) => () => void;
-  onIntelligenceSuggestedAnswerDiscard: (
-    callback: (data: { reason: string }) => void,
-  ) => () => void;
-  onIntelligenceCodeVerified: (
-    callback: (data: { question: string; passed: number; total: number; language: string }) => void,
-  ) => () => void;
-  onIntelligenceCodeCorrection: (
-    callback: (data: { question: string; answer: string; note: string; reVerified: boolean }) => void,
-  ) => () => void;
-  onIntelligenceRefinedAnswer: (
-    callback: (data: { answer: string; intent: string }) => void,
-  ) => () => void;
-  onIntelligenceRecap: (callback: (data: { summary: string }) => void) => () => void;
-  onIntelligenceClarify: (callback: (data: { clarification: string }) => void) => () => void;
-  onIntelligenceClarifyToken: (callback: (data: { token: string }) => void) => () => void;
-  onIntelligenceManualStarted: (callback: () => void) => () => void;
-  onIntelligenceManualResult: (
-    callback: (data: { answer: string; question: string }) => void,
-  ) => () => void;
-  onIntelligenceModeChanged: (callback: (data: { mode: string }) => void) => () => void;
-  onIntelligenceError: (callback: (data: { error: string; mode: string }) => void) => () => void;
-  // Sprint 7: dedicated negotiation-coaching channel. Replaces the
-  // sentinel-string multiplex through suggested_answer_token / suggested_answer.
-  onIntelligenceNegotiationCoaching: (callback: (data: { payload: any }) => void) => () => void;
-  // Sprint 9: time-batched IPC token channel. Carries a batch of streaming
-  // tokens for ANY of the 5 streaming kinds in one IPC send. Replaces
-  // per-token sends to the 5 individual channels (which still exist as
-  // unused defense-in-depth bridges).
-  onIntelligenceTokenBatch: (
-    callback: (data: {
-      kind: 'suggested_answer' | 'refined_answer' | 'recap' | 'clarify' | 'follow_up_questions';
-      items: any[];
-    }) => void,
-  ) => () => void;
+  // Intelligence Mode Events — UNIFIED PIPELINE (C6): the per-channel
+  // onIntelligence* stream listeners are DELETED; every event now arrives
+  // through onIntelligenceStream. Only the dynamic-action card channels
+  // remain (typed below at their impl site).
 
   // Model Management
   getDefaultModel: () => Promise<{ model: string }>;
@@ -663,16 +614,19 @@ interface ElectronAPI {
   getOverlayMousePassthrough: () => Promise<boolean>;
   onOverlayMousePassthroughChanged: (callback: (enabled: boolean) => void) => () => void;
 
-  // Streaming listeners
-  streamGeminiChat: (
-    message: string,
-    imagePaths?: string[],
-    context?: string,
-    options?: { skipSystemPrompt?: boolean; ignoreKnowledgeMode?: boolean },
-  ) => Promise<void>;
-  onGeminiStreamToken: (callback: (token: string, meta?: { streamId?: number }) => void) => () => void;
-  onGeminiStreamDone: (callback: (data?: { finalText?: string; streamId?: number }) => void) => () => void;
-  onGeminiStreamError: (callback: (error: string, meta?: { streamId?: number | null; source?: string }) => void) => () => void;
+  // Streaming listeners — legacy gemini-stream-* removed (UNIFIED C6).
+
+  // ── UNIFIED PIPELINE ──
+  onIntelligenceStream: (callback: (event: any) => void) => () => void;
+  runIntelligence: (request: any) => Promise<{
+    started: boolean;
+    generationId: number | null;
+    streamKey: string | null;
+    answer?: string | null;
+    question?: string | null;
+    diagnostics?: Record<string, unknown>;
+    error?: string;
+  }>;
 
   onUndetectableChanged: (callback: (state: boolean) => void) => () => void;
   onSettingsWindowShown: (callback: () => void) => () => void;
@@ -722,20 +676,10 @@ interface ElectronAPI {
   testReleaseFetch: () => Promise<{ success: boolean; error?: string }>;
 
   // RAG (Retrieval-Augmented Generation) API
-  ragQueryMeeting: (
-    meetingId: string,
-    query: string,
-  ) => Promise<{ success?: boolean; fallback?: boolean; error?: string }>;
-  ragQueryLive: (
-    query: string,
-  ) => Promise<{ success?: boolean; fallback?: boolean; error?: string }>;
-  ragQueryGlobal: (
-    query: string,
-  ) => Promise<{ success?: boolean; fallback?: boolean; error?: string }>;
-  ragCancelQuery: (options: {
-    meetingId?: string;
-    global?: boolean;
-  }) => Promise<{ success: boolean }>;
+  // UNIFIED PIPELINE (C5): the answering queries (ragQueryMeeting/Live/Global)
+  // and their stream listeners are DELETED — meeting/global search and the
+  // live JIT preflight run inside `run-intelligence` and stream through
+  // 'intelligence-stream'. Status/queue helpers remain.
   ragIsMeetingProcessed: (meetingId: string) => Promise<boolean>;
   ragGetQueueStatus: () => Promise<{
     pending: number;
@@ -744,15 +688,6 @@ interface ElectronAPI {
     failed: number;
   }>;
   ragRetryEmbeddings: () => Promise<{ success: boolean }>;
-  onRAGStreamChunk: (
-    callback: (data: { meetingId?: string; global?: boolean; live?: boolean; chunk: string }) => void,
-  ) => () => void;
-  onRAGStreamComplete: (
-    callback: (data: { meetingId?: string; global?: boolean; live?: boolean }) => void,
-  ) => () => void;
-  onRAGStreamError: (
-    callback: (data: { meetingId?: string; global?: boolean; live?: boolean; error: string }) => void,
-  ) => () => void;
 
   // Keybind Management
   getKeybinds: () => Promise<
@@ -1108,6 +1043,7 @@ interface ElectronAPI {
   // the renderer silently discards — wasting provider quota and feeling slow
   // because a subsequent question's first token has to wait for the prior
   // response to drain through the supersession check.
+  // UNIFIED PIPELINE (C6): stop the sender's active desktop chat stream.
   cancelChatStream: () => void;
   onDomContextReceived: (
     callback: (dom: string, meta?: DomCaptureMeta, envelope?: unknown) => void,
@@ -1775,22 +1711,6 @@ contextBridge.exposeInMainWorld('electronAPI', {
 
   // Intelligence Mode IPC
   generateAssist: () => ipcRenderer.invoke('generate-assist'),
-  generateWhatToSay: (
-    question?: string,
-    imagePaths?: string[],
-    options?: { promptInstruction?: string; domContext?: string; domContextEnvelope?: unknown },
-  ) => ipcRenderer.invoke('generate-what-to-say', question, imagePaths, options),
-  generateClarify: () => ipcRenderer.invoke('generate-clarify'),
-  generateCodeHint: (imagePaths?: string[], problemStatement?: string) =>
-    ipcRenderer.invoke('generate-code-hint', imagePaths, problemStatement),
-  generateBrainstorm: (imagePaths?: string[], problemStatement?: string) =>
-    ipcRenderer.invoke('generate-brainstorm', imagePaths, problemStatement),
-  generateFollowUp: (intent: string, userRequest?: string) =>
-    ipcRenderer.invoke('generate-follow-up', intent, userRequest),
-  generateFollowUpQuestions: () => ipcRenderer.invoke('generate-follow-up-questions'),
-  generateRecap: () => ipcRenderer.invoke('generate-recap'),
-  submitManualQuestion: (question: string) =>
-    ipcRenderer.invoke('submit-manual-question', question),
   getIntelligenceContext: () => ipcRenderer.invoke('get-intelligence-context'),
   testInjectTranscript: (segment: {
     speaker: string;
@@ -1879,14 +1799,9 @@ contextBridge.exposeInMainWorld('electronAPI', {
   setWindowMode: (mode: 'launcher' | 'overlay', inactive?: boolean) =>
     ipcRenderer.invoke('set-window-mode', mode, inactive),
 
-  // Intelligence Mode Events
-  onIntelligenceAssistUpdate: (callback: (data: { insight: string }) => void) => {
-    const subscription = (_: any, data: any) => callback(data);
-    ipcRenderer.on('intelligence-assist-update', subscription);
-    return () => {
-      ipcRenderer.removeListener('intelligence-assist-update', subscription);
-    };
-  },
+  // Intelligence Mode Events — UNIFIED PIPELINE (C6): the per-channel
+  // onIntelligence* stream listeners are DELETED; every event arrives through
+  // onIntelligenceStream. Only the dynamic-action card channels remain.
   // Phase 3 — Dynamic Action Cards
   onIntelligenceDynamicAction: (callback: (data: { action: any }) => void) => {
     const subscription = (_: any, data: any) => callback(data);
@@ -1907,153 +1822,6 @@ contextBridge.exposeInMainWorld('electronAPI', {
   dismissDynamicAction: (actionId: string) =>
     ipcRenderer.invoke('dynamic-action:dismiss', actionId),
   listDynamicActions: () => ipcRenderer.invoke('dynamic-action:list'),
-  onIntelligenceSuggestedAnswerToken: (
-    callback: (data: { token: string; question: string; confidence: number }) => void,
-  ) => {
-    const subscription = (_: any, data: any) => callback(data);
-    ipcRenderer.on('intelligence-suggested-answer-token', subscription);
-    return () => {
-      ipcRenderer.removeListener('intelligence-suggested-answer-token', subscription);
-    };
-  },
-  onIntelligenceSuggestedAnswer: (
-    callback: (data: { answer: string; question: string; confidence: number; sourceLabel?: string; generationId?: number }) => void,
-  ) => {
-    const subscription = (_: any, data: any) => callback(data);
-    ipcRenderer.on('intelligence-suggested-answer', subscription);
-    return () => {
-      ipcRenderer.removeListener('intelligence-suggested-answer', subscription);
-    };
-  },
-  // Orphaned-scaffold fix: drop the open what-to-answer scaffold row when a
-  // stream ends with no final answer (superseded / declined / errored).
-  onIntelligenceSuggestedAnswerDiscard: (
-    callback: (data: { reason: string }) => void,
-  ) => {
-    const subscription = (_: any, data: any) => callback(data);
-    ipcRenderer.on('intelligence-suggested-answer-discard', subscription);
-    return () => {
-      ipcRenderer.removeListener('intelligence-suggested-answer-discard', subscription);
-    };
-  },
-  // Verified code execution: ✓ badge when shown code passed executed tests.
-  onIntelligenceCodeVerified: (
-    callback: (data: { question: string; passed: number; total: number; language: string }) => void,
-  ) => {
-    const subscription = (_: any, data: any) => callback(data);
-    ipcRenderer.on('intelligence-code-verified', subscription);
-    return () => { ipcRenderer.removeListener('intelligence-code-verified', subscription); };
-  },
-  // Verified code execution: a NEW corrected message when shown code failed.
-  onIntelligenceCodeCorrection: (
-    callback: (data: { question: string; answer: string; note: string; reVerified: boolean }) => void,
-  ) => {
-    const subscription = (_: any, data: any) => callback(data);
-    ipcRenderer.on('intelligence-code-correction', subscription);
-    return () => { ipcRenderer.removeListener('intelligence-code-correction', subscription); };
-  },
-  // Sprint 7: dedicated negotiation-coaching channel.
-  onIntelligenceNegotiationCoaching: (callback: (data: { payload: any }) => void) => {
-    const subscription = (_: any, data: any) => callback(data);
-    ipcRenderer.on('intelligence-negotiation-coaching', subscription);
-    return () => {
-      ipcRenderer.removeListener('intelligence-negotiation-coaching', subscription);
-    };
-  },
-  // Sprint 9: time-batched IPC token channel.
-  onIntelligenceTokenBatch: (callback: (data: { kind: string; items: any[] }) => void) => {
-    const subscription = (_: any, data: any) => callback(data);
-    ipcRenderer.on('intelligence-token-batch', subscription);
-    return () => {
-      ipcRenderer.removeListener('intelligence-token-batch', subscription);
-    };
-  },
-  onIntelligenceRefinedAnswerToken: (
-    callback: (data: { token: string; intent: string }) => void,
-  ) => {
-    const subscription = (_: any, data: any) => callback(data);
-    ipcRenderer.on('intelligence-refined-answer-token', subscription);
-    return () => {
-      ipcRenderer.removeListener('intelligence-refined-answer-token', subscription);
-    };
-  },
-  onIntelligenceRefinedAnswer: (callback: (data: { answer: string; intent: string }) => void) => {
-    const subscription = (_: any, data: any) => callback(data);
-    ipcRenderer.on('intelligence-refined-answer', subscription);
-    return () => {
-      ipcRenderer.removeListener('intelligence-refined-answer', subscription);
-    };
-  },
-  onIntelligenceRecapToken: (callback: (data: { token: string }) => void) => {
-    const subscription = (_: any, data: any) => callback(data);
-    ipcRenderer.on('intelligence-recap-token', subscription);
-    return () => {
-      ipcRenderer.removeListener('intelligence-recap-token', subscription);
-    };
-  },
-  onIntelligenceRecap: (callback: (data: { summary: string }) => void) => {
-    const subscription = (_: any, data: any) => callback(data);
-    ipcRenderer.on('intelligence-recap', subscription);
-    return () => {
-      ipcRenderer.removeListener('intelligence-recap', subscription);
-    };
-  },
-  onIntelligenceClarifyToken: (callback: (data: { token: string }) => void) => {
-    const subscription = (_: any, data: any) => callback(data);
-    ipcRenderer.on('intelligence-clarify-token', subscription);
-    return () => {
-      ipcRenderer.removeListener('intelligence-clarify-token', subscription);
-    };
-  },
-  onIntelligenceClarify: (callback: (data: { clarification: string }) => void) => {
-    const subscription = (_: any, data: any) => callback(data);
-    ipcRenderer.on('intelligence-clarify', subscription);
-    return () => {
-      ipcRenderer.removeListener('intelligence-clarify', subscription);
-    };
-  },
-  onIntelligenceFollowUpQuestionsToken: (callback: (data: { token: string }) => void) => {
-    const subscription = (_: any, data: any) => callback(data);
-    ipcRenderer.on('intelligence-follow-up-questions-token', subscription);
-    return () => {
-      ipcRenderer.removeListener('intelligence-follow-up-questions-token', subscription);
-    };
-  },
-  onIntelligenceFollowUpQuestionsUpdate: (callback: (data: { questions: string }) => void) => {
-    const subscription = (_: any, data: any) => callback(data);
-    ipcRenderer.on('intelligence-follow-up-questions-update', subscription);
-    return () => {
-      ipcRenderer.removeListener('intelligence-follow-up-questions-update', subscription);
-    };
-  },
-  onIntelligenceManualStarted: (callback: () => void) => {
-    const subscription = () => callback();
-    ipcRenderer.on('intelligence-manual-started', subscription);
-    return () => {
-      ipcRenderer.removeListener('intelligence-manual-started', subscription);
-    };
-  },
-  onIntelligenceManualResult: (callback: (data: { answer: string; question: string }) => void) => {
-    const subscription = (_: any, data: any) => callback(data);
-    ipcRenderer.on('intelligence-manual-result', subscription);
-    return () => {
-      ipcRenderer.removeListener('intelligence-manual-result', subscription);
-    };
-  },
-  onIntelligenceModeChanged: (callback: (data: { mode: string }) => void) => {
-    const subscription = (_: any, data: any) => callback(data);
-    ipcRenderer.on('intelligence-mode-changed', subscription);
-    return () => {
-      ipcRenderer.removeListener('intelligence-mode-changed', subscription);
-    };
-  },
-  onIntelligenceError: (callback: (data: { error: string; mode: string }) => void) => {
-    const subscription = (_: any, data: any) => callback(data);
-    ipcRenderer.on('intelligence-error', subscription);
-    return () => {
-      ipcRenderer.removeListener('intelligence-error', subscription);
-    };
-  },
   onSessionReset: (callback: () => void) => {
     const subscription = () => callback();
     ipcRenderer.on('session-reset', subscription);
@@ -2062,39 +1830,27 @@ contextBridge.exposeInMainWorld('electronAPI', {
     };
   },
 
-  // Streaming Chat
-  streamGeminiChat: (
-    message: string,
-    imagePaths?: string[],
-    context?: string,
-    options?: { skipSystemPrompt?: boolean; ignoreKnowledgeMode?: boolean },
-  ) => ipcRenderer.invoke('gemini-chat-stream', message, imagePaths, context, options),
+  // Streaming Chat — UNIFIED PIPELINE (C6): streamGeminiChat and the
+  // gemini-stream-* listeners are DELETED; every surface streams through
+  // onIntelligenceStream / runIntelligence below.
 
-  onGeminiStreamToken: (callback: (token: string, meta?: { streamId?: number }) => void) => {
-    // meta is an optional 2nd arg carrying { streamId } (audit finding #3). Existing
-    // (token)=>… callbacks ignore it; the renderer uses it to drop stale-stream tokens.
-    const subscription = (_: any, token: string, meta?: { streamId?: number }) => callback(token, meta);
-    ipcRenderer.on('gemini-stream-token', subscription);
+  // ── UNIFIED PIPELINE: single stream channel for every surface. Main sends
+  // batches of typed events per tick; the callback fires once per event.
+  onIntelligenceStream: (callback: (event: any) => void) => {
+    const subscription = (_: any, events: any[]) => {
+      if (!Array.isArray(events)) return;
+      for (const event of events) {
+        if (event && typeof event === 'object') callback(event);
+      }
+    };
+    ipcRenderer.on('intelligence-stream', subscription);
     return () => {
-      ipcRenderer.removeListener('gemini-stream-token', subscription);
+      ipcRenderer.removeListener('intelligence-stream', subscription);
     };
   },
 
-  onGeminiStreamDone: (callback: (data?: { finalText?: string; streamId?: number }) => void) => {
-    const subscription = (_: any, data?: { finalText?: string; streamId?: number }) => callback(data);
-    ipcRenderer.on('gemini-stream-done', subscription);
-    return () => {
-      ipcRenderer.removeListener('gemini-stream-done', subscription);
-    };
-  },
-
-  onGeminiStreamError: (callback: (error: string, meta?: { streamId?: number | null; source?: string }) => void) => {
-    const subscription = (_: any, error: string, meta?: { streamId?: number | null; source?: string }) => callback(error, meta);
-    ipcRenderer.on('gemini-stream-error', subscription);
-    return () => {
-      ipcRenderer.removeListener('gemini-stream-error', subscription);
-    };
-  },
+  // The ONE entry point for every chat surface.
+  runIntelligence: (request: any) => ipcRenderer.invoke('run-intelligence', request),
 
   // NOTE: onSkillsChanged broadcast subscription was removed. The main
   // process no longer broadcasts on delete (the only mutation left); the
@@ -2349,13 +2105,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
   getCanAutoUpdate: () => ipcRenderer.invoke('get-can-auto-update'),
   testReleaseFetch: () => ipcRenderer.invoke('test-release-fetch'),
 
-  // RAG API
-  ragQueryMeeting: (meetingId: string, query: string) =>
-    ipcRenderer.invoke('rag:query-meeting', { meetingId, query }),
-  ragQueryLive: (query: string) => ipcRenderer.invoke('rag:query-live', { query }),
-  ragQueryGlobal: (query: string) => ipcRenderer.invoke('rag:query-global', { query }),
-  ragCancelQuery: (options: { meetingId?: string; global?: boolean }) =>
-    ipcRenderer.invoke('rag:cancel-query', options),
+  // RAG API — answering queries removed (UNIFIED PIPELINE C5); status helpers remain.
   ragIsMeetingProcessed: (meetingId: string) =>
     ipcRenderer.invoke('rag:is-meeting-processed', meetingId),
   ragGetQueueStatus: () => ipcRenderer.invoke('rag:get-queue-status'),
@@ -2407,32 +2157,6 @@ contextBridge.exposeInMainWorld('electronAPI', {
     };
   },
   reindexIncompatibleMeetings: () => ipcRenderer.invoke('rag:reindex-incompatible-meetings'),
-
-  onRAGStreamChunk: (
-    callback: (data: { meetingId?: string; global?: boolean; live?: boolean; chunk: string }) => void,
-  ) => {
-    const subscription = (_: any, data: any) => callback(data);
-    ipcRenderer.on('rag:stream-chunk', subscription);
-    return () => {
-      ipcRenderer.removeListener('rag:stream-chunk', subscription);
-    };
-  },
-  onRAGStreamComplete: (callback: (data: { meetingId?: string; global?: boolean }) => void) => {
-    const subscription = (_: any, data: any) => callback(data);
-    ipcRenderer.on('rag:stream-complete', subscription);
-    return () => {
-      ipcRenderer.removeListener('rag:stream-complete', subscription);
-    };
-  },
-  onRAGStreamError: (
-    callback: (data: { meetingId?: string; global?: boolean; live?: boolean; error: string }) => void,
-  ) => {
-    const subscription = (_: any, data: any) => callback(data);
-    ipcRenderer.on('rag:stream-error', subscription);
-    return () => {
-      ipcRenderer.removeListener('rag:stream-error', subscription);
-    };
-  },
 
   // Keybind Management
   getKeybinds: () => ipcRenderer.invoke('keybinds:get-all'),
@@ -2781,7 +2505,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
 
   // Cancel the in-flight chat stream. See ElectronAPI interface for rationale.
   cancelChatStream: () => {
-    ipcRenderer.send('gemini-chat-stream-stop');
+    ipcRenderer.send('intelligence-stream-stop');
   },
   onDomContextReceived: (
     callback: (dom: string, meta?: DomCaptureMeta, envelope?: unknown) => void,
