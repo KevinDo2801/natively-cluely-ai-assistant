@@ -1,0 +1,37 @@
+#!/usr/bin/env sh
+# husky commit-msg — enforces a MINIMAL conventional-commit shape.
+#
+# Why: `git log --oneline -30` showed junk messages at HEAD ("1 2 3 4 5 6 7",
+# "good", "d", "almost done") while older history was conventional and
+# CHANGELOG.md is meticulously maintained. The changelog is only as good as
+# the messages feeding it.
+#
+# Accepted shapes (deliberately permissive — no scope/type policing):
+#   feat: ...                     fix: ...       chore: ...
+#   refactor: ...                 test: ...      docs: ...
+#   perf: ...                     build: ...     ci: ...
+#   style: ...                    revert: ...
+#   feat(scope): ...  (any parenthesised scope)
+#   Merge ... / Revert ... (git-generated)
+# Anything else is rejected with a hint. Length >= 10 chars after the prefix.
+msg_file="$1"
+msg="$(head -n1 "$msg_file" | tr -d '\r')"
+
+# Git-generated messages pass through untouched.
+case "$msg" in
+  Merge\ *|Revert\ \"*|fixup!\ *|squash!\ *) exit 0 ;;
+esac
+
+pattern='^(feat|fix|chore|refactor|test|docs|perf|build|ci|style|revert)(\([a-zA-Z0-9_./-]+\))?!?: .{10,}$'
+if ! printf '%s' "$msg" | grep -Eq "$pattern"; then
+  echo "" >&2
+  echo "  ✖ commit message rejected: \"$msg\"" >&2
+  echo "" >&2
+  echo "  Use conventional commits, e.g.:" >&2
+  echo "    refactor(ipc): extract credentials handlers into electron/ipc/credentials.ts" >&2
+  echo "    fix(overlay): keep pill visible during meeting teardown" >&2
+  echo "  Types: feat fix chore refactor test docs perf build ci style revert" >&2
+  echo "  Subject: >= 10 characters, what + why, not \"good\" / \"wip\" / \"1 2 3\"." >&2
+  echo "" >&2
+  exit 1
+fi

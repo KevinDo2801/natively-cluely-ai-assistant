@@ -1,7 +1,7 @@
 // DEV-ONLY visual harness for the streaming code-block fix (see
 // StreamingHighlightedCode / CodeStreamLine in NativelyInterface.tsx).
 //
-// Not part of the shipped app — served only via harness.html, which is not
+// Not part of the shipped app — served only via dev/harness/harness.html, which is not
 // referenced from index.html or vite.config.mts's rollup entry, so it is
 // never bundled into the production build.
 //

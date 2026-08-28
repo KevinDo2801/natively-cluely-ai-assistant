@@ -1,7 +1,12 @@
 // ipcHandlers.ts
 
 import * as crypto from 'crypto';
-import { app, BrowserWindow, dialog, desktopCapturer, ipcMain, shell, systemPreferences } from 'electron';
+import { app, BrowserWindow, dialog, desktopCapturer, shell, systemPreferences } from 'electron';
+import { safeHandle, safeOn } from './ipc/safeIpc';
+import { registerThemeHandlers } from './ipc/theme';
+import { registerWindowControlHandlers } from './ipc/windowControl';
+import { registerLanguageHandlers } from './ipc/languages';
+import { registerSettingsFlagHandlers } from './ipc/settingsFlags';
 import { micSettingsUri } from '../src/lib/micPermissionPolicy.mjs';
 import * as fs from 'fs';
 import * as os from 'os';
@@ -21,9 +26,9 @@ import { ProviderStatusRegistry } from './services/ProviderStatusRegistry';
 import { SkillsManager } from './services/SkillsManager';
 import { SAFE_DOCUMENT_EXTENSIONS } from './services/SafeDocumentTextExtractor';
 import { DEFAULT_BUILTIN_SKILL_IDS, type SkillUploadPayload } from './services/skills/SkillValidator';
+import { darwinMajorVersion, isMacOS13VenturaOrLater, macOSMajorFromDarwin } from './platform/macosVersion';
 
 import { TRIAL_SENTINEL_KEY, DOM_CONTEXT_MAX_CHARS } from './config/constants';
-import { AI_RESPONSE_LANGUAGES, RECOGNITION_LANGUAGES } from './config/languages';
 import { resolveCodingPromptSignals } from './llm/codingPromptSignals';
 import { isBareCodeRequest, looksLikeCodingAnswer, buildPriorCodingContextBlock as buildPriorCodingBlockForV3 } from './llm/codingFollowup';
 import { planAnswer, formatAnswerPlanForPrompt, isCodingAnswerType, validateAnswerStructure, validateProfileOutput, validateProfileEvidence, buildProfileRepairInstruction, raceStreamWithDeadline, firstUsefulDeadlineMs, LIVE_LOCAL_FIRST_USEFUL_TIMEOUT_MS, CODING_REGEN_ABORT_CHARS, isStealthEvasionQuestion, stripProfileTokensFromCoding, isBareFollowUp, isRefinementFollowUp, buildContextFreeClarification, sanitizeCandidateAnswer, acceptRepairedAnswer, CANDIDATE_VOICE_ANSWER_TYPES, detectAssistantVoiceMisfire, ASSISTANT_VOICE_ANSWER_TYPES, piTelemetry, classifyProviderError, detectExplicitCodingContract, isCodingContinuation, buildPriorCodingContextBlock, buildCodingContractPrompt, explicitContractProducesCode, CODING_VERIFICATION_INSTRUCTION, humanizeDirectiveFor, detectCorporateFiller, humanizeForAnswerType, applySpeakabilityBudget, compressTechnicalConcept, checkCodeCompleteness, varySpokenOpening, type ExplicitCodingContract, type AnswerType } from './llm';
@@ -83,8 +88,7 @@ import { DOC_GROUNDED_TOKEN_BUDGET } from './services/ModeContextRetriever';
 import { detectIncompleteNumericAnswer, completenessRegenFabricates, isDocGroundedAnswerType, isAssistantRefusal, SYSTEM_REFUSAL_RE } from './llm/documentGroundedPrompt';
 // ONE list of provider data scopes (see ProviderRouter). The handler below used
 // to carry its own copy, which had already drifted and was erasing an enforced
-// scope on every write.
-import { mergeProviderDataScopes } from './llm/ProviderRouter';
+// scope on every write. (mergeProviderDataScopes now lives in ipc/settingsFlags.ts.)
 
 // Generic tokens excluded when splitting OKF entity names / card titles into
 // distinctive words for the document-grounded false-refusal gate (2026-07-02).
@@ -114,22 +118,9 @@ const GATE_GENERIC_TOKENS = new Set<string>([
 
 
 export function initializeIpcHandlers(appState: AppState): void {
-  const safeHandle = (
-    channel: string,
-    listener: (event: any, ...args: any[]) => Promise<any> | any,
-  ) => {
-    ipcMain.removeHandler(channel);
-    ipcMain.handle(channel, listener);
-  };
-
-  const safeOn = (
-    channel: string,
-    listener: (event: any, ...args: any[]) => void,
-  ) => {
-    ipcMain.removeAllListeners(channel);
-    ipcMain.on(channel, listener);
-  };
-
+  // safeHandle / safeOn are imported from './ipc/safeIpc' (idempotent
+  // registration). The `broadcastCredentialsChanged` helper and other shared
+  // closure state follow below.
   const broadcastCredentialsChanged = (): void => {
     BrowserWindow.getAllWindows().forEach((win) => {
       if (!win.isDestroyed()) win.webContents.send('credentials-changed');
@@ -379,46 +370,10 @@ export function initializeIpcHandlers(appState: AppState): void {
     }
   });
 
-  safeHandle('get-recognition-languages', async () => {
-    return RECOGNITION_LANGUAGES;
-  });
+  // Language settings — Phase 2: extracted to electron/ipc/languages.ts
+  // (registerLanguageHandlers).
+  registerLanguageHandlers(appState);
 
-  safeHandle('get-ai-response-languages', async () => {
-    return AI_RESPONSE_LANGUAGES;
-  });
-
-  safeHandle('set-ai-response-language', async (_, language: string) => {
-    // Validate: must be a non-empty string
-    if (!language || typeof language !== 'string' || !language.trim()) {
-      console.warn('[IPC] set-ai-response-language: invalid or empty language received, ignoring.');
-      return { success: false, error: 'Invalid language value' };
-    }
-    const sanitizedLanguage = language.trim();
-    const { CredentialsManager } = require('./services/CredentialsManager');
-    // Persist to disk
-    CredentialsManager.getInstance().setAiResponseLanguage(sanitizedLanguage);
-    // Update live in-memory LLMHelper (same instance used by IntelligenceEngine)
-    const llmHelper = appState.processingHelper?.getLLMHelper?.();
-    if (llmHelper) {
-      llmHelper.setAiResponseLanguage(sanitizedLanguage);
-      console.log(`[IPC] AI response language updated to: ${sanitizedLanguage}`);
-    } else {
-      console.warn(
-        '[IPC] set-ai-response-language: processingHelper or LLMHelper not ready, language saved to disk only.',
-      );
-    }
-    return { success: true };
-  });
-
-  safeHandle('get-stt-language', async () => {
-    const { CredentialsManager } = require('./services/CredentialsManager');
-    return CredentialsManager.getInstance().getSttLanguage();
-  });
-
-  safeHandle('get-ai-response-language', async () => {
-    const { CredentialsManager } = require('./services/CredentialsManager');
-    return CredentialsManager.getInstance().getAiResponseLanguage();
-  });
   safeHandle(
     'update-content-dimensions',
     async (event, { width, height }: { width: number; height: number }) => {
@@ -5604,43 +5559,9 @@ export function initializeIpcHandlers(appState: AppState): void {
     }
   });
 
-  // Window movement handlers
-  safeHandle('move-window-left', async () => {
-    appState.moveWindowLeft();
-  });
-
-  safeHandle('move-window-right', async () => {
-    appState.moveWindowRight();
-  });
-
-  safeHandle('move-window-up', async () => {
-    appState.moveWindowUp();
-  });
-
-  safeHandle('move-window-down', async () => {
-    appState.moveWindowDown();
-  });
-
-  safeHandle('center-and-show-window', async () => {
-    appState.centerAndShowWindow();
-  });
-
-  // Window Controls
-  safeHandle('window-minimize', async () => {
-    appState.getWindowHelper().minimizeWindow();
-  });
-
-  safeHandle('window-maximize', async () => {
-    appState.getWindowHelper().maximizeWindow();
-  });
-
-  safeHandle('window-close', async () => {
-    appState.getWindowHelper().closeWindow();
-  });
-
-  safeHandle('window-is-maximized', async () => {
-    return appState.getWindowHelper().isMainWindowMaximized();
-  });
+  // Window movement + controls — Phase 2: extracted to
+  // electron/ipc/windowControl.ts (registerWindowControlHandlers).
+  registerWindowControlHandlers(appState);
 
   // Settings Window
   safeHandle('toggle-settings-window', (event, { x, y } = {}) => {
@@ -5708,196 +5629,9 @@ export function initializeIpcHandlers(appState: AppState): void {
     return appState.getDisguise();
   });
 
-  safeHandle('set-open-at-login', async (_, openAtLogin: boolean) => {
-    app.setLoginItemSettings({
-      openAtLogin,
-      openAsHidden: false,
-      path: app.getPath('exe'), // Explicitly point to executable for production reliability
-    });
-    return { success: true };
-  });
-
-  safeHandle('get-open-at-login', async () => {
-    const settings = app.getLoginItemSettings();
-    return settings.openAtLogin;
-  });
-
-  safeHandle('get-verbose-logging', async () => {
-    return appState.getVerboseLogging();
-  });
-
-  safeHandle('set-verbose-logging', async (_, enabled: boolean) => {
-    appState.setVerboseLogging(enabled);
-    return { success: true };
-  });
-
-  safeHandle('get-ambient-chat-enabled', async () => {
-    return appState.getAmbientChatEnabled();
-  });
-
-  safeHandle('set-ambient-chat-enabled', async (_, enabled: boolean) => {
-    appState.setAmbientChatEnabled(enabled);
-    return { success: true };
-  });
-
-  safeHandle('get-pill-always-visible', async () => {
-    return appState.getPillAlwaysVisible();
-  });
-
-  safeHandle('set-pill-always-visible', async (_, enabled: boolean) => {
-    appState.setPillAlwaysVisible(Boolean(enabled));
-    return { success: true };
-  });
-
-  safeHandle('get-hide-overlay-on-start', async () => {
-    return appState.getHideOverlayOnStart();
-  });
-
-  safeHandle('set-hide-overlay-on-start', async (_, enabled: boolean) => {
-    appState.setHideOverlayOnStart(Boolean(enabled));
-    return { success: true };
-  });
-
-  safeHandle('get-auto-answer-enabled', async () => {
-    return appState.getAutoAnswerEnabled();
-  });
-
-  safeHandle('set-auto-answer-enabled', async (_, enabled: boolean) => {
-    const persisted = appState.setAutoAnswerEnabled(Boolean(enabled));
-    return persisted
-      ? { success: true }
-      : { success: false, error: 'Settings store is unavailable; the change was not saved.' };
-  });
-
-  safeHandle('get-code-verification', async () => {
-    // Default OFF: code verification is currently disabled. Only true when the
-    // user has explicitly opted in via Settings → General or env override.
-    const v = SettingsManager.getInstance().get('codeVerificationEnabled');
-    return v === true;
-  });
-
-  safeHandle('set-code-verification', async (_, enabled: boolean) => {
-    if (typeof enabled !== 'boolean') {
-      return { success: false, error: 'invalid_type' };
-    }
-    if (!SettingsManager.getInstance().set('codeVerificationEnabled', enabled)) {
-      // R-24: the write was refused (degraded settings store). Returning
-      // success — and broadcasting below — put every window on a value disk
-      // never received, which silently reverted on the next launch.
-      return { success: false, error: 'settings_store_degraded' };
-    }
-    try {
-      BrowserWindow.getAllWindows().forEach((win) => {
-        if (!win.isDestroyed()) {
-          win.webContents.send('code-verification-changed', enabled);
-        }
-      });
-    } catch { /* broadcasting is best-effort */ }
-    return { success: true };
-  });
-
-  safeHandle('get-meeting-retention', async () => {
-    return SettingsManager.getInstance().get('meetingRetention') ?? 'forever';
-  });
-
-  safeHandle('set-meeting-retention', async (_, retention: 'forever' | '7d' | '30d' | 'never') => {
-    if (!['forever', '7d', '30d', 'never'].includes(retention)) {
-      return { success: false, error: 'invalid_retention' };
-    }
-    if (!SettingsManager.getInstance().set('meetingRetention', retention)) {
-      // R-24: the write was refused (degraded settings store). Returning
-      // success — and broadcasting below — put every window on a value disk
-      // never received, which silently reverted on the next launch.
-      return { success: false, error: 'settings_store_degraded' };
-    }
-    BrowserWindow.getAllWindows().forEach((win) => {
-      if (!win.isDestroyed()) {
-        win.webContents.send('meeting-retention-changed', retention);
-      }
-    });
-    return { success: true };
-  });
-
-  safeHandle('get-provider-data-scopes', async () => {
-    return SettingsManager.getInstance().get('providerDataScopes') ?? {};
-  });
-
-  safeHandle('set-provider-data-scopes', async (_, scopes: Record<string, boolean>) => {
-    if (!scopes || typeof scopes !== 'object') {
-      return { success: false, error: 'invalid_scopes' };
-    }
-    // MERGE over the stored policy, using the ONE scope list in ProviderRouter.
-    // The previous inline `allowedKeys` set omitted `code_execution` — a scope
-    // that IS declared in SettingsManager and IS enforced in
-    // llm/codeVerification/cloudRunner.ts — and the handler then persisted a
-    // whole-object REPLACEMENT. So toggling any scope in the Privacy panel
-    // deleted a stored `code_execution: false` and silently re-enabled sending
-    // model-generated code to the cloud runner.
-    const settings = SettingsManager.getInstance();
-    const merged = mergeProviderDataScopes(settings.get('providerDataScopes'), scopes);
-    if (!settings.set('providerDataScopes', merged as any)) {
-      // R-24: the write was refused (degraded settings store). Returning
-      // success — and broadcasting below — put every window on a value disk
-      // never received, which silently reverted on the next launch.
-      return { success: false, error: 'settings_store_degraded' };
-    }
-    BrowserWindow.getAllWindows().forEach((win) => {
-      if (!win.isDestroyed()) {
-        // Broadcast the MERGED object, not the incoming payload: the renderer
-        // seeds its next write from this, so echoing a partial payload would
-        // reintroduce the erasure one turn later.
-        win.webContents.send('provider-data-scopes-changed', merged);
-      }
-    });
-    return { success: true };
-  });
-
-  safeHandle('get-screen-understanding-mode', async () => {
-    return SettingsManager.getInstance().getScreenUnderstandingMode();
-  });
-
-  safeHandle(
-    'set-screen-understanding-mode',
-    async (_, mode: 'vision_first' | 'vision_only' | 'private_vision') => {
-      if (!['vision_first', 'vision_only', 'private_vision'].includes(mode)) {
-        return { success: false, error: 'invalid_mode' };
-      }
-      // CR-04: report the REAL outcome. A refused write used to return success
-      // AND broadcast the change, so every renderer switched mode while disk
-      // still held the old value and the app reverted on restart.
-      if (!SettingsManager.getInstance().setScreenUnderstandingMode(mode)) {
-        return { success: false, error: 'settings_store_degraded' };
-      }
-      BrowserWindow.getAllWindows().forEach((win) => {
-        if (!win.isDestroyed()) {
-          win.webContents.send('screen-understanding-mode-changed', mode);
-        }
-      });
-      return { success: true };
-    },
-  );
-
-  safeHandle('get-technical-interview-vision-first', async () => {
-    return SettingsManager.getInstance().getTechnicalInterviewVisionFirst();
-  });
-
-  safeHandle('set-technical-interview-vision-first', async (_, enabled: boolean) => {
-    if (typeof enabled !== 'boolean') {
-      return { success: false, error: 'invalid_value' };
-    }
-    if (!SettingsManager.getInstance().set('technicalInterviewVisionFirst', enabled)) {
-      // R-24: the write was refused (degraded settings store). Returning
-      // success — and broadcasting below — put every window on a value disk
-      // never received, which silently reverted on the next launch.
-      return { success: false, error: 'settings_store_degraded' };
-    }
-    BrowserWindow.getAllWindows().forEach((win) => {
-      if (!win.isDestroyed()) {
-        win.webContents.send('technical-interview-vision-first-changed', enabled);
-      }
-    });
-    return { success: true };
-  });
+  // Settings flags � Phase 2: extracted to electron/ipc/settingsFlags.ts
+  // (registerSettingsFlagHandlers).
+  registerSettingsFlagHandlers(appState);
 
   // INTELLIGENCE OS FEATURE FLAGS (Phase 14): get/set the experimental flags so they
   // can be toggled from a dev/experimental settings panel without editing env vars.
@@ -6336,10 +6070,8 @@ export function initializeIpcHandlers(appState: AppState): void {
   safeHandle('get-os-version', async () => {
     const platform = process.platform;
     if (platform === 'darwin') {
-      const darwinMajor = parseInt(os.release().split('.')[0] || '0', 10);
       // Darwin 25+ = macOS 26+ (calendar-year scheme), Darwin 20-24 = macOS 11-15
-      const macosMajor =
-        darwinMajor >= 25 ? darwinMajor + 1 : darwinMajor >= 20 ? darwinMajor - 9 : null;
+      const macosMajor = macOSMajorFromDarwin(darwinMajorVersion());
       return macosMajor ? `macOS ${macosMajor}` : `macOS ${os.release()}`;
     }
     if (platform === 'win32') {
@@ -8654,12 +8386,10 @@ export function initializeIpcHandlers(appState: AppState): void {
   });
 
   safeHandle('local-whisper-preload', async (_, modelId: string) => {
-    if (process.platform === 'darwin') {
-      const os = require('os') as typeof import('os');
-      const darwinMajor = parseInt(os.release().split('.')[0], 10);
-      if (Number.isNaN(darwinMajor) || darwinMajor < 22) {
-        return { success: false, error: 'Local Whisper models require macOS 13 Ventura or later.' };
-      }
+    // Shared Ventura gate (platform/macosVersion) — true off-darwin, so only
+    // macOS hosts below 13 are rejected here.
+    if (!isMacOS13VenturaOrLater()) {
+      return { success: false, error: 'Local Whisper models require macOS 13 Ventura or later.' };
     }
     try {
       const { modelPreloader } = require('./audio/whisper/modelPreloader');
@@ -10463,19 +10193,8 @@ export function initializeIpcHandlers(appState: AppState): void {
   // ==========================================
   // Theme System Handlers
   // ==========================================
-
-  safeHandle('theme:get-mode', () => {
-    const tm = appState.getThemeManager();
-    return {
-      mode: tm.getMode(),
-      resolved: tm.getResolvedTheme(),
-    };
-  });
-
-  safeHandle('theme:set-mode', (_, mode: 'system' | 'light' | 'dark') => {
-    appState.getThemeManager().setMode(mode);
-    return { success: true };
-  });
+  // Phase 2: extracted to electron/ipc/theme.ts (registerThemeHandlers).
+  registerThemeHandlers(appState);
 
   // ==========================================
   // Calendar Integration Handlers

@@ -132,7 +132,8 @@ describe('a Privacy-panel toggle does not re-enable cloud code execution', () =>
 
 describe('scope key lists cannot drift apart again', () => {
   test('the IPC handler no longer carries its own scope list', () => {
-    const src = read('electron/ipcHandlers.ts');
+    // Phase 2: the provider-data-scopes handler moved to ipc/settingsFlags.ts.
+    const src = read('electron/ipcHandlers.ts') + read('electron/ipc/settingsFlags.ts');
     assert.ok(!/const allowedKeys = new Set\(\[/.test(src),
       'a second hand-maintained scope list reappeared in the handler');
     assert.match(src, /mergeProviderDataScopes\(settings\.get\('providerDataScopes'\), scopes\)/,

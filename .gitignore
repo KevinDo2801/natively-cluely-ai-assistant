@@ -391,7 +391,8 @@ PHASE_STATUS.md
 meetily.md
 testengineer.prompt
 cluely/
-docs/
+# NOTE: docs/ is intentionally NOT ignored here — see the docs section below.
+# A bare `docs/` ignore previously hid new documentation from git status.
 
 # Large model binary files
 *.onnx
@@ -488,30 +489,12 @@ fixtures/
 !tests/fixtures/**
 tools/
 
-# Vision benchmark source documentation + generated reports
-!docs/
-docs/*
-!docs/VISION_MODEL_BENCHMARK.md
-# Usage ledger — the progress file is the mandated handoff contract across three
-# campaigns (16 architectural decisions, 5 open findings, the full forensics
-# record), the architecture doc is the system's specification, and the privacy
-# diff is a release gate. Untracked, none of it survives a fresh clone or a
-# worktree — which is exactly where the next person picks this up.
-!docs/usage-ledger-architecture.md
-!docs/usage-ledger-progress.md
-!docs/usage-ledger-privacy-diff.md
-# TypeScript 7 upgrade — audit + report are deliverables, not scratch notes,
-# so they are allowlisted out of the blanket `docs/*` ignore above.
-!docs/ts7-upgrade-audit.md
-!docs/ts7-upgrade-report.md
-# Auto Answer V3 campaign — the progress file is the resume contract for the
-# autopilot (a fresh session must be able to continue from it alone) and the
-# two specs govern every phase. Same reasoning as the usage-ledger entries.
-!docs/autopilot/
-!docs/autopilot/auto-answer-v3-progress.md
-!docs/specs/
-!docs/specs/auto-answer-v2-spec.md.md
-!docs/specs/auto-answer-v3-amendments.md
+# docs/ holds source documentation and the incident archive — tracked by
+# default. Previously this was a blanket `docs/*` ignore with a per-file
+# allowlist, which made every NEW doc silently vanish from git status (12
+# files had to be allowlisted one by one). Now inverted: docs are tracked,
+# and only generated/scratch subtrees belong in this list.
+# Historical note: docs/superpowers/ stays ignored (line 226).
 benchmark-results/
 
 

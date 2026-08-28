@@ -1,7 +1,7 @@
 /**
  * NATIVE-ARCH BOOT GATE — module-load-time arch verification.
  *
- * Refuses to launch if better-sqlite3 / keytar were built for a different
+ * Refuses to launch if better-sqlite3 was built for a different
  * architecture than this hardware. Without this gate, a Rosetta-poisoned
  * `.node` (x86_64 on arm64) fails at first dlopen inside DatabaseManager's
  * `import Database from 'better-sqlite3'` — which fires at module-load time,

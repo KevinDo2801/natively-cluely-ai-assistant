@@ -27,7 +27,6 @@ const path = require('node:path');
 
 const TARGETS = Object.freeze([
   'node_modules/better-sqlite3/build/Release/better_sqlite3.node',
-  'node_modules/keytar/build/Release/keytar.node',
 ]);
 
 const ARCH_TO_MACHO = { arm64: 'arm64', x64: 'x86_64' };

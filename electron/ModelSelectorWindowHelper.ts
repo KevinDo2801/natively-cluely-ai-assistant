@@ -1,6 +1,8 @@
 import { BrowserWindow, screen, app } from "electron"
 import path from "node:path"
 import { attachNoActivate } from "./utils/windowsFocusPolicy"
+import { createWindowAdapter } from "./platform/windowAdapter"
+import type { TimerSlot } from "./platform/windowAdapter"
 
 const isDev = process.env.NODE_ENV === "development"
 
@@ -17,7 +19,8 @@ type WindowActivationOptions = {
 export class ModelSelectorWindowHelper {
     private window: BrowserWindow | null = null
     private contentProtection: boolean = false
-    private opacityTimeout: NodeJS.Timeout | null = null;
+    private readonly adapter = createWindowAdapter();
+    private readonly opacityTimer: TimerSlot = { current: null };
 
     constructor() { }
 
@@ -69,18 +72,10 @@ export class ModelSelectorWindowHelper {
             this.window.setParentWindow(mainWin);
         }
 
-        if (process.platform === "darwin") {
-            // Align with parent window behavior
-            this.window.setVisibleOnAllWorkspaces(isOverlay, { visibleOnFullScreen: isOverlay });
-            // Only set alwaysOnTop if the value is actually changing — calling it unnecessarily
-            // triggers NSApp activation on macOS, stealing focus from other apps.
-            const currentAlwaysOnTop = this.window.isAlwaysOnTop();
-            if (currentAlwaysOnTop !== isOverlay) {
-                this.window.setAlwaysOnTop(isOverlay, "floating");
-            }
-            // Always hide from MC as it's a dropdown
-            this.window.setHiddenInMissionControl(true);
-        }
+        // macOS: re-sync the dropdown's workspace/alwaysOnTop per show (guarded
+        // against NSApp-activation churn inside the adapter), MC always on.
+        // (Phase 1 — delegated to the WindowAdapter; win32 no-op.)
+        this.adapter.applyPopupReveal(this.window, isOverlay);
 
         // Standard dropdown positioning
         this.window.setPosition(Math.round(x), Math.round(y))
@@ -100,23 +95,13 @@ export class ModelSelectorWindowHelper {
         }
         this.windowHelper?.notifyOverlayPopover?.('model', this.overlayAnchor !== null);
 
-        if (process.platform === 'win32' && this.contentProtection) {
-            this.window.setOpacity(0);
-            if (activate) this.window.show(); else this.window.showInactive();
-            this.window.setContentProtection(true);
-
-            if (this.opacityTimeout) clearTimeout(this.opacityTimeout);
-            this.opacityTimeout = setTimeout(() => {
-                if (this.window && !this.window.isDestroyed()) {
-                    this.window.setOpacity(1);
-                    if (activate) this.window.focus();
-                }
-            }, 60);
-        } else {
-            this.window.setContentProtection(this.contentProtection);
-            if (activate) this.window.show(); else this.window.showInactive();
-            if (activate) this.window.focus();
-        }
+        // Platform reveal (Phase 1): win32 DWM opacity shield vs direct path —
+        // identical behavior to the inline branches it replaces.
+        this.adapter.showWithOpacityShield([this.window], {
+            activate,
+            contentProtection: this.contentProtection,
+            timer: this.opacityTimer,
+        });
     }
 
     public hideWindow(): void {
@@ -163,7 +148,6 @@ export class ModelSelectorWindowHelper {
         showWhenReady: boolean = true,
         showOptions: WindowActivationOptions = {},
     ): void {
-        const isMac = process.platform === 'darwin';
         const windowSettings: Electron.BrowserWindowConstructorOptions = {
             width: 140,
             height: 200,
@@ -194,7 +178,7 @@ export class ModelSelectorWindowHelper {
             // capture handler (NativelyInterface.tsx) dispatching the
             // `model-selector:close-if-open` IPC, guarded against the
             // toggle button via `data-model-selector-toggle`.
-            ...(isMac ? { type: 'panel' as const } : {}),
+            ...this.adapter.panelWindowOptions(),
         }
 
         if (x !== undefined && y !== undefined) {
@@ -203,6 +187,9 @@ export class ModelSelectorWindowHelper {
         }
 
         this.window = new BrowserWindow(windowSettings)
+        // macOS NSPanel stealth attributes, applied BEFORE the helper's own
+        // ready-to-show so stealth precedes any show (Phase 1 — adapter).
+        this.adapter.applyNativeStealth(this.window)
         // Windows counterpart of the NSPanel stealth attributes applied below
         // on macOS: WS_EX_NOACTIVATE so clicking the model selector mid-meeting
         // never steals foreground focus from the meeting app. Dismissal is the
@@ -210,10 +197,9 @@ export class ModelSelectorWindowHelper {
         // here). No-op on macOS/Linux.
         attachNoActivate(this.window)
 
-        if (process.platform === "darwin") {
-            // Initial defaults - will be updated in showWindow
-            this.window.setHiddenInMissionControl(true)
-        }
+        // macOS: hide from Mission Control (initial; updated per-show in the
+        // adapter's applyPopupReveal).
+        this.adapter.applyStealth(this.window, { hiddenInMissionControl: true });
 
         // Apply content protection for Undetectable Mode
         console.log(`[ModelSelectorWindowHelper] Creating window with Content Protection: ${this.contentProtection}`);
@@ -229,30 +215,11 @@ export class ModelSelectorWindowHelper {
         });
 
         this.window.once('ready-to-show', () => {
-            // Apply NSPanel stealth attributes BEFORE any show() so clicking
-            // the model selector on the Natively overlay doesn't activate
-            // Natively and dim the user's foreground app (Zoom/browser) mid
-            // meeting. Without this, model-switch was a regular focusable
-            // window and every interaction stole focus. Failure non-fatal.
-            //
-            // NOTE: model selector also uses `on('blur')` to auto-close
-            // (line below). With panel-nonactivating + becomesKeyOnlyIfNeeded,
-            // blur semantics are subtle — the window may not become key on
-            // click and therefore never receives blur. If that proves
-            // problematic, the close-on-blur handler should switch to a
-            // click-outside listener registered on the parent overlay.
-            if (process.platform === 'darwin' && this.window && !this.window.isDestroyed()) {
-                try {
-                    // eslint-disable-next-line @typescript-eslint/no-var-requires
-                    const { loadNativeModule } = require('./audio/nativeModuleLoader');
-                    const native = loadNativeModule();
-                    if (native && typeof native.applyStealthToWindow === 'function') {
-                        native.applyStealthToWindow(this.window.getNativeWindowHandle());
-                    }
-                } catch (e) {
-                    console.error('[ModelSelectorWindowHelper] applyStealthToWindow failed:', e);
-                }
-            }
+            // NSPanel stealth attributes are now applied by
+            // this.adapter.applyNativeStealth() registered right after
+            // `new BrowserWindow(...)` (above), which fires this listener
+            // first — stealth before any show. The blur/close notes below
+            // are preserved for context.
             if (showWhenReady) {
                 this.showWindow(
                     this.window?.getBounds().x || 0,
@@ -280,17 +247,8 @@ export class ModelSelectorWindowHelper {
         // mirroring the Settings handler. While brief (model selector is a
         // dropdown), interaction with the dropdown still requires keystrokes
         // to reach this window's React tree, which the tap would otherwise
-        // intercept at OS level.
-        this.window.on('show', () => {
-            if (process.platform !== 'darwin') return;
-            try {
-                // eslint-disable-next-line @typescript-eslint/no-var-requires
-                const { StealthKeyboardManager } = require('./services/StealthKeyboardManager');
-                StealthKeyboardManager.getInstance().stop();
-            } catch (e) {
-                console.error('[ModelSelectorWindowHelper] failed to stop stealth tap on show:', e);
-            }
-        });
+        // intercept at OS level. (darwin stop now owned by the adapter.)
+        this.adapter.stopStealthTapOnShow(this.window);
     }
 
     private ensureVisibleOnScreen() {
@@ -344,11 +302,7 @@ export class ModelSelectorWindowHelper {
     }
 
     public syncActivationPolicy(): void {
-        if (process.platform !== 'win32') return;
         if (!this.window || this.window.isDestroyed()) return;
-        this.window.setContentProtection(this.contentProtection);
-        if (this.window.isVisible()) {
-            this.window.setOpacity(1);
-        }
+        this.adapter.syncActivationPolicy(this.window, this.contentProtection);
     }
 }

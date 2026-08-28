@@ -1,6 +1,7 @@
 import path from 'path';
 import fs from 'fs';
 import type { WhisperModelId, WhisperModelInfo } from './types';
+import { isMacOS13VenturaOrLater } from '../../platform/macosVersion';
 
 // env is configured lazily via configureTransformersCache()
 // We import the type only here; the actual require() happens at runtime.
@@ -343,17 +344,14 @@ export function getAvailableModels(): WhisperModelInfo[] {
   // (Monterey) and earlier the dylib load fails with "Symbol not found:
   // __ZNSt3__18to_charsEPcS0_d". Surface a clear error so users don't waste
   // time downloading models that will immediately crash.
-  if (process.platform === 'darwin') {
-    const release = (require('os') as typeof import('os')).release(); // e.g. "21.x.x" = macOS 12
-    const darwinMajor = parseInt(release.split('.')[0], 10);
-    // Darwin 22 = macOS 13 Ventura. Darwin 21 = macOS 12 Monterey.
-    if (Number.isNaN(darwinMajor) || darwinMajor < 22) {
-      return MODEL_CATALOG.filter(m => !m.hidden).map(m => ({
-        ...m,
-        status: 'error' as const,
-        errorMessage: 'Requires macOS 13 Ventura or later. Local models are not supported on macOS 12 (Monterey) or earlier.',
-      }));
-    }
+  // The gate itself lives in platform/macosVersion (single Darwin-mapping
+  // source) and returns true off-darwin, where the constraint does not apply.
+  if (!isMacOS13VenturaOrLater()) {
+    return MODEL_CATALOG.filter(m => !m.hidden).map(m => ({
+      ...m,
+      status: 'error' as const,
+      errorMessage: 'Requires macOS 13 Ventura or later. Local models are not supported on macOS 12 (Monterey) or earlier.',
+    }));
   }
 
   // Resolve the active dtype lazily — avoids importing inferenceConfig at

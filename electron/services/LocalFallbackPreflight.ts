@@ -273,7 +273,7 @@ export async function runLocalFallbackPreflight(options: { ollamaSelected?: bool
       return { ok: false, message: 'Xenova/bge-reranker-base model files missing from packaged resources/models/' };
     }));
 
-    // 3. Packaged native binaries (Rust audio module, sqlite-vec, sharp, better-sqlite3, keytar).
+    // 3. Packaged native binaries (Rust audio module, sqlite-vec, sharp, better-sqlite3).
     checks.push(await timedCheck('rust native audio module', async () => checkNativeModuleUnpacked()));
     checks.push(await timedCheck('rust native audio module loadable', async () => tryRequireNativeModule()));
     checks.push(await timedCheck('better-sqlite3 native', async () => checkUnpackedNativeDir('node_modules/better-sqlite3/build/Release/better_sqlite3.node')));

@@ -80,9 +80,12 @@ test('binaryArch dispatches on the injected platform, not the host', () => {
 // verifyAll — the behavior that actually regressed.
 // ---------------------------------------------------------------------------
 
-/** Lay out a fake repo root containing both TARGETS at a given machine type. */
+/** Lay out a fake repo root containing the shipped TARGETS at a given machine type. */
 function fakeRepo(name, machine) {
   const root = path.join(tmp, name);
+  // keytar was removed from the app (Phase 0 dependency cleanup) and from
+  // TARGETS in nativeArch.{cjs,mjs} — its binary is still laid down here to
+  // prove verifyAll now IGNORES it rather than reporting it.
   for (const rel of [
     'node_modules/better-sqlite3/build/Release/better_sqlite3.node',
     'node_modules/keytar/build/Release/keytar.node',
@@ -104,10 +107,11 @@ test('verifyAll no longer skips win32 — a 32-bit addon is a mismatch', () => {
 
   assert.equal(result.skipped, undefined, 'win32 must be checked, not skipped');
   assert.equal(result.ok, false);
-  assert.equal(result.mismatches.length, 2, 'both better-sqlite3 and keytar must be reported');
+  assert.equal(result.mismatches.length, 1, 'only better-sqlite3 is a shipped target now; keytar must be ignored');
   for (const m of result.mismatches) {
     assert.equal(m.actual, 'ia32');
-    assert.match(m.path, /better_sqlite3\.node|keytar\.node/);
+    assert.match(m.path, /better_sqlite3\.node/);
+    assert.ok(!m.path.includes('keytar'), 'keytar is no longer verified — it was removed from the app');
   }
 });
 

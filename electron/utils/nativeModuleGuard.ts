@@ -7,7 +7,7 @@ import { spawnSync } from 'child_process';
 // a startup crash with NODE_MODULE_VERSION mismatch on require(). Common trigger:
 // `npm rebuild` (skips postinstall), `npm install --ignore-scripts`, or a system
 // Node upgrade after a previous successful build. In dev, recover automatically.
-const GUARDED_MODULES = ['better-sqlite3', 'keytar'];
+const GUARDED_MODULES = ['better-sqlite3'];
 
 interface AbiMismatch {
   module: string;
@@ -92,7 +92,7 @@ export function ensureNativeModuleAbi(): void {
   if (!rebuildBin) {
     console.error(
       '[NativeModuleGuard] electron-rebuild not found in node_modules. ' +
-        'Run: npm install, then: npx electron-rebuild -f -w better-sqlite3,keytar'
+        'Run: npm install, then: npx electron-rebuild -f -w better-sqlite3'
     );
     app.exit(1);
     return;
@@ -113,7 +113,7 @@ export function ensureNativeModuleAbi(): void {
   if (result.status !== 0) {
     console.error(
       `[NativeModuleGuard] electron-rebuild exited with code ${result.status}. ` +
-        'Manual recovery: npx electron-rebuild -f -w better-sqlite3,keytar'
+        'Manual recovery: npx electron-rebuild -f -w better-sqlite3'
     );
     app.exit(1);
     return;

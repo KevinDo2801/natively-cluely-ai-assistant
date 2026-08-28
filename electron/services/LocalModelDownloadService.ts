@@ -44,6 +44,7 @@ import { Worker } from 'worker_threads';
 import { app, BrowserWindow } from 'electron';
 import path from 'path';
 import fs from 'fs';
+import { isMacOS13VenturaOrLater } from '../platform/macosVersion';
 
 export type LocalModelDownloadStatus =
   | 'downloading'  // bytes are arriving from the network
@@ -694,12 +695,10 @@ export function createWhisperDownloadProvider(): LocalModelDownloadProvider {
     },
     preflightCheck(): string | null {
       // Preserve the existing macOS 13 Ventura gate from the IPC handler.
-      if (process.platform === 'darwin') {
-        const os = require('os') as typeof import('os');
-        const darwinMajor = parseInt(os.release().split('.')[0], 10);
-        if (Number.isNaN(darwinMajor) || darwinMajor < 22) {
-          return 'Local Whisper models require macOS 13 Ventura or later.';
-        }
+      // Shared with whisper/modelManager via platform/macosVersion (single
+      // Darwin-mapping source); true off-darwin, where the gate doesn't apply.
+      if (!isMacOS13VenturaOrLater()) {
+        return 'Local Whisper models require macOS 13 Ventura or later.';
       }
       return null;
     },

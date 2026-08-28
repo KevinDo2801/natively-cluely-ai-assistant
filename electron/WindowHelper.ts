@@ -19,6 +19,8 @@ import {
   interpolateBounds,
 } from './utils/launcherResizeAnimation';
 import { attachNoActivate, isNoActivateManaged } from './utils/windowsFocusPolicy';
+import { createWindowAdapter } from './platform/windowAdapter';
+import type { LauncherDisguise, TimerSlot } from './platform/windowAdapter';
 
 const isEnvDev = process.env.NODE_ENV === 'development';
 const isPackaged = app.isPackaged;
@@ -200,8 +202,9 @@ export class WindowHelper {
   private currentWindowMode: 'launcher' | 'overlay' = 'launcher';
 
   private appState: AppState;
+  private readonly adapter = createWindowAdapter();
   private contentProtection: boolean = false;
-  private opacityTimeout: NodeJS.Timeout | null = null;
+  private readonly opacityTimer: TimerSlot = { current: null };
   private lastLauncherShowInactive: boolean | null = null;
   // Tracks whether the launcher window's native vibrancy/background/shadow
   // are currently in their "preview" (transparent) state — see
@@ -262,7 +265,6 @@ export class WindowHelper {
   constructor(appState: AppState) {
     this.appState = appState;
   }
-
   private getDisplayWorkArea(bounds?: Electron.Rectangle): Electron.Rectangle {
     if (bounds) {
       return screen.getDisplayMatching(bounds).workArea;
@@ -319,15 +321,12 @@ export class WindowHelper {
    * use it.
    */
   public syncLauncherTaskbarForStealth(): void {
-    if (process.platform !== 'win32') return;
+    // Phase 1 — platform decision owned by the WindowAdapter
+    // (syncLauncherTaskbarPresence): win32 sets skipTaskbar when undetectable;
+    // darwin no-ops (stealth is the Dock/activation-policy path).
     const win = this.launcherWindow;
     if (!win || win.isDestroyed()) return;
-    try {
-      win.setSkipTaskbar(!!this.appState.getUndetectable());
-    } catch (e) {
-      // Non-fatal: worst case the taskbar button remains, exactly as before.
-      console.error('[WindowHelper] setSkipTaskbar failed:', e);
-    }
+    this.adapter.syncLauncherTaskbarPresence(win, !!this.appState.getUndetectable());
   }
 
   // Force-reapply the CURRENT content-protection state to every live window,
@@ -502,7 +501,6 @@ export class WindowHelper {
     const y = Math.round(workArea.y + topMargin);
 
     // --- 1. Create Launcher Window ---
-    const isMac = process.platform === 'darwin';
 
     const launcherSettings: Electron.BrowserWindowConstructorOptions = {
       width: width,
@@ -521,13 +519,8 @@ export class WindowHelper {
         webSecurity: !isDev, // DEBUG: Disable web security only in dev
       },
       show: false, // DEBUG: Force show -> Fixed white screen, now relies on ready-to-show
-      // Platform-specific frame settings
-      ...(isMac
-        ? { titleBarStyle: 'hiddenInset' as const, trafficLightPosition: { x: 14, y: 14 } }
-        : { frame: false, titleBarOverlay: false, autoHideMenuBar: true }),
-      ...(isMac
-        ? { vibrancy: 'under-window' as const, visualEffectState: 'followWindow' as const }
-        : {}),
+      // Platform-specific frame settings (Phase 1 — WindowAdapter).
+      ...this.adapter.launcherWindowOptions(),
       // `transparent` is a creation-time-only BrowserWindow option, so it must
       // be true on every platform (not just macOS) for the Interface Opacity
       // preview to be able to punch through the window at runtime later — see
@@ -546,55 +539,9 @@ export class WindowHelper {
       resizable: true,
       movable: true,
       center: true,
-      icon: (() => {
-        const isMac = process.platform === 'darwin';
-        const isWin = process.platform === 'win32';
-        const mode = this.appState.getDisguise();
-
-        if (mode === 'none') {
-          if (isMac) {
-            return app.isPackaged
-              ? path.join(process.resourcesPath, 'natively.icns')
-              : path.resolve(__dirname, '../../assets/natively.icns');
-          } else if (isWin) {
-            return app.isPackaged
-              ? path.join(process.resourcesPath, 'assets/icons/win/icon.ico')
-              : path.resolve(__dirname, '../../assets/icons/win/icon.ico');
-          } else {
-            return app.isPackaged
-              ? path.join(process.resourcesPath, 'assets', 'icon.png')
-              : path.resolve(__dirname, '../../assets/icon.png');
-          }
-        }
-
-        // Disguise mode icons. Only the three known disguise modes map to a
-        // fake icon; any unexpected value falls through to 'none' above, so we
-        // never silently paint a terminal icon for an unrecognized mode.
-        let iconName: string | null = null;
-        if (mode === 'terminal') iconName = 'terminal.png';
-        if (mode === 'settings') iconName = 'settings.png';
-        if (mode === 'activity') iconName = 'activity.png';
-        if (!iconName) {
-          // Defensive: unknown mode — use the real app icon, matching 'none'.
-          if (isMac) {
-            return app.isPackaged
-              ? path.join(process.resourcesPath, 'natively.icns')
-              : path.resolve(__dirname, '../../assets/natively.icns');
-          } else if (isWin) {
-            return app.isPackaged
-              ? path.join(process.resourcesPath, 'assets/icons/win/icon.ico')
-              : path.resolve(__dirname, '../../assets/icons/win/icon.ico');
-          }
-          return app.isPackaged
-            ? path.join(process.resourcesPath, 'icon.png')
-            : path.resolve(__dirname, '../../assets/icon.png');
-        }
-
-        const platformDir = isWin ? 'win' : 'mac';
-        return app.isPackaged
-          ? path.join(process.resourcesPath, `assets/fakeicon/${platformDir}/${iconName}`)
-          : path.resolve(__dirname, `../../assets/fakeicon/${platformDir}/${iconName}`);
-      })(),
+      // Phase 1 — disguise/app icons resolved by the WindowAdapter per
+      // platform (darwin icns / win32 ico, fakeicon sub-dir for disguise).
+      icon: this.adapter.launcherIconPath(this.appState.getDisguise() as LauncherDisguise, app.isPackaged),
     };
 
     console.log(`[WindowHelper] Icon Path: ${launcherSettings.icon}`);
@@ -792,7 +739,7 @@ export class WindowHelper {
       // in the dock / menu bar / screen-share, so the user's foreground app
       // stays "in front." Required for the chat:focusInput stealth-typing path.
       // Windows/Linux fall back to a regular focusable window.
-      ...(isMac ? { type: 'panel' as const } : {}),
+      ...this.adapter.panelWindowOptions(),
     };
 
     this.overlayWindow = new BrowserWindow(overlaySettings);
@@ -830,57 +777,18 @@ export class WindowHelper {
       }
     }
 
-    if (process.platform === 'darwin') {
-      this.overlayWindow.setVisibleOnAllWorkspaces(true, { visibleOnFullScreen: true });
-      this.overlayWindow.setHiddenInMissionControl(true);
-      this.overlayWindow.setAlwaysOnTop(true, 'floating');
-
-      // Apply Spotlight/Alfred-grade stealth attributes that Electron does not
-      // expose: becomesKeyOnlyIfNeeded (clicks on buttons / surfaces don't
-      // promote the panel to key window → user's foreground app keeps key
-      // state in the dock, menu bar, screen-share, focus-followers),
-      // hidesOnDeactivate=NO, and the right collectionBehavior. Without this,
-      // ANY click on the overlay (button, input, anywhere) activates Natively
-      // and dims the user's foreground app — even with type:'panel' set.
-      //
-      // DEFERRED to `ready-to-show`: getNativeWindowHandle() returns the
-      // NSView pointer immediately after `new BrowserWindow`, but the view's
-      // [NSView window] may briefly be nil before Electron finishes attaching
-      // the view to its NSWindow. Calling now races and the Rust side returns
-      // "NSView has no associated NSWindow" → silent fallback to plain panel.
-      // ready-to-show fires AFTER the NSWindow is attached and the renderer
-      // has performed its first paint, so the window is guaranteed live.
-      //
-      // Optional: requires the rebuilt native module (npm run build:native).
-      // If the binary predates this method we silently skip; clicks will still
-      // soft-activate the panel as before but type:'panel' alone keeps the
-      // dock icon out of the way. Existing users see no regression.
-      this.overlayWindow.once('ready-to-show', () => {
-        if (!this.overlayWindow || this.overlayWindow.isDestroyed()) return;
-        try {
-          // eslint-disable-next-line @typescript-eslint/no-var-requires
-          const { loadNativeModule } = require('./audio/nativeModuleLoader');
-          const native = loadNativeModule();
-          if (native && typeof native.applyStealthToWindow === 'function') {
-            native.applyStealthToWindow(this.overlayWindow.getNativeWindowHandle());
-            console.log('[WindowHelper] Applied stealth NSPanel attributes to overlay');
-          } else {
-            console.warn(
-              '[WindowHelper] applyStealthToWindow unavailable — rebuild native module (npm run build:native) for full stealth',
-            );
-          }
-        } catch (e) {
-          console.error('[WindowHelper] Failed to apply stealth attributes:', e);
-        }
-      });
-    } else if (process.platform === 'win32') {
-      // 'floating' level (HWND_TOPMOST baseline) is not enough to render above
-      // fullscreen browser windows (F11). 'screen-saver' uses a higher TOPMOST
-      // priority that wins against window-mode fullscreen apps. macOS uses
-      // visibleOnFullScreen above; Windows has no equivalent flag, so the level
-      // itself is what controls fullscreen visibility. See issue #167.
-      this.overlayWindow.setAlwaysOnTop(true, 'screen-saver');
-    }
+    // Phase 1 — stealth behavior owned by the WindowAdapter: darwin joins
+    // Spaces/Mission Control + floating level + native NSPanel attributes
+    // (applyNativeStealth registered here, before any other ready-to-show, so
+    // stealth runs before show); win32 re-asserts the screen-saver level.
+    this.adapter.applyStealth(this.overlayWindow, {
+      visibleOnAllWorkspaces: true,
+      hiddenInMissionControl: true,
+      alwaysOnTop: true,
+      alwaysOnTopLevel: 'floating',
+      win32ReassertTopmost: true,
+    });
+    this.adapter.applyNativeStealth(this.overlayWindow);
 
     this.overlayWindow.loadURL(`${startUrl}?window=overlay`).catch((e) => {
       console.error('[WindowHelper] Failed to load Overlay URL:', e);
@@ -1085,7 +993,7 @@ export class WindowHelper {
     // single-instance lock (main.ts) + the pinned dev port (5180) keep a
     // re-run from double-launching; the remaining risk is a zombie after
     // Ctrl+C, avoidable by tray → Quit before stopping the dev terminal.
-    if (process.platform !== 'darwin') {
+    if (this.adapter.shouldHideToTrayOnClose()) {
       this.launcherWindow.on('close', (e) => {
         if (!this.appState.isQuitting()) {
           e.preventDefault();
@@ -1169,19 +1077,13 @@ export class WindowHelper {
         }
       });
 
-      // Re-assert always-on-top on blur (Windows only). Screen-sharing tools
-      // (Zoom, Lark, Teams, etc.) hook the DWM compositor and can demote even
-      // HWND_TOPMOST windows below their shared content layer. Re-applying the
-      // 'screen-saver' level on every blur keeps the overlay above the share
-      // surface. Skipped on macOS — re-asserting setAlwaysOnTop there triggers
-      // [NSApp activate], which steals focus from the underlying app. See #130.
-      if (process.platform === 'win32') {
-        this.overlayWindow.on('blur', () => {
-          if (!this.overlayWindow || this.overlayWindow.isDestroyed()) return;
-          if (!this.overlayWindow.isVisible()) return;
-          this.overlayWindow.setAlwaysOnTop(true, 'screen-saver');
-        });
-      }
+      // Re-assert always-on-top on blur (Windows only — the adapter no-ops on
+      // macOS, where re-asserting triggers [NSApp activate] and steals focus).
+      this.overlayWindow.on('blur', () => {
+        if (!this.overlayWindow || this.overlayWindow.isDestroyed()) return;
+        if (!this.overlayWindow.isVisible()) return;
+        this.adapter.reassertAlwaysOnTop(this.overlayWindow);
+      });
 
       this.overlayWindow.on('close', (e) => {
         // During app quit this close comes from Electron's CloseAllWindows
@@ -1274,14 +1176,10 @@ export class WindowHelper {
     // re-register the app as a regular window, breaking undetectable/stealth mode
     // (fixed in v2.0.8, regressed when opacity was re-added for screenshot flash).
     // Screenshot capture already waits 80ms after hide() for compositor flush.
-    if (process.platform === 'win32') {
-      this.launcherWindow?.setOpacity(0);
-      this.overlayWindow?.setOpacity(0);
-      // Aux windows carry the same on-screen chrome (pill/toggle) that used
-      // to live inside the shielded overlay window — zero them too so a
-      // capture frame during the hide can't leak them.
-      this.pillWindow?.setOpacity(0);
-      this.toggleWindow?.setOpacity(0);
+    // Phase 1 — the win32 opacity-zero (incl. aux chrome) is owned by the adapter;
+    // darwin no-ops.
+    for (const w of [this.launcherWindow, this.overlayWindow, this.pillWindow, this.toggleWindow]) {
+      if (w) this.adapter.zeroOpacityForHide(w);
     }
     this.launcherWindow?.hide();
     // Hide the aux chrome explicitly and BEFORE the overlay body. This path
@@ -1494,7 +1392,6 @@ export class WindowHelper {
   }
 
   private createPopoverCatcher(): void {
-    const isMac = process.platform === 'darwin';
     this.popoverCatcher = new BrowserWindow({
       width: 100,
       height: 100,
@@ -1515,17 +1412,20 @@ export class WindowHelper {
         contextIsolation: true,
         preload: path.join(__dirname, 'preload.js'),
       },
-      ...(isMac ? { type: 'panel' as const } : {}),
+      ...this.adapter.panelWindowOptions(),
     });
     this.popoverCatcher.setContentProtection(this.contentProtection);
-    if (isMac) {
-      this.popoverCatcher.setVisibleOnAllWorkspaces(true, { visibleOnFullScreen: true });
-      this.popoverCatcher.setHiddenInMissionControl(true);
-      // relativeLevel -1: below the other 'floating' Natively windows, above
-      // normal app windows — clicks on Natively still hit Natively; clicks
-      // anywhere else hit the catcher.
-      this.popoverCatcher.setAlwaysOnTop(true, 'floating', -1);
-    }
+    // Phase 1 — darwin-only stealth via the adapter. relativeLevel -1: below
+    // the other 'floating' Natively windows, above normal app windows — clicks
+    // on Natively still hit Natively; clicks anywhere else hit the catcher.
+    // No win32ReassertTopmost: the catcher is darwin-only (win32 no-op).
+    this.adapter.applyStealth(this.popoverCatcher, {
+      visibleOnAllWorkspaces: true,
+      hiddenInMissionControl: true,
+      alwaysOnTop: true,
+      alwaysOnTopLevel: 'floating',
+      alwaysOnTopRelativeLevel: -1,
+    });
     // Minimal self-contained page: one capture-phase mousedown → dismiss IPC.
     // The app preload runs on data: URLs, so window.electronAPI is available.
     const page =
@@ -1559,7 +1459,6 @@ export class WindowHelper {
     if (!this.overlayWindow) return;
     if (this.pillWindow || this.toggleWindow) return; // already created
 
-    const isMac = process.platform === 'darwin';
     const auxSettings = (movable: boolean): Electron.BrowserWindowConstructorOptions => ({
       width: 10,
       height: 10,
@@ -1580,7 +1479,7 @@ export class WindowHelper {
       },
       // Same nonactivating-panel treatment as the overlay: clicking the pill's
       // buttons must not activate Natively over the user's foreground app.
-      ...(isMac ? { type: 'panel' as const } : {}),
+      ...this.adapter.panelWindowOptions(),
     });
 
     this.pillWindow = new BrowserWindow(auxSettings(true));
@@ -1596,7 +1495,7 @@ export class WindowHelper {
     // overlayGroupWelded field comment for the measured semantics. Applied
     // here, at creation, while all three are still hidden: verified to take
     // effect on first show and to survive later hide/show cycles.
-    this.overlayGroupWelded = isMac && process.env.NATIVELY_OVERLAY_WINDOW_GROUP !== '0';
+    this.overlayGroupWelded = this.adapter.isMac() && process.env.NATIVELY_OVERLAY_WINDOW_GROUP !== '0';
     if (this.overlayGroupWelded) {
       this.pillWindow.setParentWindow(this.overlayWindow);
       this.toggleWindow.setParentWindow(this.overlayWindow);
@@ -1608,7 +1507,7 @@ export class WindowHelper {
     // group apart on the first drag.
     this.overlayGroupDragManaged =
       this.overlayGroupWelded ||
-      (process.platform === 'win32' && process.env.NATIVELY_OVERLAY_GROUP_DRAG !== '0');
+      (this.adapter.isWindows() && process.env.NATIVELY_OVERLAY_GROUP_DRAG !== '0');
     console.log(
       `[WindowHelper] Overlay group drag: managed=${this.overlayGroupDragManaged} welded=${this.overlayGroupWelded}`,
     );
@@ -1619,26 +1518,17 @@ export class WindowHelper {
     ];
     for (const [win, name] of auxPairs) {
       win.setContentProtection(this.contentProtection);
-      if (process.platform === 'darwin') {
-        win.setVisibleOnAllWorkspaces(true, { visibleOnFullScreen: true });
-        win.setHiddenInMissionControl(true);
-        win.setAlwaysOnTop(true, 'floating');
-        win.once('ready-to-show', () => {
-          if (win.isDestroyed()) return;
-          try {
-            // eslint-disable-next-line @typescript-eslint/no-var-requires
-            const { loadNativeModule } = require('./audio/nativeModuleLoader');
-            const native = loadNativeModule();
-            if (native && typeof native.applyStealthToWindow === 'function') {
-              native.applyStealthToWindow(win.getNativeWindowHandle());
-            }
-          } catch {
-            // Non-fatal: type:'panel' alone still keeps the dock out of the way.
-          }
-        });
-      } else if (process.platform === 'win32') {
-        win.setAlwaysOnTop(true, 'screen-saver');
-      }
+      // Phase 1 — aux stealth via the WindowAdapter: darwin joins Spaces/MC +
+      // floating level + native NSPanel attributes (registered before any
+      // other ready-to-show so stealth precedes show); win32 screen-saver.
+      this.adapter.applyStealth(win, {
+        visibleOnAllWorkspaces: true,
+        hiddenInMissionControl: true,
+        alwaysOnTop: true,
+        alwaysOnTopLevel: 'floating',
+        win32ReassertTopmost: true,
+      });
+      this.adapter.applyNativeStealth(win);
       win.loadURL(`${startUrl}?window=${name}`).catch((e) => {
         console.error(`[WindowHelper] Failed to load ${name} URL:`, e);
       });
@@ -2340,10 +2230,9 @@ export class WindowHelper {
 
     // Re-assert z-order on Windows before showing — same DWM demotion risk as
     // switchToOverlay(). Must come before show()/showInactive() so the window
-    // lands at the correct level on first paint (issue #136).
-    if (process.platform === 'win32') {
-      this.overlayWindow.setAlwaysOnTop(true, 'screen-saver');
-    }
+    // lands at the correct level on first paint (issue #136). Adapter no-ops
+    // on darwin.
+    this.adapter.reassertAlwaysOnTop(this.overlayWindow);
 
     if (inactive || this.appState.getOverlayMousePassthrough()) {
       // Inactive reveal (global-shortcut delivery) and passthrough/stealth
@@ -2470,10 +2359,11 @@ export class WindowHelper {
     // mid-drag — see that handler's comment).
     if (active && this.launcherOpacityPreviewActive) return;
 
-    const isMac = process.platform === 'darwin';
-
+    // Phase 1 — the macOS-only vibrancy flip is owned by the adapter
+    // (setLauncherVibrancy; win32 no-ops). backgroundColor/hasShadow apply on
+    // every platform and stay inline.
     if (active) {
-      if (isMac) this.launcherWindow.setVibrancy(null);
+      this.adapter.setLauncherVibrancy(this.launcherWindow, true);
       this.launcherWindow.setBackgroundColor('#00000000');
       // macOS renders a native drop shadow from the transparent window's own
       // painted alpha. With vibrancy off, the mockup preview's rgba surfaces
@@ -2486,7 +2376,7 @@ export class WindowHelper {
       this.launcherWindow.setHasShadow(false);
     } else {
       // Must match the values createWindow() applies at construction.
-      if (isMac) this.launcherWindow.setVibrancy('under-window');
+      this.adapter.setLauncherVibrancy(this.launcherWindow, false);
       this.launcherWindow.setBackgroundColor('#00000000');
       this.launcherWindow.setHasShadow(true);
     }
@@ -2605,60 +2495,19 @@ export class WindowHelper {
         expanded: true,
       });
 
-      // Restore opacity before showing (it may have been zeroed by hideMainWindow).
-      if (process.platform === 'win32' && this.contentProtection) {
-        // Opacity Shield: Show at 0 opacity first to prevent frame leak.
-        // The aux windows (pill/toggle) show via the overlay's 'show' event,
-        // so shield them the same way — they carry the same on-screen chrome.
-        this.overlayWindow.setOpacity(0);
-        this.pillWindow?.setOpacity(0);
-        this.toggleWindow?.setOpacity(0);
-        if (inactive) this.overlayWindow.showInactive();
-        else this.overlayWindow.show();
-        // Bring the aux chrome up in the SAME block as the body, while it is
-        // still shielded at opacity 0 — the timer below un-shields all three
-        // together. Showing it here rather than waiting for the overlay's
-        // 'show' event keeps pill and body on one visual transition; doing it
-        // after the timer would flash the pill through content protection.
-        this.applyOverlayAuxVisibility(true);
-        this.overlayWindow.setContentProtection(true);
-        // Small delay to ensure Windows DWM processes the flag before making it opaque
-
-        if (this.opacityTimeout) clearTimeout(this.opacityTimeout);
-        this.opacityTimeout = setTimeout(() => {
-          if (this.overlayWindow && !this.overlayWindow.isDestroyed()) {
-            this.overlayWindow.setOpacity(1);
-            this.pillWindow?.setOpacity(1);
-            this.toggleWindow?.setOpacity(1);
-            // Re-assert z-order on Windows — DWM can silently demote the HWND after hide/show
-            this.overlayWindow.setAlwaysOnTop(true, 'screen-saver');
-            if (!inactive) this.overlayWindow.focus();
-          }
-        }, 60);
-      } else {
-        // Restore opacity (may have been zeroed pre-screenshot by hideMainWindow)
-        this.overlayWindow.setOpacity(1);
-        this.pillWindow?.setOpacity(1);
-        this.toggleWindow?.setOpacity(1);
-        this.overlayWindow.setContentProtection(this.contentProtection);
-        // Re-assert z-order BEFORE show on Windows — DWM processes setAlwaysOnTop
-        // synchronously, so calling it before show() ensures the window lands at the
-        // correct z-level on first paint. Calling it after focus() would leave a brief
-        // window where the HWND is focused at the wrong z-level (issue #136).
-        // Skipped on macOS — calling setAlwaysOnTop triggers [NSApp activate] which
-        // steals focus from Zoom/browser even when showInactive() was used.
-        if (process.platform === 'win32') {
-          this.overlayWindow.setAlwaysOnTop(true, 'screen-saver');
-        }
-        if (inactive) this.overlayWindow.showInactive();
-        else this.overlayWindow.show();
-        // Same synchronous block as the body's show (see the win32 branch) so
-        // pill and shell land on one compositor commit instead of the body
-        // first and the pill an event-hop later.
-        this.applyOverlayAuxVisibility(true);
-        // Only grab focus for explicit user-initiated shows (not shortcut/ghost shows)
-        if (!inactive) this.overlayWindow.focus();
-      }
+      // Restore opacity + platform reveal (Phase 1 — WindowAdapter). The win32
+      // branch shields the overlay+aux chrome (opacity 0 → show → CP → DWM
+      // delay → opacity 1 + z-order re-assert), the darwin/direct path reveals
+      // with CP + optional focus. onRevealed brings the aux chrome up in the
+      // same block as the body so pill and shell land on one compositor commit.
+      this.adapter.showWithOpacityShield([this.overlayWindow, this.pillWindow, this.toggleWindow], {
+        activate: !inactive,
+        contentProtection: this.contentProtection,
+        restoreOpacity: true,
+        reassertTopmost: true,
+        timer: this.opacityTimer,
+        onRevealed: () => this.applyOverlayAuxVisibility(true),
+      });
       this.isWindowVisible = true;
     }
 
@@ -2721,28 +2570,15 @@ export class WindowHelper {
 
     // Show Launcher FIRST
     if (this.launcherWindow && !this.launcherWindow.isDestroyed()) {
-      if (process.platform === 'win32' && this.contentProtection) {
-        // Opacity Shield: Show at 0 opacity first
-        this.launcherWindow.setOpacity(0);
-        if (inactive) this.launcherWindow.showInactive();
-        else this.launcherWindow.show();
-        this.launcherWindow.setContentProtection(true);
-
-        if (this.opacityTimeout) clearTimeout(this.opacityTimeout);
-        this.opacityTimeout = setTimeout(() => {
-          if (this.launcherWindow && !this.launcherWindow.isDestroyed()) {
-            this.launcherWindow.setOpacity(1);
-            if (!inactive) this.launcherWindow.focus();
-          }
-        }, 60);
-      } else {
-        // Restore opacity (may have been zeroed pre-screenshot by hideMainWindow)
-        this.launcherWindow.setOpacity(1);
-        this.launcherWindow.setContentProtection(this.contentProtection);
-        if (inactive) this.launcherWindow.showInactive();
-        else this.launcherWindow.show();
-        if (!inactive) this.launcherWindow.focus();
-      }
+      // Phase 1 — platform reveal via the WindowAdapter (win32 DWM opacity
+      // shield vs direct path). Launcher-only, so no reassertTopmost (that is
+      // the overlay's z-order quirk).
+      this.adapter.showWithOpacityShield([this.launcherWindow], {
+        activate: !inactive,
+        contentProtection: this.contentProtection,
+        restoreOpacity: true,
+        timer: this.opacityTimer,
+      });
       this.lastLauncherShowInactive = requestedInactive;
       this.isWindowVisible = true;
     }
@@ -2771,7 +2607,7 @@ export class WindowHelper {
     // _enforceDockState loop — the stealth path is handled by
     // reassertUndetectableStealth() below.
     if (
-      process.platform === 'darwin' &&
+      this.adapter.mayStealFocusOnLauncherShow() &&
       !inactive &&
       !wasLauncher &&
       !this.appState.getUndetectable()
@@ -2797,7 +2633,7 @@ export class WindowHelper {
     // dropped or late dock op cannot defeat it. `inactive` shows (showInactive,
     // no focus) don't foreground the app, but we re-assert anyway: it's cheap,
     // idempotent, and guards against macOS revealing the tile on a bare show.
-    if (process.platform === 'darwin' && this.appState.getUndetectable()) {
+    if (this.adapter.isMac() && this.appState.getUndetectable()) {
       this.appState.reassertUndetectableStealth();
     }
 
@@ -2876,7 +2712,7 @@ export class WindowHelper {
   public minimizeWindow(): void {
     const win = this.launcherWindow;
     if (!win || win.isDestroyed()) return;
-    if (this.opacityTimeout) clearTimeout(this.opacityTimeout);
+    if (this.opacityTimer.current) clearTimeout(this.opacityTimer.current);
     win.minimize();
   }
 
@@ -3132,7 +2968,7 @@ export class WindowHelper {
   public closeWindow(): void {
     const win = this.launcherWindow;
     if (!win || win.isDestroyed()) return;
-    if (this.opacityTimeout) clearTimeout(this.opacityTimeout);
+    if (this.opacityTimer.current) clearTimeout(this.opacityTimer.current);
     // On Windows/Linux the 'close' event listener intercepts this
     // and hides to tray unless the app is actually quitting.
     win.close();

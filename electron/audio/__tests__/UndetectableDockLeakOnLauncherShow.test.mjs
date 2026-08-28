@@ -66,22 +66,28 @@ test('switchToLauncher() re-asserts stealth after the activating show', () => {
     /reassertUndetectableStealth\s*\(/.test(body),
     'BUG: switchToLauncher() must call appState.reassertUndetectableStealth() — the launcher is a regular (non-panel) window whose show()+focus() re-activates the app and reveals the dock tile in undetectable mode. This is the single choke point every launcher show funnels through, so the guard must live here.',
   );
+  // Phase 1: the darwin-only gate moved into the WindowAdapter
+  // (mayStealFocusOnLauncherShow / isMac), contract-tested there. The
+  // undetectable gate stays inline.
   assert.ok(
-    /process\.platform\s*===\s*['"]darwin['"]/.test(body) &&
+    /this\.adapter\.isMac\(\)/.test(body) &&
       /getUndetectable\s*\(\s*\)/.test(body),
-    'BUG: the stealth re-assert in switchToLauncher() must be gated on darwin + getUndetectable() so it is a no-op on Windows/Linux and when the user is not in undetectable mode.',
+    'BUG: the stealth re-assert in switchToLauncher() must be gated on darwin (via the WindowAdapter) + getUndetectable() so it is a no-op on Windows/Linux and when the user is not in undetectable mode.',
   );
 });
 
 test('the stealth re-assert runs AFTER the launcher show/focus (so it corrects the reveal, not before it)', () => {
   const body = extractMethodBody(whSource, 'switchToLauncher');
-  const lastShowIdx = body.lastIndexOf('.show()');
+  // Phase 1: the launcher reveal goes through the WindowAdapter's
+  // showWithOpacityShield (win32 DWM shield / direct path). That call is the
+  // "show" position; the re-assert must come after it.
+  const lastShowIdx = body.lastIndexOf('this.adapter.showWithOpacityShield([this.launcherWindow]');
   const reassertIdx = body.search(/reassertUndetectableStealth\s*\(/);
-  assert.ok(lastShowIdx >= 0, 'sanity: switchToLauncher() must show the launcher.');
+  assert.ok(lastShowIdx >= 0, 'sanity: switchToLauncher() must reveal the launcher (via the adapter shield).');
   assert.ok(reassertIdx >= 0, 'sanity: switchToLauncher() must re-assert stealth.');
   assert.ok(
     reassertIdx > lastShowIdx,
-    'BUG: reassertUndetectableStealth() must run AFTER launcherWindow.show()/focus(); re-asserting before the activating show is the wrong order — the show is what reveals the tile, so the correction has to follow it.',
+    'BUG: reassertUndetectableStealth() must run AFTER the launcher reveal; re-asserting before the activating show is the wrong order — the show is what reveals the tile, so the correction has to follow it.',
   );
 });
 

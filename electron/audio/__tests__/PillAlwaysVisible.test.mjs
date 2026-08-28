@@ -41,7 +41,9 @@ const read = (rel) => readFileSync(path.resolve(root, rel), 'utf8');
 
 const windowHelper = read('electron/WindowHelper.ts');
 const main = read('electron/main.ts');
-const ipc = read('electron/ipcHandlers.ts');
+// Phase 2: pill-visible handlers moved to electron/ipc/settingsFlags.ts — read
+// both so assertions resolve regardless of which file owns the handler today.
+const ipc = read('electron/ipcHandlers.ts') + read('electron/ipc/settingsFlags.ts');
 const settings = read('electron/services/SettingsManager.ts');
 const preload = read('electron/preload.ts');
 const electronDts = read('src/types/electron.d.ts');
@@ -695,7 +697,7 @@ test('get/set-pill-always-visible IPC handlers exist', () => {
   assert.match(ipc, /safeHandle\('get-pill-always-visible'/);
   assert.match(
     ipc,
-    /safeHandle\('set-pill-always-visible', async \(_, enabled: boolean\) => \{\s*\n\s*appState\.setPillAlwaysVisible\(Boolean\(enabled\)\);/,
+    /safeHandle\('set-pill-always-visible', async \(_[^,)]*, enabled: boolean\) => \{\s*\n\s*(?:appState|deps)\.setPillAlwaysVisible\(Boolean\(enabled\)\);/,
   );
 });
 

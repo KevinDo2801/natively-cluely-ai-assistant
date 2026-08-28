@@ -86,16 +86,21 @@ test('switchToLauncher hides the aux chrome BEFORE showing the launcher', () => 
   const hideAux = switchToLauncher.indexOf('this.applyOverlayAuxVisibility(false)');
   assert.notEqual(hideAux, -1, 'switchToLauncher must hide the aux chrome explicitly');
 
-  const launcherShow = Math.min(
-    ...['this.launcherWindow.show()', 'this.launcherWindow.showInactive()']
-      .map((s) => switchToLauncher.indexOf(s))
-      .filter((i) => i !== -1),
+  // Phase 1: the launcher reveal now goes through the WindowAdapter's
+  // showWithOpacityShield (win32 DWM shield / direct path). The ordering
+  // invariant is unchanged — aux hide must still precede the reveal call.
+  const launcherShow = switchToLauncher.indexOf(
+    'this.adapter.showWithOpacityShield([this.launcherWindow]',
   );
-  assert.ok(Number.isFinite(launcherShow), 'expected a launcher show call');
+  assert.notEqual(
+    launcherShow,
+    -1,
+    'switchToLauncher must reveal the launcher via the WindowAdapter shield',
+  );
 
   assert.ok(
     hideAux < launcherShow,
-    'the pill/toggle hide must precede the launcher show — the pill is ' +
+    'the pill/toggle hide must precede the launcher reveal — the pill is ' +
       'alwaysOnTop and the launcher is not, so any frame with both up paints ' +
       'the pill over the launcher (the reported Stop-meeting bug)',
   );
@@ -104,41 +109,45 @@ test('switchToLauncher hides the aux chrome BEFORE showing the launcher', () => 
 test('switchToLauncher still hides the overlay body AFTER showing the launcher', () => {
   // The aux fix must not have inverted the show-before-hide invariant that
   // keeps at least one Natively window on screen through the swap.
-  const launcherShow = Math.min(
-    ...['this.launcherWindow.show()', 'this.launcherWindow.showInactive()']
-      .map((s) => switchToLauncher.indexOf(s))
-      .filter((i) => i !== -1),
+  const launcherShow = switchToLauncher.indexOf(
+    'this.adapter.showWithOpacityShield([this.launcherWindow]',
   );
   const overlayHide = switchToLauncher.indexOf('this.overlayWindow.hide()');
   assert.notEqual(overlayHide, -1, 'switchToLauncher must still hide the overlay');
   assert.ok(
-    launcherShow < overlayHide,
-    'the launcher show must still precede the overlay hide (no no-window-visible gap)',
+    launcherShow !== -1 && launcherShow < overlayHide,
+    'the launcher reveal must still precede the overlay hide (no no-window-visible gap)',
   );
 });
 
 test('switchToOverlay shows the aux chrome in the same block as the body, on both platform paths', () => {
-  const shows = [...switchToOverlay.matchAll(/this\.applyOverlayAuxVisibility\(true\)/g)];
-  assert.equal(
-    shows.length,
-    2,
-    'both the win32 opacity-shield branch and the macOS/default branch must ' +
-      'show the aux chrome explicitly — one per branch',
+  // Phase 1: the two platform branches (win32 shield / direct) consolidated
+  // into ONE adapter call whose `onRevealed` runs synchronously after
+  // show()/showInactive() on BOTH paths (windowAdapter.test.mjs contract-tests
+  // that the aux reveal lands in the same block as the body). Assert the
+  // wiring here; the both-branch guarantee lives in the adapter contract test.
+  const onRevealed = switchToOverlay.indexOf(
+    'onRevealed: () => this.applyOverlayAuxVisibility(true)',
+  );
+  assert.notEqual(
+    onRevealed,
+    -1,
+    'switchToOverlay must show the aux chrome via the adapter onRevealed so it ' +
+      'lands in the same block as the body on both platform paths',
   );
 });
 
 test('the win32 aux show lands while the opacity shield is still down', () => {
-  // Opacity-shield order: setOpacity(0) → show → aux show → deferred setOpacity(1).
-  // Showing the aux windows after the un-shield would flash the pill on a
-  // content-protected display.
-  const shieldDown = switchToOverlay.indexOf('this.pillWindow?.setOpacity(0)');
-  const auxShow = switchToOverlay.indexOf('this.applyOverlayAuxVisibility(true)');
-  const unshield = switchToOverlay.indexOf('this.pillWindow?.setOpacity(1)');
-  assert.ok(shieldDown !== -1 && auxShow !== -1 && unshield !== -1);
-  assert.ok(
-    shieldDown < auxShow && auxShow < unshield,
-    'the win32 aux show must sit between the opacity shield going down and ' +
-      'coming back up',
+  // Phase 1: the opacity-shield ordering (opacity 0 → show → onRevealed →
+  // deferred opacity 1) moved into the WindowAdapter's showWithOpacityShield;
+  // windowAdapter.test.mjs asserts the win32 shield reveals the aux chrome
+  // (onRevealed) BEFORE the deferred un-shield. Here we only require that
+  // switchToOverlay hands the aux reveal to the shield via onRevealed.
+  assert.match(
+    switchToOverlay,
+    /onRevealed: \(\) => this\.applyOverlayAuxVisibility\(true\)/,
+    'the aux show must be delivered through the shield onRevealed, which the ' +
+      'adapter fires before the deferred setOpacity(1) on the win32 shield path',
   );
 });
 
@@ -208,7 +217,7 @@ test('drag management is enabled on BOTH platforms, welding on macOS only', () =
   // which starves the follower window, so managing the drag still wins.
   assert.match(
     source,
-    /this\.overlayGroupDragManaged =\s*\n?\s*this\.overlayGroupWelded \|\|\s*\n?\s*\(process\.platform === 'win32' && process\.env\.NATIVELY_OVERLAY_GROUP_DRAG !== '0'\)/,
+    /this\.overlayGroupDragManaged =\s*\n?\s*this\.overlayGroupWelded \|\|\s*\n?\s*\(this\.adapter\.isWindows\(\) && process\.env\.NATIVELY_OVERLAY_GROUP_DRAG !== '0'\)/,
     'Windows must opt into managed drag independently of welding',
   );
   assert.match(
@@ -277,7 +286,7 @@ test('a move arriving without a start still anchors safely', () => {
 test('welding is macOS-only and has a kill switch', () => {
   assert.match(
     source,
-    /this\.overlayGroupWelded\s*=\s*isMac && process\.env\.NATIVELY_OVERLAY_WINDOW_GROUP !== '0'/,
+    /this\.overlayGroupWelded\s*=\s*this\.adapter\.isMac\(\) && process\.env\.NATIVELY_OVERLAY_WINDOW_GROUP !== '0'/,
     'welding must be gated on darwin (win32 setParentWindow is OWNER semantics ' +
       '— owned windows do not move with the owner, so Windows must keep the ' +
       'event-mirroring path) and must stay disableable at runtime',

@@ -8,7 +8,8 @@ const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../
 const read = rel => fs.readFileSync(path.join(repoRoot, rel), 'utf8');
 
 test('meeting retention IPC exposes get/set and broadcasts updates', () => {
-  const ipc = read('electron/ipcHandlers.ts');
+  // Phase 2: retention handlers moved to ipc/settingsFlags.ts.
+  const ipc = read('electron/ipcHandlers.ts') + read('electron/ipc/settingsFlags.ts');
 
   assert.match(ipc, /safeHandle\(['"]get-meeting-retention['"]/);
   assert.match(ipc, /SettingsManager\.getInstance\(\)\.get\('meetingRetention'\) \?\? 'forever'/);

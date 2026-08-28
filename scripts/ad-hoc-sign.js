@@ -3,8 +3,8 @@ const fs = require('fs');
 const path = require('path');
 
 // ─── Packed native-arch guard ───
-// better-sqlite3 + keytar ship a SINGLE compiled binary each (no per-arch
-// loader), so a build on an Apple-Silicon Mac can silently embed arm64 binaries
+// better-sqlite3 ships a SINGLE compiled binary (no per-arch loader), so a
+// build on an Apple-Silicon Mac can silently embed arm64 binaries
 // in the x64 (`Natively.dmg`) pack — every Intel Mac then boots into main.ts's
 // nativeArchGate "Architecture mismatch" dialog. scripts/rebuild-native-for-target.cjs
 // (beforeBuild) rebuilds them for the correct target arch; THIS guard verifies
@@ -13,7 +13,6 @@ const path = require('path');
 // default (ad-hoc) and signed configs since both inherit this afterPack.
 const ARCH_VERIFY_TARGETS = [
     path.join('better-sqlite3', 'build', 'Release', 'better_sqlite3.node'),
-    path.join('keytar', 'build', 'Release', 'keytar.node'),
 ];
 
 /** electron-builder ArchType enum / string → Node arch string. */

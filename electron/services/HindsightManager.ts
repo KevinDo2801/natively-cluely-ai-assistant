@@ -454,6 +454,12 @@ export class HindsightManager {
       if (explicit) return explicit;
       // Zero-config fallback: run the bundled launcher IFF it exists on disk. Quote the path
       // (it's absolute and may contain spaces, e.g. "/Users/.../Application Support/...").
+      // P1.3: the fallback is bash-based (`bash scripts/hindsight-start.sh`), so it is NOT
+      // auto-applied on Windows — there is no guaranteed bash there, and a silent
+      // `bash <missing/non-functional>` would be a broken auto-start with no signal.
+      // Windows users get auto-start only via an EXPLICIT hindsightServerCommand (or a
+      // Windows-native launcher binary they configure themselves).
+      if (process.platform === 'win32') return null;
       const script = this.locateLauncherScript();
       return script ? `bash "${script}"` : null;
     } catch {

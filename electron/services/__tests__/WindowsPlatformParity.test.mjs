@@ -164,16 +164,20 @@ test('undetectable: the launcher leaves the Windows taskbar, at creation AND on 
     wh.indexOf('// Force-reapply the CURRENT content-protection state'),
   );
   assert.ok(fn.length > 0, 'syncLauncherTaskbarForStealth() not found');
+  // Phase 1: the win32/darwin decision moved into the WindowAdapter
+  // (syncLauncherTaskbarPresence: win32 sets skipTaskbar, darwin no-ops — the
+  // Dock/activation-policy path). The darwin no-op is contract-tested in
+  // windowAdapter.test.mjs; here we assert the helper DELEGATES with the
+  // undetectable flag mapped.
   assert.match(
+    fn,
+    /syncLauncherTaskbarPresence\(win, !!this\.appState\.getUndetectable\(\)\)/,
+    'BUG: the launcher taskbar presence must delegate to the adapter with the undetectable setting.',
+  );
+  assert.doesNotMatch(
     fn,
     /process\.platform !== 'win32'\) return/,
-    'BUG: must no-op off win32 — macOS stealth is the Dock/activation-policy path and does not ' +
-      'use skipTaskbar; forcing it there would be an unrequested behaviour change.',
-  );
-  assert.match(
-    fn,
-    /setSkipTaskbar\(!!this\.appState\.getUndetectable\(\)\)/,
-    'BUG: the launcher taskbar presence must track the undetectable setting.',
+    'BUG: the platform decision must live in the WindowAdapter, not inline in the helper.',
   );
   // Creation-time application: a session that STARTS undetectable must not show
   // a taskbar button until the user toggles twice.
@@ -347,9 +351,10 @@ test('security(round2): chat:focusInput branches on pre-show state, not toggle()
   );
   assert.match(
     block,
-    /const wasStealthActive = mgr\.isAvailable\(\) && mgr\.isActive\(\);\s*\n\s*this\.showMainWindow/,
-    'BUG: wasActive must be captured BEFORE showMainWindow (which can stop stealth via ' +
-      'switchToLauncher), or the toggle always starts and can never disengage in launcher mode.',
+    /const wasStealthActive = mgr\.isAvailable\(\) && mgr\.isActive\(\);[\s\S]{0,160}(?:this\.showMainWindow|this\.revealOverlayForGlobalShortcut)/,
+    'BUG: wasActive must be captured BEFORE the show path (showMainWindow can stop stealth via ' +
+      'switchToLauncher; launcher mode legitimately routes to revealOverlayForGlobalShortcut), or ' +
+      'the toggle always starts and can never disengage in launcher mode.',
   );
   assert.match(
     block,

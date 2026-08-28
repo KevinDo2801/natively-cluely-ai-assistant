@@ -1,5 +1,4 @@
 import React, { useState, useEffect, useCallback, useRef } from "react" // forcing refresh
-import { QueryClient, QueryClientProvider } from "@tanstack/react-query"
 import { ToastProvider, ToastViewport } from "./components/ui/toast"
 import NativelyInterface from "./components/NativelyInterface"
 import HindsightStatusBanner from "./components/HindsightStatusBanner"
@@ -62,7 +61,6 @@ function shouldMountDevReviewHost(): boolean {
   }
 }
 
-const queryClient = new QueryClient()
 const CropperWindow = React.lazy(() => import('./components/Cropper'))
 
 type LauncherIsolation = 'onboarding' | 'global-surfaces' | 'permissions-toaster' | 'no-modals' | null
@@ -790,12 +788,10 @@ const App: React.FC = () => {
     return (
       <ErrorBoundary context="SettingsPopup">
         <div className="h-full min-h-0 w-full" data-interface-theme={interfaceThemeAttribute}>
-          <QueryClientProvider client={queryClient}>
             <ToastProvider>
               <SettingsPopup />
               <ToastViewport />
             </ToastProvider>
-          </QueryClientProvider>
         </div>
       </ErrorBoundary>
     );
@@ -827,12 +823,10 @@ const App: React.FC = () => {
           className="h-full min-h-0 w-full overflow-hidden"
           data-interface-theme={interfaceThemeAttribute}
         >
-          <QueryClientProvider client={queryClient}>
             <ToastProvider>
               <ModelSelectorWindow />
               <ToastViewport />
             </ToastProvider>
-          </QueryClientProvider>
         </div>
       </ErrorBoundary>
     );
@@ -843,7 +837,6 @@ const App: React.FC = () => {
     return (
       <ErrorBoundary context="Overlay">
         <div className="w-full h-full relative overflow-hidden bg-transparent">
-          <QueryClientProvider client={queryClient}>
             <ToastProvider>
               <div
                 style={{
@@ -860,7 +853,6 @@ const App: React.FC = () => {
               </div>
               <ToastViewport />
             </ToastProvider>
-          </QueryClientProvider>
         </div>
       </ErrorBoundary>
     );
@@ -905,7 +897,6 @@ const App: React.FC = () => {
               ease: [0.19, 1, 0.22, 1], // Expo-out: snappy start, smooth landing
             }}
           >
-            <QueryClientProvider client={queryClient}>
               <ToastProvider>
                 <div id="launcher-container" className="h-full w-full relative">
                   <Launcher
@@ -987,7 +978,6 @@ const App: React.FC = () => {
                 </AnimatePresence>
                 <ToastViewport />
               </ToastProvider>
-            </QueryClientProvider>
           </motion.div>
         )}
       </AnimatePresence>

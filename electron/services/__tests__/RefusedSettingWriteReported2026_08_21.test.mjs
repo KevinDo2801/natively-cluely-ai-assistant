@@ -18,7 +18,12 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 
 const sm = fs.readFileSync(new URL('../SettingsManager.ts', import.meta.url), 'utf8');
-const ipc = fs.readFileSync(new URL('../../ipcHandlers.ts', import.meta.url), 'utf8');
+// Phase 2: the refused-write settings handlers (code-verification,
+// meeting-retention, provider-data-scopes, …) moved to ipc/settingsFlags.ts —
+// read both so the broadcast-before-return assertions resolve regardless.
+const ipc =
+  fs.readFileSync(new URL('../../ipcHandlers.ts', import.meta.url), 'utf8') +
+  fs.readFileSync(new URL('../../ipc/settingsFlags.ts', import.meta.url), 'utf8');
 
 test('set() reports whether the write actually landed', () => {
   const i = sm.indexOf('public set<K extends keyof AppSettings>');

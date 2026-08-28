@@ -93,7 +93,8 @@ describe('Profile Intelligence IPC: Pro/trial gate', () => {
 });
 
 describe('Profile Intelligence: resume + JD storage tables exist in the schema', () => {
-  const dbPath = path.resolve(__dirname, '../../db/DatabaseManager.ts');
+  // Phase 0 refactor: version-gated schema lives in electron/db/migrations.ts.
+  const dbPath = path.resolve(__dirname, '../../db/migrations.ts');
   const dbSource = fs.readFileSync(dbPath, 'utf8');
 
   test('user_profile table is declared', () => {

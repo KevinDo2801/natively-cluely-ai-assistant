@@ -1,5 +1,7 @@
 import { BrowserWindow, screen, app, ipcMain, IpcMainEvent } from "electron"
 import path from "node:path"
+import { createWindowAdapter } from "./platform/windowAdapter"
+import type { TimerSlot } from "./platform/windowAdapter"
 
 const isDev = process.env.NODE_ENV === "development"
 
@@ -89,7 +91,8 @@ function getCombinedDisplayBounds(): Electron.Rectangle {
  */
 export class CropperWindowHelper {
     private cropperWindow: BrowserWindow | null = null
-    private opacityTimeout: NodeJS.Timeout | null = null;
+    private readonly adapter = createWindowAdapter();
+    private readonly opacityTimer: TimerSlot = { current: null };
     private selectionTimeout: NodeJS.Timeout | null = null;
     private resolvePromise: ((value: Electron.Rectangle | null) => void) | null = null;
     private isUndetectable: boolean = false;
@@ -411,27 +414,17 @@ export class CropperWindowHelper {
      */
     private applyOpacityShield(): void {
         if (!this.cropperWindow || this.isDisposed) return;
-
-        if (process.platform === 'win32') {
-            this.cropperWindow.setOpacity(0);
-            this.cropperWindow.show();
-            this.cropperWindow.setContentProtection(this.isUndetectable);
-
-            // NOTE: Do NOT call maximize() - it limits to current monitor on Windows
-            // The window already has correct bounds from createWindow()
-
-            if (this.opacityTimeout) clearTimeout(this.opacityTimeout);
-            this.opacityTimeout = setTimeout(() => {
-                if (this.cropperWindow && !this.cropperWindow.isDestroyed() && !this.isDisposed) {
-                    this.cropperWindow.setOpacity(1);
-                    this.cropperWindow.focus();
-                }
-            }, CROPPER_CONFIG.OPACITY_DELAY_MS);
-        } else {
-            this.cropperWindow.setContentProtection(this.isUndetectable);
-            this.cropperWindow.show();
-            this.cropperWindow.focus();
-        }
+        // Phase 1 — delegated to the WindowAdapter. Cropper uses forceShield
+        // so the win32 shield runs even when content protection is off (its
+        // original was unconditional), with the env-tunable delay. darwin
+        // reveals directly (no DWM frame-leak problem).
+        this.adapter.showWithOpacityShield([this.cropperWindow], {
+            activate: true,
+            contentProtection: this.isUndetectable,
+            forceShield: true,
+            delayMs: CROPPER_CONFIG.OPACITY_DELAY_MS,
+            timer: this.opacityTimer,
+        });
     }
 
     private createWindow(showImmediately: boolean): void {
@@ -470,51 +463,40 @@ export class CropperWindowHelper {
         }
 
         // Windows requires enableLargerThanScreen to span multiple monitors
-        // macOS uses fullscreenable + visibleOnAllWorkspaces instead
-        if (process.platform === 'win32') {
-            (windowSettings as any).enableLargerThanScreen = true;
-        } else {
-            windowSettings.type = CROPPER_CONFIG.WINDOW_TYPE;
-        }
+        // (darwin uses type:'toolbar'). Phase 1 — platform fragment from the
+        // WindowAdapter.
+        Object.assign(windowSettings, this.adapter.cropperWindowOptions());
 
         this.cropperWindow = new BrowserWindow(windowSettings)
-
-        // Apply NSPanel stealth attributes (becomesKeyOnlyIfNeeded +
+        // NSPanel stealth attributes (becomesKeyOnlyIfNeeded +
         // _setPreventsActivation: SPI + sharingType=None + collectionBehavior).
         // Cropper opens during meetings via Cmd+Shift+H — without this, the
         // cropperWindow.show()/.focus() calls below steal focus from the
         // foreground app (Zoom/browser), defeating the whole stealth model.
         //
-        // ROUND 2 FIX (#7): stealth-apply moved INTO the same ready-to-show
-        // listener as opacity-shield + show (registered ~40 lines below).
-        // Two independent ready-to-show listeners had ordering risk: if
-        // stealth's try/catch swallowed a native panic, the opacity-shield
-        // listener still fired and show() exposed a panel-attribute-less
-        // window — focus theft mid-meeting. Consolidating means stealth
-        // attempts run BEFORE show in a single listener body. (Stealth is
-        // still try/catch-wrapped so a failure doesn't block the cropper
-        // from being usable; partial stealth is better than no cropper.)
+        // Phase 1: the native stealth-apply moved into the adapter's
+        // applyNativeStealth, registered HERE — immediately after the window
+        // and BEFORE the helper's own ready-to-show listener below — so its
+        // ready-to-show fires first and stealth still runs before any show()
+        // (preserving the consolidated ordering intent of the earlier fix).
+        this.adapter.applyNativeStealth(this.cropperWindow)
 
         // On Windows, ensure window spans all monitors by explicitly setting bounds
         // This is needed because BrowserWindow might auto-adjust to primary monitor
-        if (process.platform === 'win32') {
-            this.cropperWindow.setBounds({
-                x: combinedBounds.x,
-                y: combinedBounds.y,
-                width: combinedBounds.width,
-                height: combinedBounds.height
-            });
-        }
+        this.adapter.applyMultiMonitorSpan(this.cropperWindow, combinedBounds);
 
         // Debug: log actual window bounds after creation
         const actualBounds = this.cropperWindow.getBounds();
         console.log(`[CropperWindowHelper] Window created. Actual bounds:`, actualBounds);
         console.log(`[CropperWindowHelper] Expected bounds: {x:${combinedBounds.x}, y:${combinedBounds.y}, width:${combinedBounds.width}, height:${combinedBounds.height}}`);
 
-        if (process.platform === "darwin") {
-            this.cropperWindow.setVisibleOnAllWorkspaces(true, { visibleOnFullScreen: true })
-            this.cropperWindow.setAlwaysOnTop(true, "screen-saver")
-        }
+        // macOS: span all Spaces + keep above all windows (screen-saver level,
+        // no Mission Control — unique to the cropper). Phase 1 — adapter.
+        this.adapter.applyStealth(this.cropperWindow, {
+            visibleOnAllWorkspaces: true,
+            alwaysOnTop: true,
+            alwaysOnTopLevel: 'screen-saver',
+        });
 
         // Load URL with retry mechanism
         this.loadCropperUrlWithRetry().catch(err => {
@@ -523,22 +505,9 @@ export class CropperWindowHelper {
 
         this.cropperWindow.once('ready-to-show', () => {
             if (!this.cropperWindow || this.cropperWindow.isDestroyed()) return;
-            // Apply stealth attributes BEFORE any show() so the panel never
-            // appears with default activation behavior. Failure is logged
-            // but non-fatal — partial stealth (panel type + content
-            // protection) still applies via the BrowserWindow constructor.
-            if (process.platform === 'darwin') {
-                try {
-                    // eslint-disable-next-line @typescript-eslint/no-var-requires
-                    const { loadNativeModule } = require('./audio/nativeModuleLoader');
-                    const native = loadNativeModule();
-                    if (native && typeof native.applyStealthToWindow === 'function') {
-                        native.applyStealthToWindow(this.cropperWindow.getNativeWindowHandle());
-                    }
-                } catch (e) {
-                    console.error('[CropperWindowHelper] applyStealthToWindow failed:', e);
-                }
-            }
+            // NSPanel stealth attributes are applied by applyNativeStealth()
+            // (registered above), which fires this listener first. Nothing
+            // left to do here beyond the show.
             if (showImmediately) {
                 this.applyOpacityShield();
             }
@@ -547,17 +516,8 @@ export class CropperWindowHelper {
         // ROUND 3 FIX (#1): stop the stealth tap when Cropper shows so the
         // user's selection-area drag/keystrokes (Esc to cancel, etc.) reach
         // the cropper, not the overlay's hidden chat input. Same rationale
-        // as Settings + Model Selector.
-        this.cropperWindow.on('show', () => {
-            if (process.platform !== 'darwin') return;
-            try {
-                // eslint-disable-next-line @typescript-eslint/no-var-requires
-                const { StealthKeyboardManager } = require('./services/StealthKeyboardManager');
-                StealthKeyboardManager.getInstance().stop();
-            } catch (e) {
-                console.error('[CropperWindowHelper] failed to stop stealth tap on show:', e);
-            }
-        });
+        // as Settings + Model Selector. (darwin stop now owned by the adapter.)
+        this.adapter.stopStealthTapOnShow(this.cropperWindow);
 
         this.cropperWindow.on('closed', () => {
             // Protect against race condition: window closed after successful selection
@@ -614,10 +574,9 @@ export class CropperWindowHelper {
                 // Windows & macOS: hide and reuse to avoid cold-start on next call.
                 // Windows: reset opacity to 0 first so the opacity-shield sequence
                 // works correctly on next show (DWM needs window "invisible" before
-                // setContentProtection is applied).
-                if (process.platform === 'win32') {
-                    this.cropperWindow.setOpacity(0);
-                }
+                // setContentProtection is applied). Phase 1 — the win32 opacity
+                // reset is owned by the adapter (zeroOpacityForHide; darwin no-op).
+                this.adapter.zeroOpacityForHide(this.cropperWindow);
                 this.cropperWindow.hide();
             }
         }
@@ -645,9 +604,9 @@ export class CropperWindowHelper {
         this.isDisposed = true;
 
         // Clear opacity timeout with safety check
-        if (this.opacityTimeout) {
-            clearTimeout(this.opacityTimeout);
-            this.opacityTimeout = null;
+        if (this.opacityTimer.current) {
+            clearTimeout(this.opacityTimer.current);
+            this.opacityTimer.current = null;
             console.log('[CropperWindowHelper] Opacity timeout cleared');
         }
 

@@ -52,7 +52,6 @@ const buildOptions = {
   external: [
     'electron',
     'better-sqlite3',
-    'keytar',
     'sqlite-vec',
     '@vectorize-io/hindsight-client',
     // onnxruntime-node ships a compiled `.node` binary. Every other ONNX

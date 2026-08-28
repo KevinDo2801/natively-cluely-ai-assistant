@@ -13,7 +13,6 @@ import * as crypto from "crypto"
 import path from "path"
 import fs from "fs"
 import os from "os"
-import dns from "dns"
 import { SystemAudioHealthClassifier } from "./audio/systemAudioHealthClassifier.mjs"
 import { FatalMainProcessCoordinator } from "./utils/fatalMainProcess"
 import { MeetingLifecycleQueue, type MeetingLifecycleState } from "./audio/meetingLifecycleQueue"
@@ -24,31 +23,12 @@ import {
   describeServiceAccountRejection,
   type ServiceAccountVerdict,
 } from "./services/googleServiceAccount"
+import { darwinMajorVersion } from "./platform/macosVersion"
+import { applyDnsPatch } from "./utils/dnsPatch"
 
-// Override global dns.lookup to resolve macOS system resolver issues with api.natively.software
-const originalLookup = dns.lookup;
-dns.lookup = function(hostname: any, options: any, callback: any) {
-  if (typeof options === 'function') {
-    callback = options;
-    options = {};
-  }
-  if (hostname === 'api.natively.software') {
-    dns.resolve4(hostname, (err, addresses) => {
-      if (err || !addresses.length) {
-        originalLookup(hostname, options, callback);
-      } else {
-        const addr = addresses[0];
-        if (options && (options as any).all) {
-          callback(null, [{ address: addr, family: 4 }] as any);
-        } else {
-          callback(null, addr, 4);
-        }
-      }
-    });
-  } else {
-    originalLookup(hostname, options, callback);
-  }
-} as any;
+// Override global dns.lookup to resolve macOS system resolver issues with
+// api.natively.software (IPv4-first for the API host). See utils/dnsPatch.ts.
+applyDnsPatch();
 
 if (!app.isPackaged) {
   require('dotenv').config();
@@ -90,11 +70,9 @@ try {
   } else if (fontationsOverride === '1') {
     shouldDisableFontations = true;
   } else {
-    const darwinMajor =
-      process.platform === 'darwin'
-        ? parseInt(os.release().split('.')[0] || '0', 10)
-        : 0;
-    shouldDisableFontations = darwinMajor >= 25; // Darwin 25 = macOS 26
+    // Shared Darwin mapping (platform/macosVersion) — 0 off-darwin, so the
+    // gate is false on Windows without a platform branch here.
+    shouldDisableFontations = darwinMajorVersion() >= 25; // Darwin 25 = macOS 26
   }
   if (shouldDisableFontations) {
     // NOTE: this is the ONLY disable-features append in the codebase
@@ -7942,7 +7920,7 @@ export class AppState {
 // ─── SINGLE-INSTANCE LOCK, THEN NATIVE ABI GUARD — BOTH AT MODULE SCOPE ─────
 //
 // Order is the whole point. `ensureNativeModuleAbi()` REBUILDS native modules
-// (better-sqlite3, keytar) in dev when they were compiled against the system
+// (better-sqlite3) in dev when it was compiled against the system
 // Node ABI instead of Electron's — the NODE_MODULE_VERSION crash you get after
 // `npm rebuild`, `npm install --ignore-scripts`, or a system Node upgrade.
 // Two instances running that rebuild concurrently corrupt each other's output;
@@ -7955,8 +7933,8 @@ export class AppState {
 // yields to the event loop lives long enough to register a second tray icon on
 // macOS Tahoe + Spotlight launches.
 //
-// The guard is cheap and self-limiting on the happy path: it require()s the two
-// modules, returns immediately when the ABI matches, and NEVER rebuilds in a
+// The guard is cheap and self-limiting on the happy path: it require()s the
+// module, returns immediately when the ABI matches, and NEVER rebuilds in a
 // packaged build — there it logs and exits, because a packaged mismatch means
 // the release pipeline shipped the wrong .node binaries and no runtime fix is
 // honest.

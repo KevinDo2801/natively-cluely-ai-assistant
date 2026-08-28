@@ -58,9 +58,7 @@ const SHIPPED_ARM64_RESOURCES = path.join(REPO_ROOT, 'release', 'mac-arm64', 'Na
 const SHIPPED_X64_RESOURCES = path.join(REPO_ROOT, 'release', 'mac', 'Natively.app', 'Contents', 'Resources');
 const SHIPPED_RESOURCES = SHIPPED_ARM64_RESOURCES;
 const SHIPPED_SQLITE = path.join(SHIPPED_ARM64_RESOURCES, 'app.asar.unpacked', 'node_modules', 'better-sqlite3', 'build', 'Release', 'better_sqlite3.node');
-const SHIPPED_KEYTAR = path.join(SHIPPED_ARM64_RESOURCES, 'app.asar.unpacked', 'node_modules', 'keytar', 'build', 'Release', 'keytar.node');
 const SHIPPED_X64_SQLITE = path.join(SHIPPED_X64_RESOURCES, 'app.asar.unpacked', 'node_modules', 'better-sqlite3', 'build', 'Release', 'better_sqlite3.node');
-const SHIPPED_X64_KEYTAR = path.join(SHIPPED_X64_RESOURCES, 'app.asar.unpacked', 'node_modules', 'keytar', 'build', 'Release', 'keytar.node');
 
 function isArm64Mac() {
   if (os.platform() !== 'darwin') return false;
@@ -89,7 +87,7 @@ describe('nativeArch packaged resolution (v2.8.2 fix)', () => {
     );
   });
 
-  test('SHIPPED arm64 binaries verify clean via the packaged resourcesPath path', { skip: !existsSync(SHIPPED_SQLITE) || !existsSync(SHIPPED_KEYTAR) || !isArm64Mac(), reason: 'requires the shipped mac-arm64 .app + an arm64 Mac' }, () => {
+  test('SHIPPED arm64 binaries verify clean via the packaged resourcesPath path', { skip: !existsSync(SHIPPED_SQLITE) || !isArm64Mac(), reason: 'requires the shipped mac-arm64 .app + an arm64 Mac' }, () => {
     const result = cjs.verifyAll(undefined, {
       resourcesPath: SHIPPED_RESOURCES,
       packaged: true,
@@ -119,22 +117,23 @@ describe('nativeArch packaged resolution (v2.8.2 fix)', () => {
   });
 
   test('NEGATIVE: a real wrong-arch .node tree under app.asar.unpacked fires ok:false', {
-    skip: !isArm64Mac() || !existsSync(SHIPPED_X64_SQLITE) || !existsSync(SHIPPED_X64_KEYTAR),
+    skip: !isArm64Mac() || !existsSync(SHIPPED_X64_SQLITE),
     reason: 'requires an arm64 Mac plus the shipped x64 .app fixture',
   }, () => {
-    // Build a fake packaged Resources tree using the REAL x64 .node files
-    // from the x64 packaged .app as the wrong-arch fixtures. This exercises
+    // Build a fake packaged Resources tree using the REAL x64 .node file
+    // from the x64 packaged .app as the wrong-arch fixture. This exercises
     // the actual `file -b` probe and avoids the previous inert monkey-patch
     // false positive (verifyAll calls the local lexical binaryArch binding,
     // not module.exports.binaryArch).
+    //
+    // keytar was removed from the app (Phase 0 dependency cleanup): it is no
+    // longer staged here and no longer asserted — verifyAll has exactly one
+    // shipped target now (better-sqlite3).
     const tmpResources = mkdtempSync(path.join(os.tmpdir(), 'natively-arch-test-'));
     try {
       const sqliteDir = path.join(tmpResources, 'app.asar.unpacked', 'node_modules', 'better-sqlite3', 'build', 'Release');
-      const keytarDir = path.join(tmpResources, 'app.asar.unpacked', 'node_modules', 'keytar', 'build', 'Release');
       mkdirSync(sqliteDir, { recursive: true });
-      mkdirSync(keytarDir, { recursive: true });
       copyFileSync(SHIPPED_X64_SQLITE, path.join(sqliteDir, 'better_sqlite3.node'));
-      copyFileSync(SHIPPED_X64_KEYTAR, path.join(keytarDir, 'keytar.node'));
 
       const result = cjs.verifyAll(undefined, {
         resourcesPath: tmpResources,
@@ -142,10 +141,9 @@ describe('nativeArch packaged resolution (v2.8.2 fix)', () => {
       });
 
       assert.equal(result.ok, false, 'expected real x64 fixtures to mismatch on arm64 Mac');
-      assert.equal(result.mismatches.length, 2);
+      assert.equal(result.mismatches.length, 1);
       assert.ok(result.mismatches.every((m) => m.actual === 'x64'), JSON.stringify(result.mismatches));
       assert.ok(result.mismatches.some((m) => m.path.includes('better-sqlite3')));
-      assert.ok(result.mismatches.some((m) => m.path.includes('keytar')));
       assert.ok(result.fix.includes('releases/latest'), 'fix message must be the packaged reinstall');
     } finally {
       rmSync(tmpResources, { recursive: true, force: true });

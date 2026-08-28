@@ -2,6 +2,8 @@ import { BrowserWindow, screen, app } from "electron"
 import { WindowHelper } from "./WindowHelper"
 import path from "node:path"
 import { attachNoActivate } from "./utils/windowsFocusPolicy"
+import { createWindowAdapter } from "./platform/windowAdapter"
+import type { TimerSlot } from "./platform/windowAdapter"
 
 const isDev = process.env.NODE_ENV === "development"
 
@@ -16,7 +18,8 @@ type WindowActivationOptions = {
 export class SettingsWindowHelper {
     private settingsWindow: BrowserWindow | null = null
     private windowHelper: WindowHelper | null = null;
-    private opacityTimeout: NodeJS.Timeout | null = null;
+    private readonly adapter = createWindowAdapter();
+    private readonly opacityTimer: TimerSlot = { current: null };
 
     public getSettingsWindow(): BrowserWindow | null {
         return this.settingsWindow
@@ -153,23 +156,14 @@ export class SettingsWindowHelper {
         // Ensure fully visible on screen
         this.ensureVisibleOnScreen();
 
-        if (process.platform === 'win32' && this.contentProtection) {
-            this.settingsWindow.setOpacity(0);
-            if (activate) this.settingsWindow.show(); else this.settingsWindow.showInactive();
-            this.settingsWindow.setContentProtection(true);
-
-            if (this.opacityTimeout) clearTimeout(this.opacityTimeout);
-            this.opacityTimeout = setTimeout(() => {
-                if (this.settingsWindow && !this.settingsWindow.isDestroyed()) {
-                    this.settingsWindow.setOpacity(1);
-                    if (activate) this.settingsWindow.focus();
-                }
-            }, 60);
-        } else {
-            this.settingsWindow.setContentProtection(this.contentProtection);
-            if (activate) this.settingsWindow.show(); else this.settingsWindow.showInactive();
-            if (activate) this.settingsWindow.focus();
-        }
+        // Platform reveal (Phase 1): the WindowAdapter owns the win32 DWM
+        // opacity shield vs the direct darwin/win32-no-CP path. Behavior is
+        // identical to the inline branches it replaces.
+        this.adapter.showWithOpacityShield([this.settingsWindow], {
+            activate,
+            contentProtection: this.contentProtection,
+            timer: this.opacityTimer,
+        });
 
         this.emitVisibilityChange(true);
 
@@ -243,7 +237,6 @@ export class SettingsWindowHelper {
     }
 
     private createWindow(x?: number, y?: number, showWhenReady: boolean = true): void {
-        const isMac = process.platform === 'darwin';
         const windowSettings: Electron.BrowserWindowConstructorOptions = {
             width: 180, // Match React component width (SettingsPopup.tsx)
             height: 200, // Trimmed; ResizeObserver in renderer pins exact height
@@ -270,7 +263,7 @@ export class SettingsWindowHelper {
             // applyStealthToWindow without the underlying panel type, which is
             // why focus theft persisted. NSPanel + type:'panel' = the same
             // Spotlight/Alfred mechanism the overlay uses.
-            ...(isMac ? { type: 'panel' as const } : {}),
+            ...this.adapter.panelWindowOptions(),
         }
 
         if (x !== undefined && y !== undefined) {
@@ -279,7 +272,11 @@ export class SettingsWindowHelper {
         }
 
         this.settingsWindow = new BrowserWindow(windowSettings)
-        // Windows counterpart of the NSPanel stealth attributes applied below
+        // macOS NSPanel stealth attributes (becomesKeyOnlyIfNeeded +
+        // _setPreventsActivation), applied BEFORE the helper's own
+        // ready-to-show so stealth precedes any show.
+        this.adapter.applyNativeStealth(this.settingsWindow)
+        // Windows counterpart of the NSPanel stealth attributes applied above
         // on macOS: WS_EX_NOACTIVATE so opening/clicking the settings popover
         // mid-meeting never steals foreground focus from the meeting app.
         // Typing in its fields is granted transiently by the preload focusin
@@ -288,11 +285,14 @@ export class SettingsWindowHelper {
         // handles outside clicks on all platforms. No-op on macOS/Linux.
         attachNoActivate(this.settingsWindow)
 
-        if (process.platform === "darwin") {
-            this.settingsWindow.setVisibleOnAllWorkspaces(true, { visibleOnFullScreen: true })
-            this.settingsWindow.setHiddenInMissionControl(true)
-            this.settingsWindow.setAlwaysOnTop(true, "floating")
-        }
+        // macOS: join all Spaces + Mission Control + keep on top (Phase 1 —
+        // delegated to the WindowAdapter; darwin-only by construction).
+        this.adapter.applyStealth(this.settingsWindow, {
+            visibleOnAllWorkspaces: true,
+            hiddenInMissionControl: true,
+            alwaysOnTop: true,
+            alwaysOnTopLevel: 'floating',
+        });
 
         console.log(`[SettingsWindowHelper] Creating Settings Window with Content Protection: ${this.contentProtection}`);
         this.settingsWindow.setContentProtection(this.contentProtection);
@@ -307,25 +307,10 @@ export class SettingsWindowHelper {
         });
 
         this.settingsWindow.once('ready-to-show', () => {
-            // Apply NSPanel stealth attributes (becomesKeyOnlyIfNeeded +
-            // _setPreventsActivation + sharingType=None + collectionBehavior)
-            // BEFORE any show() so clicking the Settings button on the
-            // Natively overlay doesn't activate the Natively app and dim
-            // the user's foreground app (Zoom/browser/IDE) mid-meeting.
-            // Without this, settings was a regular focusable window and
-            // every interaction stole focus. Failure is non-fatal; logged.
-            if (process.platform === 'darwin' && this.settingsWindow && !this.settingsWindow.isDestroyed()) {
-                try {
-                    // eslint-disable-next-line @typescript-eslint/no-var-requires
-                    const { loadNativeModule } = require('./audio/nativeModuleLoader');
-                    const native = loadNativeModule();
-                    if (native && typeof native.applyStealthToWindow === 'function') {
-                        native.applyStealthToWindow(this.settingsWindow.getNativeWindowHandle());
-                    }
-                } catch (e) {
-                    console.error('[SettingsWindowHelper] applyStealthToWindow failed:', e);
-                }
-            }
+            // NSPanel stealth attributes are now applied by
+            // this.adapter.applyNativeStealth() registered right after
+            // `new BrowserWindow(...)` (above), which fires this listener
+            // first — stealth before any show. Nothing left to do here.
             if (showWhenReady) {
                 this.showWindow(this.settingsWindow?.getBounds().x || 0, this.settingsWindow?.getBounds().y || 0)
             }
@@ -348,7 +333,8 @@ export class SettingsWindowHelper {
         // can't type API keys (or anything) into Settings fields. Settings
         // input is a long-form interaction; stealth-typing-into-overlay is
         // not what the user wants here. They can re-engage with the hotkey
-        // after Settings closes.
+        // after Settings closes. (darwin stop delegated to the adapter's
+        // stopStealthTapOnShow, registered below.)
         this.settingsWindow.on('show', () => {
             // ROUND 4 FIX (#7): reset blur timestamp on every successful
             // show. Without this, a stale lastBlurTime from a prior session
@@ -358,16 +344,8 @@ export class SettingsWindowHelper {
             // time bounds the guard to "the LAST blur" rather than "any
             // blur ever observed."
             this.lastBlurTime = 0;
-
-            if (process.platform !== 'darwin') return;
-            try {
-                // eslint-disable-next-line @typescript-eslint/no-var-requires
-                const { StealthKeyboardManager } = require('./services/StealthKeyboardManager');
-                StealthKeyboardManager.getInstance().stop();
-            } catch (e) {
-                console.error('[SettingsWindowHelper] failed to stop stealth tap on show:', e);
-            }
         });
+        this.adapter.stopStealthTapOnShow(this.settingsWindow);
 
 
     }
@@ -419,11 +397,7 @@ export class SettingsWindowHelper {
     }
 
     public syncActivationPolicy(): void {
-        if (process.platform !== 'win32') return;
         if (!this.settingsWindow || this.settingsWindow.isDestroyed()) return;
-        this.settingsWindow.setContentProtection(this.contentProtection);
-        if (this.settingsWindow.isVisible()) {
-            this.settingsWindow.setOpacity(1);
-        }
+        this.adapter.syncActivationPolicy(this.settingsWindow, this.contentProtection);
     }
 }

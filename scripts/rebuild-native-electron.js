@@ -1,5 +1,5 @@
 /**
- * Rebuilds Electron's native addons (better-sqlite3, keytar) against the
+ * Rebuilds Electron's native addons (better-sqlite3) against the
  * Electron Node ABI **and the true hardware architecture**.
  *
  * Why this script exists instead of a bare `electron-rebuild` postinstall call:
@@ -38,7 +38,7 @@ const fs = require('fs');
 const os = require('os');
 const path = require('path');
 
-const MODULES = ['better-sqlite3', 'keytar'];
+const MODULES = ['better-sqlite3'];
 
 // Shared hardware-arch probe — see electron/lib/nativeArch.mjs for the why.
 const { detectHardwareArch } = require('../electron/lib/nativeArch.cjs');

@@ -18,8 +18,15 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
 
-const src = fs.readFileSync(new URL('../DatabaseManager.ts', import.meta.url), 'utf8');
-const CHAIN_END = src.indexOf('Migrations completed.');
+// Phase 0 refactor: the migration chain moved out of the DatabaseManager god
+// class into electron/db/migrations.ts (33 ordered steps, byte-identical SQL).
+// This parser now reads that module. The chain's end marker is the close of
+// the MIGRATIONS array (the final unconditional-additive-schema step is part
+// of the last versioned block's body, exactly as it was part of the block
+// that ran before the 'Migrations completed.' log in the monolith).
+const src = fs.readFileSync(new URL('../migrations.ts', import.meta.url), 'utf8');
+const CHAIN_END = src.lastIndexOf('];');
+assert.ok(CHAIN_END > 0, 'expected the MIGRATIONS array close');
 
 function migrationBlocks() {
   const starts = [];
@@ -40,10 +47,14 @@ function migrationBlocks() {
       // Terminating the chain is one way to stay safe. Recording a durable retry
       // marker is another, and a better one where the migration changes no schema:
       // v29 writes PAGE_COUNT_REPAIR_PENDING into app_state and deliberately lets
-      // later migrations run, falling back to `return` only when even the marker
+      // later migrations run, falling back to aborting only when even the marker
       // could not be written. Both satisfy the invariant; neither silently forgets.
+      //
+      // Phase 0 shape change: the chain now lives in migrations.ts where a step
+      // aborts the runner by `return false;` (the monolith used a bare `return;`).
+      // Both forms count as termination.
       terminatesChain: catchAt !== -1
-        && (/\breturn;|\bthrow /.test(body.slice(catchAt)) || /PENDING_KEY/.test(body)),
+        && (/\breturn\s*(?:false\s*)?;|\bthrow /.test(body.slice(catchAt)) || /PENDING_KEY/.test(body)),
     };
   });
 }

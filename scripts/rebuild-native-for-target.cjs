@@ -3,8 +3,8 @@
  *
  * THE PROBLEM THIS SOLVES
  * -----------------------
- * `better-sqlite3` and `keytar` each ship a SINGLE compiled binary at a fixed
- * path (`build/Release/*.node`) with no per-arch loader — unlike native-module
+ * `better-sqlite3` ships a SINGLE compiled binary at a fixed path
+ * (`build/Release/*.node`) with no per-arch loader — unlike native-module
  * (Rust, ships both `index.darwin-{x64,arm64}.node`), onnxruntime-node, sharp,
  * and sqlite-vec, which all carry both arch slices side-by-side and pick at
  * runtime. So whatever arch that one `.node` happens to be on disk is the arch
@@ -22,7 +22,7 @@
  *
  * THE FIX
  * -------
- * Before EACH per-arch pack, rebuild exactly better-sqlite3 + keytar for THAT
+ * Before EACH per-arch pack, rebuild exactly better-sqlite3 for THAT
  * target arch, from source, pinned to the installed Electron version.
  *
  * IMPORTANT: this must be `beforePack` + package.json `npmRebuild:false`, NOT
@@ -51,7 +51,7 @@ const path = require('path');
 
 // Kept in sync with scripts/rebuild-native-electron.js MODULES and
 // electron/lib/nativeArch.mjs TARGETS.
-const MODULES = ['better-sqlite3', 'keytar'];
+const MODULES = ['better-sqlite3'];
 
 /**
  * electron-builder invokes beforePack with a context object that includes the

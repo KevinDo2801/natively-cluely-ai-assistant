@@ -120,6 +120,18 @@ jobs:
       - name: Build renderer
         run: npm run build
 
+      # ESLint is advisory during the refactor's early phases (0 errors /
+      # ~800 warnings baseline — see eslint.config.mjs header). Visible in
+      # logs without failing the leg; Phase 6 promotes it to enforcing.
+      - name: Lint (advisory)
+        continue-on-error: true
+        run: npm run lint
+
+      # any-RATCHET (enforcing): no file may increase its `any` count vs the
+      # committed baseline (reports/any-baseline.json). Only ever goes down.
+      - name: Check any-usage ratchet
+        run: node scripts/count-any.mjs --check
+
       - name: Build Electron main process
         run: npm run build:electron
 

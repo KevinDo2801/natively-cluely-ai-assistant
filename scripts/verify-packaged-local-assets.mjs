@@ -64,7 +64,6 @@ const REQUIRED_ASARUNPACK_GLOBS = [
   '**/rerankerDownloadWorker.js',
   '**/whisperWorker.js',
   '**/node_modules/better-sqlite3/**',
-  '**/node_modules/keytar/**',
   '**/node_modules/sqlite-vec/**',
   '**/node_modules/sqlite-vec-*/**',
   '**/node_modules/sharp/**',
@@ -95,7 +94,6 @@ const REQUIRED_WORKER_FILES = [
 // them under app.asar.unpacked). Checked in packaged mode only.
 const REQUIRED_UNPACKED_NATIVE = [
   'node_modules/better-sqlite3/build/Release/better_sqlite3.node',
-  'node_modules/keytar/build/Release/keytar.node',
   'node_modules/onnxruntime-node/bin',
   'node_modules/@img/sharp-darwin-arm64/lib',
   'node_modules/@img/sharp-libvips-darwin-arm64/lib',

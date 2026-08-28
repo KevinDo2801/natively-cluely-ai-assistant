@@ -7,11 +7,14 @@ import { fileURLToPath } from 'node:url';
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const ipcHandlersPath = path.resolve(__dirname, '../../../electron/ipcHandlers.ts');
 const ipcSource = readFileSync(ipcHandlersPath, 'utf8');
+// Phase 2: safeOn lives in the shared electron/ipc/safeIpc.ts module.
+const safeIpcPath = path.resolve(__dirname, '../../../electron/ipc/safeIpc.ts');
+const safeIpcSource = readFileSync(safeIpcPath, 'utf8');
 
 test('send-style IPC registrations use safeOn to avoid listener accumulation', () => {
-  const safeOnStart = ipcSource.indexOf('const safeOn =');
-  assert.ok(safeOnStart >= 0, 'BUG: initializeIpcHandlers must define safeOn.');
-  const safeOnBody = ipcSource.slice(safeOnStart, ipcSource.indexOf('};', safeOnStart) + 2);
+  const safeOnStart = safeIpcSource.indexOf('export function safeOn(');
+  assert.ok(safeOnStart >= 0, 'BUG: electron/ipc/safeIpc.ts must export safeOn.');
+  const safeOnBody = safeIpcSource.slice(safeOnStart, safeIpcSource.indexOf('}', safeOnStart) + 1);
   assert.ok(
     /ipcMain\.removeAllListeners\s*\(\s*channel\s*\)/.test(safeOnBody) &&
       /ipcMain\.on\s*\(\s*channel\s*,\s*listener\s*\)/.test(safeOnBody),

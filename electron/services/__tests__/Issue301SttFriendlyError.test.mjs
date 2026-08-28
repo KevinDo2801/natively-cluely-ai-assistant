@@ -83,11 +83,20 @@ test('LocalWhisperSTT emits a friendly error for ONNX symbol-not-found crash (ma
 
 test('modelManager marks all local Whisper models as error on macOS 12 (Darwin 21)', () => {
   const source = read('electron/audio/whisper/modelManager.ts');
-  // The fix must gate models based on Darwin release version
+  // Phase 1 refactor: the Darwin-22 gate moved into the single shared mapping
+  // module electron/platform/macosVersion.ts (contract-tested there against
+  // injected platform/release on any host). modelManager must consume THAT
+  // gate, not re-implement the parse — a second copy is exactly what this
+  // test used to pin and what the refactor eliminated.
   assert.match(
     source,
-    /darwin.*22|22.*darwin|darwinMajor.*22|22.*darwinMajor/i,
-    'modelManager must gate on Darwin major version 22 (= macOS 13 Ventura)',
+    /isMacOS13VenturaOrLater/,
+    'modelManager must use the shared Ventura gate from platform/macosVersion',
+  );
+  assert.match(
+    source,
+    /platform\/macosVersion/,
+    'the gate must be imported from the platform module (single mapping source)',
   );
   assert.match(
     source,
@@ -126,8 +135,9 @@ test('local-whisper-start-download blocks download on macOS 12', () => {
     'handler must either gate inline or delegate to LocalModelDownloadService',
   );
   const service = read('electron/services/LocalModelDownloadService.ts');
-  assert.match(service, /process\.platform === 'darwin'/, 'the download service must check for darwin');
-  assert.match(service, /darwinMajor\s*<\s*22/, 'the download service must check Darwin major version 22');
+  // Phase 1 refactor: the service consumes the shared Ventura gate from
+  // electron/platform/macosVersion.ts instead of inlining the Darwin parse.
+  assert.match(service, /isMacOS13VenturaOrLater/, 'the download service must use the shared Ventura gate');
   assert.match(
     service,
     /macOS 13|Ventura|Monterey|macOS 12/,
@@ -138,7 +148,7 @@ test('local-whisper-start-download blocks download on macOS 12', () => {
 test('local-whisper-preload IPC blocks preload on macOS 12', () => {
   const source = read('electron/ipcHandlers.ts');
   const handler = extractHandlerBody(source, 'local-whisper-preload');
-  assert.match(handler, /darwin/, 'handler must check process.platform === darwin');
-  assert.match(handler, /22/, 'handler must check Darwin major version 22');
+  // Same shared gate (platform/macosVersion), same user-facing message.
+  assert.match(handler, /isMacOS13VenturaOrLater/, 'handler must use the shared Ventura gate');
   assert.match(handler, /macOS 13|Ventura|Monterey|macOS 12/, 'handler must surface a user-friendly macOS version error');
 });

@@ -98,7 +98,8 @@ test('DatabaseManager migration v21 → v22 backfills NULL page_count + extracte
   //   1. Be guarded by `version < 22` so re-runs are no-ops.
   //   2. Use a WHERE page_count IS NULL clause so it's idempotent.
   //   3. Log how many rows it backfilled (observability).
-  const src = read('electron/db/DatabaseManager.ts');
+  // Phase 0 refactor: version-gated migrations live in electron/db/migrations.ts.
+  const src = read('electron/db/migrations.ts');
 
   assert.match(
     src,
@@ -120,7 +121,7 @@ test('DatabaseManager migration v21 → v22 backfills NULL page_count + extracte
 
   assert.match(
     src,
-    /this\.db\.pragma\('user_version = 22'\)/,
+    /\bdb\.pragma\('user_version = 22'\)/,
     'v22 migration must advance the schema version to 22 on success',
   );
 
@@ -138,7 +139,8 @@ test('DatabaseManager migration v21 → v22 backfill handles [Page N] marker der
   // already present in content (injected by round-2 pdf-parse). The SQL
   // must extract the max page number from those markers. This is what
   // makes the backfill safe for existing post-v19 rows.
-  const src = read('electron/db/DatabaseManager.ts');
+  // Phase 0 refactor: version-gated migrations live in electron/db/migrations.ts.
+  const src = read('electron/db/migrations.ts');
 
   // The phase-1 UPDATE must reference [Page N] markers somehow — either
   // via content LIKE '%[Page %]%' guard or via substr extraction. Either

@@ -1,5 +1,5 @@
 // DEV-ONLY visual repro for the "no thinking-dot under liquid-glass/modern"
-// bug report. Not part of the shipped app (see harness.html precedent:
+// bug report. Not part of the shipped app (see dev/harness/harness.html precedent:
 // streamingCodeHarness.tsx). Renders the REAL class strings used by both
 // thinking-dot render sites in NativelyInterface.tsx (the embedded dot in
 // renderMessageText's streaming branch, ~L5636-5651, and the standalone

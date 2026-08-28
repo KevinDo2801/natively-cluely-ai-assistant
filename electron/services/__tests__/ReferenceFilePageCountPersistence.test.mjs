@@ -34,7 +34,9 @@ const repoRoot = path.resolve(__dirname, '../../..');
 const read = rel => fs.readFileSync(path.join(repoRoot, rel), 'utf8');
 
 test('DatabaseManager migration v18 → v19 adds page_count + extracted_page_count columns', () => {
-  const src = read('electron/db/DatabaseManager.ts');
+  // Phase 0 refactor: version-gated migrations live in electron/db/migrations.ts
+  // (steps use the local `db` handle from ctx, not `this.db`).
+  const src = read('electron/db/migrations.ts');
   assert.match(
     src,
     /Applying migration v18 → v19: Add page_count \+ extracted_page_count to mode_reference_files/,
@@ -52,7 +54,7 @@ test('DatabaseManager migration v18 → v19 adds page_count + extracted_page_cou
   );
   assert.match(
     src,
-    /this\.db\.pragma\('user_version = 19'\)/,
+    /\bdb\.pragma\('user_version = 19'\)/,
     'user_version must be bumped to 19 after the migration runs',
   );
 });

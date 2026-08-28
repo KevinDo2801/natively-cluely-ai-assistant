@@ -150,7 +150,8 @@ test('DAO fail-closed: saveAssistantClaim downgrades verified-without-evidence (
 });
 
 test('SCHEMA: v24 migration creates assistant_claims + turn_context_contracts', () => {
-  const dbSource = fs.readFileSync(path.resolve(repoRoot, 'electron/db/DatabaseManager.ts'), 'utf8');
+  // Phase 0 refactor: version-gated migrations live in electron/db/migrations.ts.
+  const dbSource = fs.readFileSync(path.resolve(repoRoot, 'electron/db/migrations.ts'), 'utf8');
   assert.match(dbSource, /version < 24/);
   assert.match(dbSource, /CREATE TABLE IF NOT EXISTS assistant_claims/);
   assert.match(dbSource, /CREATE TABLE IF NOT EXISTS turn_context_contracts/);

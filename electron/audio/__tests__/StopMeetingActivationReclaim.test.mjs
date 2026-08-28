@@ -78,7 +78,10 @@ test('the activation is gated on darwin, !inactive, !wasLauncher, and !undetecta
   assert.ok(guardStart >= 0, 'app.focus({steal:true}) must be inside an if-guard');
   const guard = before.slice(guardStart);
 
-  assert.match(guard, /process\.platform === 'darwin'/, 'gate: darwin only');
+  // Phase 1: the darwin-only decision moved into the WindowAdapter's
+  // mayStealFocusOnLauncherShow() (darwin true / win32 false, contract-tested
+  // in windowAdapter.test.mjs). The app-state gates stay inline.
+  assert.match(guard, /this\.adapter\.mayStealFocusOnLauncherShow\(\)/, 'gate: darwin only (via the WindowAdapter)');
   assert.match(guard, /!inactive/, 'gate: never on inactive/ghost shows (screenshot restores, toggle shows must not steal focus)');
   assert.match(guard, /!wasLauncher/, 'gate: only true overlay→launcher swaps (excludes cold-start, where mode is already launcher)');
   assert.match(guard, /!this\.appState\.getUndetectable\(\)/, 'gate: never in undetectable mode (activation re-reveals the dock tile)');

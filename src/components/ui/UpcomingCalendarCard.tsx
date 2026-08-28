@@ -1,6 +1,6 @@
 import React from 'react';
 import { useT } from '../../i18n';
-import calender from '../../UI_comp/calender.png';
+import calender from './calender.png';
 import ConnectCalendarButton from './ConnectCalendarButton';
 
 export interface CalendarAttendee {

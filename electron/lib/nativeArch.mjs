@@ -35,7 +35,6 @@ import path from 'node:path';
 /** Relative to repo root. */
 export const TARGETS = Object.freeze([
   'node_modules/better-sqlite3/build/Release/better_sqlite3.node',
-  'node_modules/keytar/build/Release/keytar.node',
 ]);
 
 /** Mach-O arch token printed by `file` for each Node arch string. */
