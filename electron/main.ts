@@ -1255,6 +1255,7 @@ type ScreenshotCaptureKind = 'full' | 'selective';
 interface ScreenshotCaptureSession {
   captureKind: ScreenshotCaptureKind;
   wasMainWindowVisible: boolean;
+  wasLauncherVisible: boolean;
   windowMode: ScreenshotWindowMode;
   wasSettingsVisible: boolean;
   wasModelSelectorVisible: boolean;
@@ -7048,10 +7049,13 @@ export class AppState {
   ): ScreenshotCaptureSession {
     const settingsWindow = this.settingsWindowHelper.getSettingsWindow();
     const modelSelectorWindow = this.modelSelectorWindowHelper.getWindow();
+    const launcherWindow = this.windowHelper.getLauncherWindow();
 
     return {
       captureKind,
       wasMainWindowVisible: this.windowHelper.isVisible(),
+      wasLauncherVisible:
+        !!launcherWindow && !launcherWindow.isDestroyed() && launcherWindow.isVisible(),
       windowMode: this.windowHelper.getCurrentWindowMode(),
       wasSettingsVisible: !!settingsWindow && !settingsWindow.isDestroyed() && settingsWindow.isVisible(),
       wasModelSelectorVisible: !!modelSelectorWindow && !modelSelectorWindow.isDestroyed() && modelSelectorWindow.isVisible(),
@@ -7091,6 +7095,20 @@ export class AppState {
     if (session.wasMainWindowVisible) {
       this.hideMainWindow();
     }
+
+    // The meeting/global chat overlay ("Search this meeting" / global search) is
+    // rendered INSIDE the launcher window. During a live meeting the launcher can
+    // be up (hosting the chat) even when the tracked "main window" gate above is
+    // false (e.g. overlay-mode meeting where `isWindowVisible` doesn't reflect the
+    // launcher). The conditional hideMainWindow() above would then skip it and the
+    // chat would leak into the captured frame. Hide the launcher explicitly whenever
+    // it was visible so it never appears in the screenshot.
+    if (session.wasLauncherVisible) {
+      const launcher = this.windowHelper.getLauncherWindow();
+      if (launcher && !launcher.isDestroyed()) {
+        launcher.hide();
+      }
+    }
   }
 
   private restoreWindowsAfterScreenshot(session: ScreenshotCaptureSession): void {
@@ -7118,6 +7136,17 @@ export class AppState {
       if (modelSelectorWindow && !modelSelectorWindow.isDestroyed()) {
         const { x, y } = modelSelectorWindow.getBounds();
         this.modelSelectorWindowHelper.showWindow(x, y, { activate });
+      }
+    }
+
+    // Restore the launcher (host of the meeting/global chat overlay) if it was up
+    // before the capture but the main-window path above didn't already bring it
+    // back (e.g. overlay-mode meeting where only the launcher was showing the chat).
+    // showInactive preserves focus safety — the restore must never steal focus.
+    if (session.wasLauncherVisible) {
+      const launcher = this.windowHelper.getLauncherWindow();
+      if (launcher && !launcher.isDestroyed() && !launcher.isVisible()) {
+        launcher.showInactive();
       }
     }
 

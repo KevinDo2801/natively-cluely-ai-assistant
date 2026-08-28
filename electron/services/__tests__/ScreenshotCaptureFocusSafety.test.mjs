@@ -180,3 +180,40 @@ describe('Screenshot capture focus safety — production source anchors', () => 
     );
   });
 });
+
+describe('Screenshot capture must not leak the launcher-hosted chat overlay (meeting case)', () => {
+  // The meeting chat overlay ("Search this meeting") and the global chat overlay
+  // are rendered inside the LAUNCHER window. During a live meeting the launcher
+  // can be visible (hosting the chat) even when the tracked "main window"
+  // (isWindowVisible) is false — so the conditional hideMainWindow() gate would
+  // skip it and the chat would leak into the captured frame. The fix records
+  // launcher visibility in the capture session and hides/restores it explicitly,
+  // independent of the wasMainWindowVisible gate. These source anchors pin that.
+
+  const sessionStart = mainSrc.indexOf('private createScreenshotCaptureSession');
+  const sessionBody = mainSrc.slice(sessionStart, sessionStart + 700);
+
+  test('createScreenshotCaptureSession records whether the launcher window was visible', () => {
+    assert.match(
+      sessionBody,
+      /wasLauncherVisible:\s*[\s\S]{0,90}launcherWindow\.isVisible\(\)/,
+      'the capture session must snapshot launcher visibility independently of isWindowVisible',
+    );
+  });
+
+  test('hideWindowsForScreenshot hides the launcher when it was visible', () => {
+    const hideStart = mainSrc.indexOf('private hideWindowsForScreenshot');
+    const body = mainSrc.slice(hideStart, hideStart + 1300);
+    assert.match(body, /if \(session\.wasLauncherVisible\) \{/, 'must gate the launcher hide on wasLauncherVisible');
+    assert.match(body, /this\.windowHelper\.getLauncherWindow\(\)/, 'must resolve the launcher window to hide');
+    assert.match(body, /launcher\.hide\(\)/, 'must hide the launcher (and therefore the chat overlay)');
+  });
+
+  test('restoreWindowsAfterScreenshot restores the launcher without stealing focus', () => {
+    const restoreStart = mainSrc.indexOf('private restoreWindowsAfterScreenshot');
+    const body = mainSrc.slice(restoreStart, restoreStart + 1700);
+    assert.match(body, /if \(session\.wasLauncherVisible\) \{/, 'must gate the launcher restore on wasLauncherVisible');
+    assert.match(body, /!launcher\.isVisible\(\)/, 'must only restore if the launcher is not already up (idempotent with switchTo*)');
+    assert.match(body, /launcher\.showInactive\(\)/, 'must restore via showInactive (never steals focus)');
+  });
+});
