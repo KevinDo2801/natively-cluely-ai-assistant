@@ -44,6 +44,13 @@ permissions:
 
 jobs:
   build-macos:
+    # This repo's deployment is Windows-only; the developer fork has no Apple
+    # signing/notary secrets. Skip the whole job unless the cert + notary
+    # credentials are actually configured, so a tag push doesn't fail here at
+    # cert import with "SecKeychainItemImport: One or more parameters passed
+    # to a function were not valid." (A job-level `if` may read the secrets
+    # context; a step-level `if` cannot.)
+    if: secrets.MACOS_CERT_P12_BASE64 != '' && secrets.APPLE_API_KEY_P8_BASE64 != ''
     runs-on: macos-14 # Apple Silicon runner; builds both arches via NATIVELY_BUILD_ALL_MAC_ARCHES
     timeout-minutes: 90
     steps:
