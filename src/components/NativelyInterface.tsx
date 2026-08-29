@@ -3475,6 +3475,12 @@ const NativelyInterface: React.FC<NativelyInterfaceProps> = ({
       chatStreamSourceRef.current = null;
       requestStartTimeRef.current = null;
       setMessages([]);
+      // New meeting = new conversation: drop the ↑/↓ recall stack too, so the
+      // overlay can't resurrect the PREVIOUS meeting's submitted messages when
+      // the user presses ↑/↓ in the new chat. Mirrors resetChatState().
+      chatHistoryRef.current = [];
+      chatHistoryCursorRef.current = -1;
+      chatDraftRef.current = '';
       eagerCodeExpansionHoldRef.current = false;
       answerPanelPinnedRef.current = false;
       setAnswerPanelPinned(false);
@@ -4593,6 +4599,13 @@ const NativelyInterface: React.FC<NativelyInterfaceProps> = ({
     setAnswerPanelPinned(false);
     lastManualSubmitRef.current = null;
     manualSubmitInFlightRef.current = false;
+    // ↑/↓ recall history is scoped to the CURRENT conversation: a fresh chat
+    // (Clear chat button or Ctrl+R New Chat) must not recall messages from
+    // the one it replaced. Without this, the shell-style history stack
+    // (chatHistoryRef) kept its entries until an app restart.
+    chatHistoryRef.current = [];
+    chatHistoryCursorRef.current = -1;
+    chatDraftRef.current = '';
   }, [cancelActiveChatStream]);
 
   const finalizeStreamingByIntent = useCallback(
