@@ -48,6 +48,20 @@ const DEFAULT_BATCH_SIZE = 500;
 const TOMBSTONE_TTL_MS = 30 * 24 * 60 * 60 * 1000;
 
 /**
+ * Per-request bound for PostgREST calls. Supabase's edge can black-hole
+ * individual requests (observed: a connection that never settles while the
+ * same host answers other requests); without a bound one hung read freezes
+ * the whole sync loop forever. Generous on purpose — large upsert batches
+ * need headroom. Override with SUPABASE_SYNC_REQUEST_TIMEOUT_MS.
+ */
+const CLOUD_REQUEST_TIMEOUT_MS = Number(process.env.SUPABASE_SYNC_REQUEST_TIMEOUT_MS) || 30_000;
+
+/** Fresh abort signal for one PostgREST request. */
+function requestTimeoutSignal() {
+  return AbortSignal.timeout(CLOUD_REQUEST_TIMEOUT_MS);
+}
+
+/**
  * Table order + the exact local columns mirrored on Supabase.
  * `pk` overrides the default primary-key column `id`.
  * `pkType: 'bigint'` marks INTEGER autoincrement primary keys (needed to type
@@ -95,6 +109,45 @@ const TABLE_DEFS = [
   { table: 'assistant_claims', pk: 'claim_id', columns: ['claim_id', 'turn_id', 'claim_text', 'source_owner', 'requested_property', 'validation_status', 'evidence_ids_json', 'created_at', 'contradicted_by_claim_id'] },
   { table: 'turn_context_contracts', pk: 'turn_id', columns: ['turn_id', 'surface', 'active_mode_id', 'answer_shape', 'source_owner', 'requested_property', 'allowed_sources_json', 'forbidden_sources_json', 'memory_write_policy_json', 'created_at'] },
 ];
+
+/**
+ * Local/cloud foreign-key parents per table. A dirty-driven sync of a child
+ * table must also reconcile its parents first (in TABLE_DEFS order), because
+ * both the local SQLite (PRAGMA foreign_keys=ON) and the Supabase composite
+ * FKs reject child rows whose parents do not exist yet on that side.
+ */
+const FK_PARENTS = {
+  transcripts: ['meetings'],
+  ai_interactions: ['meetings'],
+  chunks: ['meetings'],
+  chunk_summaries: ['meetings'],
+  meetings: ['folders'],
+  mode_note_sections: ['modes'],
+  mode_reference_files: ['modes'],
+  knowledge_sources: ['mode_reference_files', 'modes'],
+  knowledge_packs: ['knowledge_sources', 'modes'],
+  knowledge_cards: ['knowledge_packs', 'knowledge_sources'],
+  knowledge_entities: ['knowledge_packs'],
+  knowledge_relations: ['knowledge_packs'],
+  knowledge_card_versions: ['knowledge_cards'],
+  knowledge_index_versions: ['knowledge_sources'],
+};
+
+/** Transitive closure of FK_PARENTS for the given table names (pure). */
+function expandTables(tables) {
+  const wanted = new Set(tables);
+  const queue = [...tables];
+  while (queue.length) {
+    const t = queue.shift();
+    for (const p of FK_PARENTS[t] || []) {
+      if (!wanted.has(p)) {
+        wanted.add(p);
+        queue.push(p);
+      }
+    }
+  }
+  return wanted;
+}
 
 // ---------------------------------------------------------------------------
 // Timestamp helpers
@@ -210,6 +263,86 @@ function readLocalTombstones(db, table) {
 }
 
 // ---------------------------------------------------------------------------
+// Cloud-first helpers (write-through dirty tracking + cutover wipe)
+// ---------------------------------------------------------------------------
+
+/**
+ * Dirty tables with their current monotonic seq (bumped by the v34 triggers
+ * on every insert/update/delete). The sync loop captures the seq before
+ * syncing and clears only up to it, so writes landing mid-sync stay dirty.
+ * Returns [] when the table does not exist yet (pre-v34 DB).
+ */
+function readDirtyTables(db) {
+  try {
+    return db.prepare('SELECT table_name, seq FROM sync_dirty').all();
+  } catch (e) {
+    if (!/no such table/i.test(String(e && e.message))) throw e;
+    return [];
+  }
+}
+
+/**
+ * Clear a dirty flag only if it was NOT bumped again since the sync started
+ * (race-free: seqs captured before the sync are compared against the current
+ * value). A missing row is already clean.
+ */
+function clearDirtyTableUpTo(db, table, seq) {
+  try {
+    db.prepare('DELETE FROM sync_dirty WHERE table_name = ? AND seq <= ?').run(table, seq);
+  } catch (e) {
+    if (!/no such table/i.test(String(e && e.message))) throw e;
+  }
+}
+
+/** Clear every dirty flag (used right after the cutover wipe + pull). */
+function clearAllDirty(db) {
+  try {
+    db.prepare('DELETE FROM sync_dirty').run();
+  } catch (e) {
+    if (!/no such table/i.test(String(e && e.message))) throw e;
+  }
+}
+
+/**
+ * Run `fn` with all trg_* triggers temporarily dropped, then recreate them
+ * from sqlite_master. Used by the cutover wipe: a plain DELETE would fire the
+ * v33 tombstone triggers and turn the wipe into a mass "delete everything on
+ * the cloud too" — the wipe must be invisible to change tracking.
+ * `fn` may return a promise; either way the triggers are restored first.
+ */
+function suspendLocalTriggers(db, fn) {
+  const rows = db.prepare(`SELECT name, sql FROM sqlite_master WHERE type = 'trigger' AND name LIKE 'trg_%'`).all();
+  for (const r of rows) db.exec(`DROP TRIGGER IF EXISTS "${r.name}"`);
+  let result;
+  try {
+    result = fn();
+  } finally {
+    for (const r of rows) db.exec(r.sql);
+  }
+  return result;
+}
+
+/**
+ * Wipe every synced business table + all sync change tracking, with triggers
+ * suspended so the wipe records no tombstones and no dirty marks. Deletion
+ * order is TABLE_DEFS reversed (children before parents) so the FK cascade
+ * clears local-only derived tables (mode_reference_chunks, knowledge_documents)
+ * exactly like deleting their cloud parents would.
+ */
+function wipeSyncedTables(db) {
+  suspendLocalTriggers(db, () => {
+    const wipe = db.transaction(() => {
+      for (const def of [...TABLE_DEFS].reverse()) {
+        db.exec(`DELETE FROM "${def.table}"`);
+      }
+      db.exec('DELETE FROM sync_tombstones');
+      db.exec('DELETE FROM sync_dirty');
+    });
+    wipe();
+  });
+}
+
+// ---------------------------------------------------------------------------
 // Cloud reads (paginated)
 // ---------------------------------------------------------------------------
 
@@ -223,7 +356,8 @@ async function readCloudRows(client, def, userId) {
       .select(cols)
       .eq('user_id', userId)
       .order(def.pk || 'id', { ascending: true })
-      .range(from, from + page - 1);
+      .range(from, from + page - 1)
+      .abortSignal(requestTimeoutSignal());
     if (error) throw new Error(`cloud read ${def.table}: ${error.message}`);
     if (!data || !data.length) break;
     for (const r of data) {
@@ -247,7 +381,8 @@ async function readCloudTombstones(client, table, userId) {
       .eq('user_id', userId)
       .eq('table_name', table)
       .order('row_id', { ascending: true })
-      .range(from, from + page - 1);
+      .range(from, from + page - 1)
+      .abortSignal(requestTimeoutSignal());
     if (error) throw new Error(`cloud tombstone read ${table}: ${error.message}`);
     if (!data || !data.length) break;
     for (const r of data) map.set(String(r.row_id), toMs(r.deleted_at));
@@ -438,12 +573,12 @@ function applyToLocal(db, def, actions) {
 }
 
 async function upsertCloudBatch(client, table, rows, pk) {
-  const { error } = await client.from(table).upsert(rows, { onConflict: pk });
+  const { error } = await client.from(table).upsert(rows, { onConflict: pk }).abortSignal(requestTimeoutSignal());
   if (!error) return { upserted: rows.length, failed: [] };
   let upserted = 0;
   const failed = [];
   for (const row of rows) {
-    const res = await client.from(table).upsert(row, { onConflict: pk });
+    const res = await client.from(table).upsert(row, { onConflict: pk }).abortSignal(requestTimeoutSignal());
     if (res.error) failed.push({ id: row[pk], error: res.error.message });
     else upserted++;
   }
@@ -470,15 +605,23 @@ async function applyToCloud(client, def, userId, actions, batchSize, onProgress)
   }
 
   for (const d of actions.pushDeletes) {
-    const { error } = await client.from(table).delete().eq(pk, d.pkValue).eq('user_id', userId);
+    const { error } = await client
+      .from(table)
+      .delete()
+      .eq(pk, d.pkValue)
+      .eq('user_id', userId)
+      .abortSignal(requestTimeoutSignal());
     if (error) failed.push({ id: d.key, error: `delete: ${error.message}` });
   }
 
   for (const t of actions.tombPush) {
-    const { error } = await client.from('sync_tombstones').upsert(
-      { user_id: userId, table_name: t.table, row_id: t.rowId, deleted_at: toIso(t.deletedAtMs) },
-      { onConflict: 'user_id,table_name,row_id' }
-    );
+    const { error } = await client
+      .from('sync_tombstones')
+      .upsert(
+        { user_id: userId, table_name: t.table, row_id: t.rowId, deleted_at: toIso(t.deletedAtMs) },
+        { onConflict: 'user_id,table_name,row_id' }
+      )
+      .abortSignal(requestTimeoutSignal());
     if (error) failed.push({ id: `tomb:${t.table}:${t.rowId}`, error: `tombstone: ${error.message}` });
   }
 
@@ -488,7 +631,8 @@ async function applyToCloud(client, def, userId, actions, batchSize, onProgress)
       .delete()
       .eq('user_id', userId)
       .eq('table_name', table)
-      .eq('row_id', key);
+      .eq('row_id', key)
+      .abortSignal(requestTimeoutSignal());
     if (error) failed.push({ id: `tombClear:${table}:${key}`, error: `tombstone clear: ${error.message}` });
   }
 
@@ -510,7 +654,8 @@ async function gcTombstones(db, client, userId, table, direction) {
       .delete()
       .lt('deleted_at', cutoffIso)
       .eq('user_id', userId)
-      .eq('table_name', table);
+      .eq('table_name', table)
+      .abortSignal(requestTimeoutSignal());
   }
 }
 
@@ -644,34 +789,52 @@ async function syncTable({ db, client, userId, def, direction = 'both', onProgre
  * @param {Function} [opts.onProgress]
  * @param {boolean} [opts.dryRun]
  * @param {number} [opts.batchSize]
+ * @param {string[]} [opts.tables] only reconcile these tables (expanded with
+ *   their FK ancestors, iterated in TABLE_DEFS order — used by the in-app
+ *   write-through loop to push just the tables a local write dirtied)
  * @returns {Promise<{tables: Array, totalRows: number, totalPushed: number, totalPulled: number, totalDeleted: number, totalFailed: number}>}
  */
-async function syncAll({ db, client, userId, direction = 'both', onProgress, dryRun = false, batchSize = DEFAULT_BATCH_SIZE }) {
+async function syncAll({ db, client, userId, direction = 'both', onProgress, dryRun = false, batchSize = DEFAULT_BATCH_SIZE, tables = null }) {
   if (!userId) throw new Error('syncAll: userId is required');
-  const tables = [];
+  let defs = TABLE_DEFS;
+  if (Array.isArray(tables) && tables.length) {
+    const wanted = expandTables(tables);
+    defs = TABLE_DEFS.filter((d) => wanted.has(d.table));
+  }
+  const resultTables = [];
   let totalRows = 0;
   let totalPushed = 0;
   let totalPulled = 0;
   let totalDeleted = 0;
   let totalFailed = 0;
+  let totalTableErrors = 0;
 
-  for (const def of TABLE_DEFS) {
+  for (const def of defs) {
     const result = await syncTable({ db, client, userId, def, direction, onProgress, dryRun, batchSize });
-    tables.push(result);
+    resultTables.push(result);
     totalRows += result.rows;
     totalPushed += result.pushed;
     totalPulled += result.pulled;
     totalDeleted += result.deletedLocal + result.deletedCloud;
     totalFailed += result.failed.length;
     if (result.error) {
+      totalTableErrors++;
       onProgress && onProgress({ table: def.table, phase: 'error', error: result.error });
     }
   }
-  return { tables, totalRows, totalPushed, totalPulled, totalDeleted, totalFailed };
+  return { tables: resultTables, totalRows, totalPushed, totalPulled, totalDeleted, totalFailed, totalTableErrors };
 }
 
 module.exports = {
   TABLE_DEFS,
+  FK_PARENTS,
+  expandTables,
+  readDirtyTables,
+  clearDirtyTableUpTo,
+  clearAllDirty,
+  suspendLocalTriggers,
+  wipeSyncedTables,
+  CLOUD_REQUEST_TIMEOUT_MS,
   DEFAULT_BATCH_SIZE,
   TOMBSTONE_TTL_MS,
   toMs,

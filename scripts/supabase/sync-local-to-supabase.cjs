@@ -1,5 +1,5 @@
 /**
- * Two-way sync between the local Natively SQLite database and Supabase.
+ * Cloud-first sync between the local Natively SQLite database and Supabase.
  *
  * Runs under Electron's Node runtime so the repo's better-sqlite3 (compiled
  * for Electron's ABI) loads:
@@ -8,8 +8,14 @@
  *     npm run supabase:sync -- --dry-run   # plan only, no writes
  *     npm run supabase:sync -- --push-only # local wins, no cloud reads
  *     npm run supabase:sync -- --pull-only # cloud wins, no local reads
+ *     npm run supabase:sync -- --cutover   # cloud-first cutover (see below)
  *     npm run supabase:sync -- --user-email you@example.com
  *     npm run supabase:sync -- --db-path C:\path\natively.db
+ *
+ * --cutover performs the same one-time cloud-first cutover the app runs on
+ * first sign-in: safety-merge local → cloud, wipe the local business tables
+ * (triggers suspended, so no fake deletions propagate), then rebuild the
+ * local cache from Supabase. Supabase becomes the source of truth.
  *
  * Required env (from .env, git-ignored):
  *   SUPABASE_URL, SUPABASE_SERVICE_KEY   (service_role — bypasses RLS)
@@ -33,6 +39,7 @@ function parseArgs(argv) {
     if (a === '--dry-run') args.dryRun = true;
     else if (a === '--push-only') args.direction = 'push';
     else if (a === '--pull-only') args.direction = 'pull';
+    else if (a === '--cutover') args.cutover = true;
     else if (a === '--help') args.help = true;
     else if (a.startsWith('--user-email=')) args.userEmail = a.slice('--user-email='.length);
     else if (a.startsWith('--db-path=')) args.dbPath = a.slice('--db-path='.length);
@@ -81,8 +88,12 @@ async function main() {
   const args = parseArgs(scriptIdx >= 0 ? argv.slice(scriptIdx + 1) : argv);
 
   if (args.help) {
-    console.log('Usage: npm run supabase:sync [-- --dry-run] [-- --push-only|--pull-only] [-- --user-email you@example.com] [-- --db-path C:\\path\\natively.db] [-- --batch 500]');
+    console.log('Usage: npm run supabase:sync [-- --dry-run] [-- --push-only|--pull-only|--cutover] [-- --user-email you@example.com] [-- --db-path C:\\path\\natively.db] [-- --batch 500]');
     return 0;
+  }
+
+  if (args.cutover && args.dryRun) {
+    throw new Error('--cutover cannot be combined with --dry-run (the wipe is destructive by design).');
   }
 
   const url = process.env.SUPABASE_URL;
@@ -99,19 +110,58 @@ async function main() {
   // Repo build of better-sqlite3 is compiled for Electron — we run under it.
   const Database = require(path.join(REPO_ROOT, 'node_modules', 'better-sqlite3'));
   const { createClient } = require(path.join(REPO_ROOT, 'node_modules', '@supabase', 'supabase-js'));
-  const { syncAll } = require(path.join(REPO_ROOT, 'electron', 'services', 'supabaseSyncEngine.js'));
+  const {
+    syncAll,
+    wipeSyncedTables,
+    clearAllDirty,
+  } = require(path.join(REPO_ROOT, 'electron', 'services', 'supabaseSyncEngine.js'));
 
   const client = createClient(url, serviceKey, {
+    // Force the raw global fetch: supabase-js' internally resolved fetch hangs
+    // in Electron's Node runtime, while the real global fetch does not.
+    global: { fetch: (input, init) => fetch(input, init) },
     auth: { persistSession: false, autoRefreshToken: false, detectSessionInUrl: false },
   });
 
   const user = await resolveUserId(client, args.userEmail || process.env.SUPABASE_SYNC_USER_EMAIL);
   console.log(`Target user: ${user.email} (${user.id})`);
   console.log(`Local DB:   ${dbPath}`);
-  console.log(`Direction:  ${args.direction || 'both'}${args.dryRun ? ' (DRY RUN — no writes)' : ''}`);
+  console.log(`Direction:  ${args.cutover ? 'cutover (merge → wipe local → pull)' : args.direction || 'both'}${args.dryRun ? ' (DRY RUN — no writes)' : ''}`);
 
   const db = new Database(dbPath, { fileMustExist: true });
   try {
+    const onProgress = ({ table, phase, done, rows, cloudRows, error }) => {
+      if (phase === 'dry-run') {
+        console.log(`  ${table.padEnd(28)} local ${rows} | cloud ${cloudRows}`);
+      } else if (phase === 'pushing' && done === 0) {
+        process.stdout.write(`  pushing ${table.padEnd(22)} `);
+      } else if (phase === 'pushing') {
+        process.stdout.write('.');
+      } else if (phase === 'error') {
+        console.log(`\n  ! ${table}: ${error}`);
+      }
+    };
+
+    if (args.cutover) {
+      // 1) Safety merge: push everything local so the wipe cannot lose data.
+      console.log('Cutover step 1/3: safety merge (local → cloud)…');
+      const safety = await syncAll({ db, client, userId: user.id, direction: 'both', onProgress });
+      if (safety.totalFailed > 0 || safety.totalTableErrors > 0) {
+        throw new Error(`cutover pre-sync failed: ${safety.totalFailed} row(s), ${safety.totalTableErrors} table(s) — local data left untouched`);
+      }
+      // 2) Wipe the local business tables + change tracking (triggers suspended).
+      console.log('Cutover step 2/3: wiping the local cache…');
+      wipeSyncedTables(db);
+      clearAllDirty(db);
+      // 3) Rebuild the local cache from Supabase.
+      console.log('Cutover step 3/3: pulling everything from Supabase…');
+      const summary = await syncAll({ db, client, userId: user.id, direction: 'pull', onProgress });
+      printSummary(summary);
+      if (summary.totalFailed > 0 || summary.totalTableErrors > 0) return 1;
+      console.log('Cutover complete — Supabase is now the source of truth.');
+      return 0;
+    }
+
     const summary = await syncAll({
       db,
       client,
@@ -119,40 +169,34 @@ async function main() {
       direction: args.direction || 'both',
       dryRun: !!args.dryRun,
       batchSize: Number.isFinite(args.batch) && args.batch > 0 ? args.batch : undefined,
-      onProgress({ table, phase, done, rows, cloudRows, error }) {
-        if (phase === 'dry-run') {
-          console.log(`  ${table.padEnd(28)} local ${rows} | cloud ${cloudRows}`);
-        } else if (phase === 'pushing' && done === 0) {
-          process.stdout.write(`  pushing ${table.padEnd(22)} `);
-        } else if (phase === 'pushing') {
-          process.stdout.write('.');
-        } else if (phase === 'error') {
-          console.log(`\n  ! ${table}: ${error}`);
-        }
-      },
+      onProgress,
     });
 
-    console.log('\n── Summary (↑ pushed, ↓ pulled, ✕ deleted) ─────────────────');
-    for (const t of summary.tables) {
-      if (t.error) {
-        console.log(`  ${t.table.padEnd(28)} ERROR: ${t.error}`);
-        continue;
-      }
-      if (t.rows === 0 && t.cloudRows === 0 && t.pushed === 0 && t.pulled === 0 && t.deletedLocal === 0 && t.deletedCloud === 0) continue;
-      console.log(
-        `  ${t.table.padEnd(28)} local ${String(t.rows).padStart(5)} | cloud ${String(t.cloudRows).padStart(5)} → ` +
-        `↑${t.pushed} ↓${t.pulled} ✕${t.deletedLocal + t.deletedCloud}${t.failed.length ? ` (${t.failed.length} failed)` : ''}`
-      );
-      for (const f of t.failed.slice(0, 5)) {
-        console.log(`      ✗ ${f.id}: ${f.error}`);
-      }
-    }
-    console.log(`  TOTAL: ↑${summary.totalPushed} ↓${summary.totalPulled} ✕${summary.totalDeleted}, ${summary.totalFailed} failed`);
-    if (summary.totalFailed > 0) return 1;
+    printSummary(summary);
+    if (summary.totalFailed > 0 || summary.totalTableErrors > 0) return 1;
     return 0;
   } finally {
     db.close();
   }
+}
+
+function printSummary(summary) {
+  console.log('\n── Summary (↑ pushed, ↓ pulled, ✕ deleted) ─────────────────');
+  for (const t of summary.tables) {
+    if (t.error) {
+      console.log(`  ${t.table.padEnd(28)} ERROR: ${t.error}`);
+      continue;
+    }
+    if (t.rows === 0 && t.cloudRows === 0 && t.pushed === 0 && t.pulled === 0 && t.deletedLocal === 0 && t.deletedCloud === 0) continue;
+    console.log(
+      `  ${t.table.padEnd(28)} local ${String(t.rows).padStart(5)} | cloud ${String(t.cloudRows).padStart(5)} → ` +
+      `↑${t.pushed} ↓${t.pulled} ✕${t.deletedLocal + t.deletedCloud}${t.failed.length ? ` (${t.failed.length} failed)` : ''}`
+    );
+    for (const f of t.failed.slice(0, 5)) {
+      console.log(`      ✗ ${f.id}: ${f.error}`);
+    }
+  }
+  console.log(`  TOTAL: ↑${summary.totalPushed} ↓${summary.totalPulled} ✕${summary.totalDeleted}, ${summary.totalFailed} failed, ${summary.totalTableErrors} table error(s)`);
 }
 
 main()

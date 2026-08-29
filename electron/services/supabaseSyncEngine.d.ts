@@ -49,6 +49,8 @@ export interface SyncSummary {
     totalPulled: number;
     totalDeleted: number;
     totalFailed: number;
+    /** Tables whose sync errored outright (e.g. a cloud read timed out). */
+    totalTableErrors: number;
 }
 
 export interface SyncActions {
@@ -62,8 +64,10 @@ export interface SyncActions {
 }
 
 export const TABLE_DEFS: SyncTableDef[];
+export const FK_PARENTS: Record<string, string[]>;
 export const DEFAULT_BATCH_SIZE: number;
 export const TOMBSTONE_TTL_MS: number;
+export const CLOUD_REQUEST_TIMEOUT_MS: number;
 
 export function toMs(v: unknown): number;
 export function toIso(ms: number): string;
@@ -73,8 +77,16 @@ export function blobToVector(buf: Buffer | null | undefined): {
 };
 export function vectorStringToBlob(s: string | null | undefined): Buffer | null;
 
+export function expandTables(tables: string[]): Set<string>;
+
 export function readLocalRows(db: import('better-sqlite3').Database, def: SyncTableDef): any[];
 export function readLocalTombstones(db: import('better-sqlite3').Database, table: string): Map<string, number>;
+
+export function readDirtyTables(db: import('better-sqlite3').Database): Array<{ table_name: string; seq: number }>;
+export function clearDirtyTableUpTo(db: import('better-sqlite3').Database, table: string, seq: number): void;
+export function clearAllDirty(db: import('better-sqlite3').Database): void;
+export function suspendLocalTriggers<T>(db: import('better-sqlite3').Database, fn: () => T): T;
+export function wipeSyncedTables(db: import('better-sqlite3').Database): void;
 
 export function planTableSync(opts: {
     def: SyncTableDef;
@@ -103,4 +115,6 @@ export function syncAll(opts: {
     onProgress?: (event: SyncProgressEvent) => void;
     dryRun?: boolean;
     batchSize?: number;
+    /** Only reconcile these tables (FK ancestors are added automatically). */
+    tables?: string[];
 }): Promise<SyncSummary>;

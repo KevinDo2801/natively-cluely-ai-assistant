@@ -7,6 +7,7 @@ import { createRequire } from 'node:module';
 const require = createRequire(import.meta.url);
 const {
   planTableSync,
+  expandTables,
   toMs,
   toIso,
   blobToVector,
@@ -154,4 +155,33 @@ test('vector BLOB ↔ pgvector string round-trip', () => {
   assert.deepEqual(back, buf);
   assert.equal(vectorStringToBlob(null), null);
   assert.equal(vectorStringToBlob('[not,a,vector]'), null);
+});
+
+// ── Cloud-first helpers ─────────────────────────────────────────────────────
+
+test('expandTables adds FK ancestors transitively', () => {
+  // Child → parent → grandparent.
+  const got = expandTables(['transcripts']);
+  assert.ok(got.has('transcripts'));
+  assert.ok(got.has('meetings'));
+  assert.ok(got.has('folders'));
+  // Grandchild → child → parents (knowledge_card_versions → cards → packs → sources).
+  const deep = expandTables(['knowledge_card_versions']);
+  assert.ok(deep.has('knowledge_card_versions'));
+  assert.ok(deep.has('knowledge_cards'));
+  assert.ok(deep.has('knowledge_packs'));
+  assert.ok(deep.has('knowledge_sources'));
+  assert.ok(deep.has('modes'));
+  // No expansion for parents themselves beyond their own ancestors.
+  const meeting = expandTables(['meetings']);
+  assert.ok(meeting.has('folders'));
+  assert.ok(!meeting.has('transcripts'));
+});
+
+test('expandTables is idempotent and handles unknown tables', () => {
+  const once = expandTables(['chunks', 'ai_interactions']);
+  assert.deepEqual([...expandTables([...once])].sort(), [...once].sort());
+  const unknown = expandTables(['not_a_table']);
+  assert.deepEqual([...unknown], ['not_a_table']);
+  assert.deepEqual([...expandTables([])], []);
 });

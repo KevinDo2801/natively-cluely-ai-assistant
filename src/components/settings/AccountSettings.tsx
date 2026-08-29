@@ -26,6 +26,8 @@ interface Status {
 
 interface SyncState {
     state: 'idle' | 'syncing' | 'ok' | 'error';
+    /** 'cutover' while the one-time cloud-first setup is rebuilding the local cache. */
+    phase?: 'cutover';
     lastSyncedAt?: number;
     lastCounts?: { rows: number; pushed: number; pulled: number; deleted: number; failed: number };
     lastError?: string;
@@ -243,6 +245,9 @@ export const AccountSettings: React.FC = () => {
     };
 
     const syncStatusLine = (() => {
+        if (sync.phase === 'cutover') {
+            return t('Setting up cloud sync — pulling your data from Supabase…');
+        }
         if (sync.state === 'syncing') return t('Pushing and pulling your data with the cloud…');
         if (sync.state === 'error') {
             return `${t('Sync failed')}: ${sync.lastError || t('unknown error')}`;
@@ -254,7 +259,7 @@ export const AccountSettings: React.FC = () => {
                 : '';
             return `${t('Last synced')} ${time}${counts}`;
         }
-        return t('Not synced yet — your local data is pushed to your account automatically.');
+        return t('Cloud sync starts automatically while you are signed in.');
     })();
 
     const noticeTone = (tone: Notice['tone']) =>
@@ -269,7 +274,7 @@ export const AccountSettings: React.FC = () => {
             <div className="space-y-3.5">
                 <div data-settings-stagger>
                     <h3 className="text-lg font-bold text-text-primary mb-1">{t('Account')}</h3>
-                    <p className="text-xs text-text-secondary mb-2">{t('Sign in to sync your Natively account.')}</p>
+                    <p className="text-xs text-text-secondary mb-2">{t('Sign in to back up and sync your data. Natively still works without an account — your local data merges into the cloud when you sign in.')}</p>
 
                     {view === 'loading' && (
                         <div className="rounded-xl border border-border-subtle bg-bg-card p-10 flex items-center justify-center">
@@ -455,7 +460,7 @@ export const AccountSettings: React.FC = () => {
                                 </button>
                             </div>
 
-                            {/* Cloud sync — local SQLite is pushed to the signed-in account */}
+                            {/* Cloud sync — Supabase is the source of truth while signed in */}
                             <div className="p-5">
                                 <h4 className="text-xs font-semibold text-text-primary mb-1.5 flex items-center gap-1.5">
                                     <Cloud size={13} className="text-text-tertiary" /> {t('Cloud sync')}

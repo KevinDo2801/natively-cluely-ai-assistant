@@ -1793,4 +1793,90 @@ export const MIGRATIONS: MigrationStep[] = [
         },
     },
 
+    {
+        id: 'v33-to-v34-cloud-first-sync',
+        up(ctx) {
+            const { db, version } = ctx;
+        // Version 33 → 34: cloud-first (write-through) sync.
+        //
+        // Supabase is the source of truth while a user is signed in; the local
+        // SQLite tables are a cache mirror. So the in-app sync loop needs to
+        // know the instant a local write happens:
+        //
+        //   * `sync_dirty` — per-table monotonic counter. The triggers below
+        //     bump it on ANY insert/update/delete of a synced table, and the
+        //     sync loop polls it (~1s) and reconciles just the dirty tables
+        //     (write-through) instead of waiting for the periodic pull.
+        //   * A monotonic `seq` (not a boolean) makes clearing race-free: the
+        //     loop captures the seq before syncing and clears only when the
+        //     current seq is unchanged, so a write that lands mid-sync keeps
+        //     the table dirty for the next tick instead of being skipped.
+        //   * The dirty triggers are SEPARATE from the v33 triggers because
+        //     the v33 UPDATE trigger only fires when the app did NOT set
+        //     updated_at itself — cloud pulls set it explicitly and would
+        //     otherwise not mark the table. The extra echo pass those marks
+        //     cause is a pure LWW no-op (pull timestamps are preserved), so
+        //     it converges to silence.
+        //
+        // ADDITIVE + IDEMPOTENT (same policy as v32→v33): a fresh install or
+        //     an upgraded DB both end up with the same triggers.
+        const syncedTables: Array<{ table: string }> = [
+            { table: 'folders' },
+            { table: 'meetings' },
+            { table: 'transcripts' },
+            { table: 'ai_interactions' },
+            { table: 'chunks' },
+            { table: 'chunk_summaries' },
+            { table: 'user_profile' },
+            { table: 'resume_nodes' },
+            { table: 'modes' },
+            { table: 'mode_reference_files' },
+            { table: 'mode_note_sections' },
+            { table: 'knowledge_sources' },
+            { table: 'knowledge_packs' },
+            { table: 'knowledge_cards' },
+            { table: 'knowledge_entities' },
+            { table: 'knowledge_relations' },
+            { table: 'knowledge_index_versions' },
+            { table: 'knowledge_card_versions' },
+            { table: 'assistant_claims' },
+            { table: 'turn_context_contracts' },
+        ];
+
+        db.exec(`
+            CREATE TABLE IF NOT EXISTS sync_dirty (
+                table_name TEXT PRIMARY KEY,
+                seq INTEGER NOT NULL DEFAULT 1
+            );
+        `);
+
+        for (const t of syncedTables) {
+            db.exec(`
+                CREATE TRIGGER IF NOT EXISTS trg_${t.table}_di AFTER INSERT ON ${t.table} FOR EACH ROW
+                BEGIN
+                    INSERT INTO sync_dirty (table_name, seq) VALUES ('${t.table}', 1)
+                    ON CONFLICT(table_name) DO UPDATE SET seq = sync_dirty.seq + 1;
+                END;
+
+                CREATE TRIGGER IF NOT EXISTS trg_${t.table}_du AFTER UPDATE ON ${t.table} FOR EACH ROW
+                BEGIN
+                    INSERT INTO sync_dirty (table_name, seq) VALUES ('${t.table}', 1)
+                    ON CONFLICT(table_name) DO UPDATE SET seq = sync_dirty.seq + 1;
+                END;
+
+                CREATE TRIGGER IF NOT EXISTS trg_${t.table}_dd AFTER DELETE ON ${t.table} FOR EACH ROW
+                BEGIN
+                    INSERT INTO sync_dirty (table_name, seq) VALUES ('${t.table}', 1)
+                    ON CONFLICT(table_name) DO UPDATE SET seq = sync_dirty.seq + 1;
+                END;
+            `);
+        }
+
+        if (version < 34) {
+            db.pragma('user_version = 34');
+        }
+            return true;
+        },
+    },
+
 ];

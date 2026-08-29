@@ -59,6 +59,28 @@ export type SupabaseAuthResult = {
 /** Deep-link destination used by Supabase confirmation + recovery emails. */
 export const SUPABASE_REDIRECT_URI = 'natively://auth/callback';
 
+/**
+ * Upper bound for auth-host network calls. Supabase's /auth/v1 host has been
+ * observed to hang indefinitely (requests that never settle while /rest/v1
+ * stays healthy); an un-bounded fetch freezes every await on it, which in the
+ * main process blocks auth restore and cloud sync forever. Bounded here so a
+ * dead auth host degrades to a clean error ("signed out") instead.
+ */
+const AUTH_REQUEST_TIMEOUT_MS = 15_000;
+
+/** fetch wrapper used for auth requests only (PostgREST keeps the default). */
+function authBoundedFetch(input: RequestInfo | URL, init?: RequestInit): Promise<Response> {
+    const url = typeof input === 'string' ? input : input instanceof URL ? input.href : input.url;
+    if (url.includes('/auth/v1/')) {
+        const controller = new AbortController();
+        const timer = setTimeout(() => controller.abort(), AUTH_REQUEST_TIMEOUT_MS);
+        return fetch(input, { ...(init || {}), signal: controller.signal }).finally(() =>
+            clearTimeout(timer),
+        );
+    }
+    return fetch(input, init);
+}
+
 export class SupabaseAuthService extends EventEmitter {
   private static instance: SupabaseAuthService;
 
@@ -106,6 +128,7 @@ export class SupabaseAuthService extends EventEmitter {
       );
     }
     this.client = createClient(url, key, {
+      global: { fetch: authBoundedFetch },
       auth: {
         persistSession: false,
         autoRefreshToken: false,
@@ -196,7 +219,11 @@ export class SupabaseAuthService extends EventEmitter {
       }
 
       client.auth.onAuthStateChange((event, session) => {
-        if (event === 'SIGNED_IN' || event === 'TOKEN_REFRESHED') {
+        if (
+          event === 'SIGNED_IN' ||
+          event === 'INITIAL_SESSION' ||
+          event === 'TOKEN_REFRESHED'
+        ) {
           if (session) this.saveToStorage(session);
           this.cachedStatus = this.toStatus(session);
           this.emit('changed', this.cachedStatus);
@@ -208,9 +235,18 @@ export class SupabaseAuthService extends EventEmitter {
       });
 
       // Resolve the initial status (validates a restored session via getUser).
-      this.refreshStatus().catch(() => {
-        this.cachedStatus = this.toStatus(null);
-      });
+      // onAuthStateChange can fire before we get here — or (supabase-js ≥2.44)
+      // emit INITIAL_SESSION while we were still registering — so ALWAYS emit
+      // 'changed' once with the resolved truth. The cloud sync wiring in
+      // ipcHandlers depends on this emission to start on a restored session.
+      this.refreshStatus()
+        .then(() => {
+          this.emit('changed', this.cachedStatus);
+        })
+        .catch(() => {
+          this.cachedStatus = this.toStatus(null);
+          this.emit('changed', this.cachedStatus);
+        });
     } catch (e) {
       console.error('[SupabaseAuthService] init failed:', (e as Error)?.message);
     }
