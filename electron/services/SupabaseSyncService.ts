@@ -1,21 +1,21 @@
 /**
- * SupabaseSyncService — pushes the local SQLite data to the Supabase project
- * for the signed-in user, keeping the cloud copy fresh while the app runs.
+ * SupabaseSyncService — two-way sync between the local SQLite database and
+ * the Supabase project for the signed-in user.
  *
  * Design notes:
  *   - Runs in the MAIN process (like SupabaseAuthService). The supabase-js
- *     client is created with the ANON key; before every push the signed-in
+ *     client is created with the ANON key; before every sync the signed-in
  *     user's session is applied to it (setSession), so PostgREST carries the
  *     user's own JWT and Supabase RLS enforces that only this user's rows can
- *     be written. No service_role key ever ships in the app.
- *   - The sync engine itself is shared with the one-shot CLI script
- *     (scripts/supabase/sync-local-to-supabase.cjs) via
- *     supabaseSyncEngine.js — full upserts, idempotent, parent tables first.
- *   - v1 schedule: one immediate push on start, then a full upsert every
- *     SYNC_INTERVAL_MS while signed in. Data volumes are small (hundreds of
- *     rows), so full-upsert polling is cheap; row-level change capture can
- *     replace it later.
- *   - Deletions are not propagated (push-only, documented in the engine).
+ *     be read or written. No service_role key ever ships in the app.
+ *   - The sync engine is shared with the one-shot CLI script
+ *     (scripts/supabase/sync-local-to-supabase.cjs) via supabaseSyncEngine.js.
+ *     v2 semantics: last-write-wins per row (updated_at on both sides) with
+ *     deletion propagation through sync_tombstones — a change made on one
+ *     device appears on the cloud and every other device.
+ *   - Schedule: one reconciliation on start, then every SYNC_INTERVAL_MS while
+ *     signed in. Data volumes are small (hundreds of rows), so full
+ *     reconciliation polling is cheap.
  *
  * EventEmitter signals (rebroadcast over IPC by ipcHandlers.ts):
  *   'status' — fires on every state change with the SupabaseSyncStatus.
@@ -29,11 +29,11 @@ export type SupabaseSyncState = 'idle' | 'syncing' | 'ok' | 'error';
 
 export interface SupabaseSyncStatus {
   state: SupabaseSyncState;
-  /** Epoch ms of the last fully successful push. */
+  /** Epoch ms of the last fully successful reconciliation. */
   lastSyncedAt?: number;
-  /** Row counts from the last fully successful push. */
-  lastCounts?: { rows: number; upserted: number; failed: number };
-  /** Error message from the last failed push. */
+  /** Movement from the last fully successful reconciliation. */
+  lastCounts?: { rows: number; pushed: number; pulled: number; deleted: number; failed: number };
+  /** Error message from the last failed sync. */
   lastError?: string;
 }
 
@@ -148,8 +148,9 @@ export class SupabaseSyncService extends EventEmitter {
   // ---------------------------------------------------------------------------
 
   /**
-   * Push the whole local database to Supabase for the signed-in user.
-   * Re-entrant: concurrent calls return the in-flight status.
+   * Reconcile the local database with Supabase for the signed-in user
+   * (two-way, last-write-wins). Re-entrant: concurrent calls return the
+   * in-flight status.
    */
   public async syncNow(): Promise<SupabaseSyncStatus> {
     if (this.running) return this.getStatus();
@@ -162,7 +163,7 @@ export class SupabaseSyncService extends EventEmitter {
       const auth = SupabaseAuthService.getInstance();
       const session = await auth.ensureFreshSession();
       if (!session?.user) {
-        // Signed out (or the session could not be refreshed): nothing to push.
+        // Signed out (or the session could not be refreshed): nothing to sync.
         this.setStatus({ state: 'idle' });
         return this.getStatus();
       }
@@ -188,12 +189,14 @@ export class SupabaseSyncService extends EventEmitter {
         lastSyncedAt: Date.now(),
         lastCounts: {
           rows: summary.totalRows,
-          upserted: summary.totalUpserted,
+          pushed: summary.totalPushed,
+          pulled: summary.totalPulled,
+          deleted: summary.totalDeleted,
           failed: summary.totalFailed,
         },
       });
       console.log(
-        `[SupabaseSyncService] sync ok: ${summary.totalUpserted} row(s) upserted for ${session.user.email || session.user.id}`,
+        `[SupabaseSyncService] sync ok: ↑${summary.totalPushed} ↓${summary.totalPulled} ✕${summary.totalDeleted} for ${session.user.email || session.user.id}`,
       );
     } catch (e) {
       console.error('[SupabaseSyncService] sync failed:', (e as Error)?.message || e);

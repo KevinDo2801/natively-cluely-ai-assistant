@@ -27,7 +27,7 @@ interface Status {
 interface SyncState {
     state: 'idle' | 'syncing' | 'ok' | 'error';
     lastSyncedAt?: number;
-    lastCounts?: { rows: number; upserted: number; failed: number };
+    lastCounts?: { rows: number; pushed: number; pulled: number; deleted: number; failed: number };
     lastError?: string;
 }
 
@@ -243,13 +243,15 @@ export const AccountSettings: React.FC = () => {
     };
 
     const syncStatusLine = (() => {
-        if (sync.state === 'syncing') return t('Pushing your local data to the cloud…');
+        if (sync.state === 'syncing') return t('Pushing and pulling your data with the cloud…');
         if (sync.state === 'error') {
             return `${t('Sync failed')}: ${sync.lastError || t('unknown error')}`;
         }
         if (sync.state === 'ok' && sync.lastSyncedAt) {
             const time = new Date(sync.lastSyncedAt).toLocaleTimeString();
-            const counts = sync.lastCounts ? ` — ${sync.lastCounts.rows} ${t('rows synced')}` : '';
+            const counts = sync.lastCounts
+                ? ` — ↑${sync.lastCounts.pushed} ↓${sync.lastCounts.pulled} ✕${sync.lastCounts.deleted}`
+                : '';
             return `${t('Last synced')} ${time}${counts}`;
         }
         return t('Not synced yet — your local data is pushed to your account automatically.');

@@ -486,23 +486,23 @@ export interface ElectronAPI {
   onAuthRecovery: (callback: (info: { email?: string }) => void) => () => void;
   onAuthDeepLinkError: (callback: (info: { message: string }) => void) => () => void;
 
-  // Supabase cloud sync — status + manual push
+  // Supabase cloud sync — status + manual sync
   syncGetStatus: () => Promise<{
     state: 'idle' | 'syncing' | 'ok' | 'error';
     lastSyncedAt?: number;
-    lastCounts?: { rows: number; upserted: number; failed: number };
+    lastCounts?: { rows: number; pushed: number; pulled: number; deleted: number; failed: number };
     lastError?: string;
   }>;
   syncNow: () => Promise<{
     state: 'idle' | 'syncing' | 'ok' | 'error';
     lastSyncedAt?: number;
-    lastCounts?: { rows: number; upserted: number; failed: number };
+    lastCounts?: { rows: number; pushed: number; pulled: number; deleted: number; failed: number };
     lastError?: string;
   }>;
   onSyncStatus: (callback: (status: {
     state: 'idle' | 'syncing' | 'ok' | 'error';
     lastSyncedAt?: number;
-    lastCounts?: { rows: number; upserted: number; failed: number };
+    lastCounts?: { rows: number; pushed: number; pulled: number; deleted: number; failed: number };
     lastError?: string;
   }) => void) => () => void;
 

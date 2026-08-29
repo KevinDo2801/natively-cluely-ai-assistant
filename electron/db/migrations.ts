@@ -1682,4 +1682,115 @@ export const MIGRATIONS: MigrationStep[] = [
         },
     },
 
+    {
+        id: 'v32-to-v33-two-way-sync',
+        up(ctx) {
+            const { db, version } = ctx;
+        // Version 32 → 33: two-way Supabase sync change tracking.
+        //
+        // Adds the local half of the two-way sync contract:
+        //   * `updated_at` TEXT (ISO-8601 UTC) on every user-data table.
+        //   * `sync_tombstones` — a deletion marker is written by a DELETE
+        //     trigger for every removed row so the sync engine can propagate
+        //     the deletion to Supabase instead of the old push-only upsert
+        //     silently resurrecting it.
+        //   * INSERT/UPDATE/DELETE triggers stamp `updated_at` with millisecond
+        //     precision (strftime %f — CURRENT_TIMESTAMP is second-resolution,
+        //     which LWW cannot use) and clear/record tombstones:
+        //       - INSERT clears any tombstone for the row id (so the app's
+        //         INSERT OR REPLACE pattern — meetings, assistant_claims,
+        //         chunk_summaries — does not fake a deletion: REPLACE fires
+        //         DELETE then INSERT, and the INSERT trigger undoes the
+        //         DELETE trigger's marker for the same id).
+        //       - UPDATE stamps only when the app did NOT set updated_at
+        //         itself, so a sync pull that writes a remote timestamp is
+        //         preserved verbatim (no ping-pong).
+        //
+        // APPLIED UNCONDITIONALLY, NOT VERSION-GATED (same live-incident
+        // lesson as user_titled / is_live / folder_id): the sync engine's
+        // writes and the cloud schema depend on these columns existing, and
+        // an additive column/trigger is idempotent by construction. The
+        // version counter is still advanced for bookkeeping when it is behind.
+        const syncedTables: Array<{ table: string; pk: string; hasCreatedAt: boolean }> = [
+            { table: 'folders',                 pk: 'id',       hasCreatedAt: true },
+            { table: 'meetings',                pk: 'id',       hasCreatedAt: true },
+            { table: 'transcripts',             pk: 'id',       hasCreatedAt: false },
+            { table: 'ai_interactions',         pk: 'id',       hasCreatedAt: false },
+            { table: 'chunks',                  pk: 'id',       hasCreatedAt: true },
+            { table: 'chunk_summaries',         pk: 'id',       hasCreatedAt: true },
+            { table: 'user_profile',            pk: 'id',       hasCreatedAt: true },
+            { table: 'resume_nodes',            pk: 'id',       hasCreatedAt: false },
+            { table: 'modes',                   pk: 'id',       hasCreatedAt: true },
+            { table: 'mode_reference_files',    pk: 'id',       hasCreatedAt: true },
+            { table: 'mode_note_sections',      pk: 'id',       hasCreatedAt: true },
+            { table: 'knowledge_sources',       pk: 'id',       hasCreatedAt: true },
+            { table: 'knowledge_packs',         pk: 'id',       hasCreatedAt: false }, // has updated_at only
+            { table: 'knowledge_cards',         pk: 'id',       hasCreatedAt: false }, // has updated_at only
+            { table: 'knowledge_entities',      pk: 'id',       hasCreatedAt: false },
+            { table: 'knowledge_relations',     pk: 'id',       hasCreatedAt: true },
+            { table: 'knowledge_index_versions', pk: 'id',      hasCreatedAt: true },
+            { table: 'knowledge_card_versions', pk: 'id',       hasCreatedAt: true },
+            { table: 'assistant_claims',        pk: 'claim_id', hasCreatedAt: true },
+            { table: 'turn_context_contracts',  pk: 'turn_id',  hasCreatedAt: true },
+        ];
+
+        const stampSql = `strftime('%Y-%m-%dT%H:%M:%fZ','now')`;
+
+        // 1. Deletion-marker table (must exist before the DELETE triggers).
+        db.exec(`
+            CREATE TABLE IF NOT EXISTS sync_tombstones (
+                table_name TEXT NOT NULL,
+                row_id TEXT NOT NULL,
+                deleted_at TEXT NOT NULL DEFAULT (${stampSql}),
+                PRIMARY KEY (table_name, row_id)
+            );
+            CREATE INDEX IF NOT EXISTS idx_sync_tombstones_deleted_at ON sync_tombstones(deleted_at);
+        `);
+
+        for (const t of syncedTables) {
+            // 2. updated_at column (knowledge_packs / knowledge_cards /
+            //    knowledge_index_versions already have one — absorb the
+            //    duplicate-column error exactly like the earlier additive steps).
+            try { db.exec(`ALTER TABLE ${t.table} ADD COLUMN updated_at TEXT`); } catch (_e) { /* Column already exists */ }
+
+            // 3. Backfill: inherit created_at where it exists (old rows must
+            //    not suddenly look "newer" than their cloud copy), otherwise
+            //    stamp now as the baseline.
+            const backfill = t.hasCreatedAt
+                ? `UPDATE ${t.table} SET updated_at = created_at WHERE updated_at IS NULL`
+                : `UPDATE ${t.table} SET updated_at = ${stampSql} WHERE updated_at IS NULL`;
+            try { db.exec(backfill); } catch (e) { console.warn(`[DatabaseManager] v33 backfill ${t.table} failed (non-fatal):`, e); }
+
+            // 4. Change-tracking triggers.
+            db.exec(`
+                CREATE TRIGGER IF NOT EXISTS trg_${t.table}_ai AFTER INSERT ON ${t.table} FOR EACH ROW
+                BEGIN
+                    UPDATE ${t.table} SET updated_at = ${stampSql}
+                        WHERE ${t.pk} = NEW.${t.pk} AND NEW.updated_at IS NULL;
+                    DELETE FROM sync_tombstones
+                        WHERE table_name = '${t.table}' AND row_id = CAST(NEW.${t.pk} AS TEXT);
+                END;
+
+                CREATE TRIGGER IF NOT EXISTS trg_${t.table}_au AFTER UPDATE ON ${t.table} FOR EACH ROW
+                WHEN NEW.updated_at IS OLD.updated_at
+                BEGIN
+                    UPDATE ${t.table} SET updated_at = ${stampSql}
+                        WHERE ${t.pk} = NEW.${t.pk};
+                END;
+
+                CREATE TRIGGER IF NOT EXISTS trg_${t.table}_ad AFTER DELETE ON ${t.table} FOR EACH ROW
+                BEGIN
+                    INSERT OR REPLACE INTO sync_tombstones (table_name, row_id, deleted_at)
+                    VALUES ('${t.table}', CAST(OLD.${t.pk} AS TEXT), ${stampSql});
+                END;
+            `);
+        }
+
+        if (version < 33) {
+            db.pragma('user_version = 33');
+        }
+            return true;
+        },
+    },
+
 ];
