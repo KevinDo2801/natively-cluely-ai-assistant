@@ -47,6 +47,8 @@ export const AccountSettings: React.FC = () => {
     const [password, setPassword] = useState('');
     const [confirm, setConfirm] = useState('');
     const [showPassword, setShowPassword] = useState(false);
+    // "Change password" form stays collapsed until the user clicks the button.
+    const [changePasswordOpen, setChangePasswordOpen] = useState(false);
 
     const [busy, setBusy] = useState(false);
     const [notice, setNotice] = useState<Notice | null>(null);
@@ -149,6 +151,7 @@ export const AccountSettings: React.FC = () => {
                 applyStatus({ signedIn: true, email: res.email || email.trim() });
                 setPassword('');
                 setConfirm('');
+                setChangePasswordOpen(false);
             }
         } else {
             setNotice({ tone: 'error', text: res?.error || t('Authentication failed.') });
@@ -173,6 +176,7 @@ export const AccountSettings: React.FC = () => {
             setNotice({ tone: 'ok', text: t('Password updated.') });
             setPassword('');
             setConfirm('');
+            setChangePasswordOpen(false);
             if (view === 'recovery') {
                 applyStatus({ signedIn: true, email: status.email || email });
             }
@@ -190,6 +194,7 @@ export const AccountSettings: React.FC = () => {
         setPassword('');
         setConfirm('');
         setMode('signin');
+        setChangePasswordOpen(false);
         if (res?.success) {
             applyStatus({ signedIn: false });
         } else {
@@ -402,41 +407,59 @@ export const AccountSettings: React.FC = () => {
                                 </button>
                             </div>
 
-                            {/* Change password */}
+                            {/* Change password — hidden until the user clicks it */}
                             <div className="p-5">
-                                <form onSubmit={changePassword} className="space-y-3">
-                                    <h4 className="text-xs font-semibold text-text-primary">{t('Change password')}</h4>
-                                    <label className="block space-y-1">
-                                        <span className={labelClass}>{t('New password')}</span>
-                                        <input
-                                            type={showPassword ? 'text' : 'password'}
-                                            value={password}
-                                            onChange={(e) => setPassword(e.target.value)}
-                                            autoComplete="new-password"
-                                            className={inputClass}
-                                        />
-                                    </label>
-                                    <label className="block space-y-1">
-                                        <span className={labelClass}>{t('Confirm password')}</span>
-                                        <input
-                                            type={showPassword ? 'text' : 'password'}
-                                            value={confirm}
-                                            onChange={(e) => setConfirm(e.target.value)}
-                                            autoComplete="new-password"
-                                            className={inputClass}
-                                        />
-                                    </label>
-                                    {notice && (
-                                        <div className={`rounded-lg border px-3 py-2 text-[11px] flex items-start gap-2 ${noticeTone(notice.tone)}`}>
-                                            {notice.tone === 'error' ? <AlertCircle size={13} className="shrink-0 mt-px" /> : <Check size={13} className="shrink-0 mt-px" />}
-                                            <span>{notice.text}</span>
-                                        </div>
-                                    )}
-                                    <button type="submit" disabled={busy} className={secondaryBtnClass}>
-                                        {busy ? <Loader2 size={13} className="animate-spin" /> : <KeyRound size={13} />}
-                                        {busy ? t('Please wait…') : t('Update password')}
+                                {!changePasswordOpen ? (
+                                    <button
+                                        type="button"
+                                        onClick={() => { setChangePasswordOpen(true); clearNotice(); }}
+                                        className="w-full inline-flex items-center justify-center gap-2 px-3 py-2 rounded-lg text-xs font-medium transition-colors text-text-secondary hover:text-text-primary hover:bg-bg-item-active/60"
+                                    >
+                                        <KeyRound size={13} /> {t('Change password')}
                                     </button>
-                                </form>
+                                ) : (
+                                    <form onSubmit={changePassword} className="space-y-3">
+                                        <h4 className="text-xs font-semibold text-text-primary">{t('Change password')}</h4>
+                                        <label className="block space-y-1">
+                                            <span className={labelClass}>{t('New password')}</span>
+                                            <input
+                                                type={showPassword ? 'text' : 'password'}
+                                                value={password}
+                                                onChange={(e) => setPassword(e.target.value)}
+                                                autoComplete="new-password"
+                                                className={inputClass}
+                                            />
+                                        </label>
+                                        <label className="block space-y-1">
+                                            <span className={labelClass}>{t('Confirm password')}</span>
+                                            <input
+                                                type={showPassword ? 'text' : 'password'}
+                                                value={confirm}
+                                                onChange={(e) => setConfirm(e.target.value)}
+                                                autoComplete="new-password"
+                                                className={inputClass}
+                                            />
+                                        </label>
+                                        {notice && (
+                                            <div className={`rounded-lg border px-3 py-2 text-[11px] flex items-start gap-2 ${noticeTone(notice.tone)}`}>
+                                                {notice.tone === 'error' ? <AlertCircle size={13} className="shrink-0 mt-px" /> : <Check size={13} className="shrink-0 mt-px" />}
+                                                <span>{notice.text}</span>
+                                            </div>
+                                        )}
+                                        <button type="submit" disabled={busy} className={secondaryBtnClass}>
+                                            {busy ? <Loader2 size={13} className="animate-spin" /> : <KeyRound size={13} />}
+                                            {busy ? t('Please wait…') : t('Update password')}
+                                        </button>
+                                        <button
+                                            type="button"
+                                            onClick={() => { setChangePasswordOpen(false); clearNotice(); }}
+                                            disabled={busy}
+                                            className="w-full text-center text-[11px] text-text-secondary hover:text-text-primary transition-colors"
+                                        >
+                                            {t('Cancel')}
+                                        </button>
+                                    </form>
+                                )}
                             </div>
                         </div>
                     )}
