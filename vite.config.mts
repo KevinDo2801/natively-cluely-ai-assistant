@@ -78,17 +78,11 @@ export default defineConfig({
                     ],
                     'media-vendor': [
                         'tesseract.js',
-                        'three',
                         'qrcode',
                         'jspdf',
                         'tailwind-merge',
                         'clsx',
                         'class-variance-authority',
-                    ],
-                    'data-vendor': [
-                        '@tanstack/react-query',
-                        '@huggingface/transformers',
-                        'axios',
                     ],
                 }
             }
