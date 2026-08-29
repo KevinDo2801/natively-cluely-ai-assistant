@@ -40,6 +40,16 @@ jobs:
   build-windows:
     runs-on: windows-latest
     timeout-minutes: 90
+    env:
+      # Public-by-design Supabase config, injected at JOB level so the
+      # "Build Electron main process" step (scripts/build-electron.js, which
+      # bakes these into the bundle) AND the Package step both receive them.
+      # Storing them only on the Package step meant the bundle was built
+      # WITHOUT Supabase config (build-electron.js warned "missing"), so the
+      # packaged app shipped with cloud sync disabled. Store as repo Variables;
+      # if you keep them under Secrets instead, swap `vars.` for `secrets.`.
+      SUPABASE_URL: ${{ vars.SUPABASE_URL }}
+      SUPABASE_ANON_KEY: ${{ vars.SUPABASE_ANON_KEY }}
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -84,11 +94,8 @@ jobs:
 
       - name: Package (NSIS + portable, unsigned)
         env:
-          # Public-by-design Supabase config baked into the main bundle at
-          # build time (scripts/build-electron.js). Store as repo Variables;
-          # if you keep them under Secrets instead, swap `vars.` for `secrets.`.
-          SUPABASE_URL: ${{ vars.SUPABASE_URL }}
-          SUPABASE_ANON_KEY: ${{ vars.SUPABASE_ANON_KEY }}
+          # SUPABASE_URL/SUPABASE_ANON_KEY come from the job-level env above,
+          # so they are available to every step (bake + package).
           # Auto-attach latest.yml + installers to the GitHub Release on tag
           # builds (electron-builder GitHub provider, releaseType: release).
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
