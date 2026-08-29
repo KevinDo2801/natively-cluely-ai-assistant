@@ -32,6 +32,7 @@
 
 import { EventEmitter } from 'events';
 import { createClient, type SupabaseClient, type Session } from '@supabase/supabase-js';
+import { getSupabaseAnonKey, getSupabaseUrl } from './supabaseConfig';
 
 export interface SupabaseAuthStatus {
   signedIn: boolean;
@@ -111,11 +112,11 @@ export class SupabaseAuthService extends EventEmitter {
   // ---------------------------------------------------------------------------
 
   private getUrl(): string | undefined {
-    return process.env.SUPABASE_URL || undefined;
+    return getSupabaseUrl();
   }
 
   private getAnonKey(): string | undefined {
-    return process.env.SUPABASE_ANON_KEY || undefined;
+    return getSupabaseAnonKey();
   }
 
   private ensureClient(): SupabaseClient {
@@ -124,7 +125,8 @@ export class SupabaseAuthService extends EventEmitter {
     const key = this.getAnonKey();
     if (!url || !key) {
       throw new Error(
-        'Supabase is not configured. Set SUPABASE_URL and SUPABASE_ANON_KEY in .env.',
+        'Supabase is not configured. Set SUPABASE_URL and SUPABASE_ANON_KEY ' +
+          '(in .env for dev builds, or on the build machine for packaged builds).',
       );
     }
     this.client = createClient(url, key, {

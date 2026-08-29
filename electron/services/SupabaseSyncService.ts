@@ -50,6 +50,7 @@ import {
     TABLE_DEFS,
     type SyncSummary,
 } from './supabaseSyncEngine.js';
+import { getSupabaseAnonKey, getSupabaseUrl } from './supabaseConfig';
 
 export type SupabaseSyncState = 'idle' | 'syncing' | 'ok' | 'error';
 
@@ -173,11 +174,11 @@ export class SupabaseSyncService extends EventEmitter {
     // ---------------------------------------------------------------------------
 
     private getUrl(): string | undefined {
-        return process.env.SUPABASE_URL || undefined;
+        return getSupabaseUrl();
     }
 
     private getAnonKey(): string | undefined {
-        return process.env.SUPABASE_ANON_KEY || undefined;
+        return getSupabaseAnonKey();
     }
 
     private ensureClient(): SupabaseClient {
@@ -186,7 +187,8 @@ export class SupabaseSyncService extends EventEmitter {
         const key = this.getAnonKey();
         if (!url || !key) {
             throw new Error(
-                'Supabase is not configured. Set SUPABASE_URL and SUPABASE_ANON_KEY in .env.',
+                'Supabase is not configured. Set SUPABASE_URL and SUPABASE_ANON_KEY ' +
+                    '(in .env for dev builds, or on the build machine for packaged builds).',
             );
         }
         this.client = createClient(url, key, {

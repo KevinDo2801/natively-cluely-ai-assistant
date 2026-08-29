@@ -109,6 +109,13 @@ jobs:
           APPLE_API_ISSUER: ${{ secrets.APPLE_API_ISSUER }}
           # GH token for electron-builder publish (artifacts attach to the release on tag builds).
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          # Public-by-design Supabase config, baked into the main bundle at build
+          # time by scripts/build-electron.js. Without these the packaged app
+          # ships with cloud sync disabled. Store as repo Variables (they are
+          # NOT secret — the anon key is publishable and RLS protects the data);
+          # if you keep them under Secrets instead, swap `vars.` for `secrets.`.
+          SUPABASE_URL: ${{ vars.SUPABASE_URL }}
+          SUPABASE_ANON_KEY: ${{ vars.SUPABASE_ANON_KEY }}
         # Explicit stages (NOT `npm run dist:signed`): the dist:signed chain re-runs
         # `npm run build` (rimraf dist dist-electron) which can race electron-builder's
         # native rebuild and ENOENT on dist-electron at package time. Building the stages

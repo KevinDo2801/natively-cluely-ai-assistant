@@ -1,0 +1,115 @@
+name: Release (Windows unsigned)
+
+# Builds the Windows release (NSIS installer + portable exe, x64) on tag push
+# and on demand, then publishes the artifacts to the GitHub Release (so the
+# built-in auto-updater's latest.yml resolves) and uploads them as Actions
+# artifacts as a fallback.
+#
+# UNSIGNED BY DESIGN (this workflow needs NO secrets):
+#   - The Windows build ships without a code-signing certificate, so Windows
+#     SmartScreen shows "Windows protected your PC" on install. That is
+#     expected and documented in .github/RELEASE_TEMPLATE.md ("More info →
+#     Run anyway"). If you later add a code-signing cert, electron-builder
+#     picks it up automatically from CSC_LINK / CSC_KEY_PASSWORD (set them as
+#     repository secrets and add them to the Package step's env).
+#   - No Apple Developer secrets — signing/notarization is macOS-only.
+#
+# OPTIONAL VARIABLES (Settings → Secrets and variables → Actions → Variables):
+#   SUPABASE_URL       project endpoint, e.g. https://xxxx.supabase.co
+#   SUPABASE_ANON_KEY  publishable anon key (public by design; RLS protects
+#                      the data). Baked into the main bundle at build time by
+#                      scripts/build-electron.js; without them the packaged
+#                      app ships with cloud sync disabled.
+#
+# PUBLISH BEHAVIOR:
+#   `--publish onTagOrDraft` (via scripts/package-app.js, the cross-platform
+#   electron-builder wrapper) attaches latest.yml + installers to the GitHub
+#   Release for the pushed tag on tag builds, and skips publishing on manual
+#   dispatch (artifacts still land in the Actions tab). GH_TOKEN is automatic.
+
+on:
+  push:
+    tags:
+      - 'v*'
+  workflow_dispatch: {} # manual trigger uses the branch/tag selected in the Actions UI
+
+permissions:
+  contents: write # needed to create/update the GitHub Release + upload assets
+
+jobs:
+  build-windows:
+    runs-on: windows-latest
+    timeout-minutes: 90
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: 'npm'
+
+      # The Rust native module (native-module/, WASAPI capture + stealth
+      # keyboard hook) is compiled with `npx napi build` — needs cargo + the
+      # MSVC target (MSVC toolchain is preinstalled on windows-latest).
+      - name: Setup Rust (native module)
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: x86_64-pc-windows-msvc
+
+      - name: Install dependencies
+        run: npm ci
+
+      # Explicit stages (NOT `npm run app:build`): the app:build chain carries
+      # macOS-only steps (NATIVELY_BUILD_ALL_MAC_ARCHES, ensure-sharp-mac-deps)
+      # and `npm run build` (rimraf dist dist-electron) must land before
+      # build:electron so the esbuild output isn't wiped.
+      - name: Build renderer (+ TS7 renderer typecheck)
+        run: npm run build
+
+      - name: Typecheck Electron main process (TypeScript 7)
+        run: npm run typecheck:electron
+
+      - name: Build Electron main process
+        run: npm run build:electron
+
+      - name: Build native module (Rust, win32-x64)
+        run: npm run build:native
+
+      - name: Ensure sqlite-vec platform packages + verify packaged local assets
+        run: |
+          node scripts/ensure-sqlite-vec.js
+          npm run verify:packaged-local-assets
+
+      - name: Package (NSIS + portable, unsigned)
+        env:
+          # Public-by-design Supabase config baked into the main bundle at
+          # build time (scripts/build-electron.js). Store as repo Variables;
+          # if you keep them under Secrets instead, swap `vars.` for `secrets.`.
+          SUPABASE_URL: ${{ vars.SUPABASE_URL }}
+          SUPABASE_ANON_KEY: ${{ vars.SUPABASE_ANON_KEY }}
+          # Auto-attach latest.yml + installers to the GitHub Release on tag
+          # builds (electron-builder GitHub provider, releaseType: release).
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        # scripts/package-app.js is the Windows-safe electron-builder entry
+        # (the .bin/electron-builder shim is POSIX-only) and restores native
+        # addons to the Electron ABI afterwards.
+        run: node scripts/package-app.js --win --publish onTagOrDraft
+
+      - name: Verify artifacts
+        shell: pwsh
+        run: |
+          $exes = Get-ChildItem release -File -Filter *.exe -ErrorAction SilentlyContinue
+          if (-not $exes) { Write-Error "No .exe installer produced in release/"; exit 1 }
+          if (-not (Test-Path release/latest.yml)) { Write-Error "latest.yml missing — auto-update would not resolve"; exit 1 }
+          Get-ChildItem release -File | Select-Object Name, @{n='MB';e={[math]::Round($_.Length/1MB,1)}}
+
+      - name: Upload artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: natively-windows-unsigned
+          path: |
+            release/*.exe
+            release/latest.yml
+          if-no-files-found: error

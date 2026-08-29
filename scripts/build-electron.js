@@ -14,6 +14,26 @@ const { build, context } = require('esbuild');
 const WATCH = process.argv.includes('--watch');
 const path = require('path');
 const fs = require('fs');
+const dotenv = require('dotenv');
+
+// ── SUPABASE CONFIG BAKE ─────────────────────────────────────────────────────
+// Packaged builds have no shell env and main.ts only loads `.env` in dev, so
+// SupabaseAuthService/SupabaseSyncService would read an unset
+// process.env.SUPABASE_URL and cloud sync would silently stay disabled in
+// production. Bake the (public-by-design) URL + anon key into the bundle as
+// `__NATIVELY_SUPABASE_*__`; electron/services/supabaseConfig.ts prefers a live
+// process.env override (dev) and falls back to these baked values (packaged).
+// The service_role key must NEVER be baked — it bypasses RLS.
+const parsedEnv = (dotenv.config({ quiet: true }).parsed) || {};
+const bakedSupabaseUrl = process.env.SUPABASE_URL || parsedEnv.SUPABASE_URL || '';
+const bakedSupabaseAnonKey = process.env.SUPABASE_ANON_KEY || parsedEnv.SUPABASE_ANON_KEY || '';
+if (!bakedSupabaseUrl || !bakedSupabaseAnonKey) {
+  console.warn(
+    '[build-electron] SUPABASE_URL/SUPABASE_ANON_KEY not found in env or .env — ' +
+      'packaged builds will ship WITHOUT Supabase cloud sync. ' +
+      '(The anon key is public by design; see .env.example.)'
+  );
+}
 
 const rootDir = path.resolve(__dirname, '..');
 const outDir = path.resolve(rootDir, 'dist-electron');
@@ -89,6 +109,13 @@ const buildOptions = {
   ],
   sourcemap: true,
   jsx: 'automatic',
+  // Baked supabase config for packaged builds (see the SUPABASE CONFIG BAKE
+  // comment at the top of this file). Always defined (possibly as ''), so the
+  // `typeof` guard in supabaseConfig.ts sees a string literal in every bundle.
+  define: {
+    __NATIVELY_SUPABASE_URL__: JSON.stringify(bakedSupabaseUrl),
+    __NATIVELY_SUPABASE_ANON_KEY__: JSON.stringify(bakedSupabaseAnonKey),
+  },
   loader: {
     '.ts': 'ts',
     '.js': 'js',
