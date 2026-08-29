@@ -8,7 +8,11 @@
  *     `sync_dirty` seq) and pushed to Supabase by the dirty-poll loop within
  *     ~DIRTY_POLL_MS (write-through). The local SQLite rows are a cache mirror
  *     that reads stay fast on; a periodic full reconcile every PULL_INTERVAL_MS
- *     brings down changes made on other devices.
+ *     brings down changes made on other devices. When Realtime is enabled, a
+ *     postgres_changes subscription also reconciles a table within
+ *     ~REALTIME_DEBOUNCE_MS of another device changing it, and the periodic
+ *     reconcile remains as the safety net for events missed while the socket
+ *     was down.
  *   - There is no offline mode: when the cloud is unreachable, pushes keep
  *     retrying (the dirty flags survive restarts, and the local mirror keeps
  *     the app usable), and the UI shows the last error. The cloud wins on the
@@ -31,13 +35,19 @@
  */
 
 import { EventEmitter } from 'events';
-import { createClient, type SupabaseClient } from '@supabase/supabase-js';
+import {
+    createClient,
+    type SupabaseClient,
+    type RealtimeChannel,
+    type RealtimePostgresChangesPayload,
+} from '@supabase/supabase-js';
 import {
     syncAll,
     readDirtyTables,
     clearDirtyTableUpTo,
     clearAllDirty,
     wipeSyncedTables,
+    TABLE_DEFS,
     type SyncSummary,
 } from './supabaseSyncEngine.js';
 
@@ -71,6 +81,21 @@ const CUTOVER_APP_STATE_KEY = 'supabase_cloud_first_cutover_done';
  * reported as an error (retried on the next cycle) instead of spinning.
  */
 const SYNC_MAX_DURATION_MS = Number(process.env.SUPABASE_SYNC_MAX_MS) || 60_000;
+
+/**
+ * Realtime change-stream (fast cross-device path). When enabled, the app
+ * subscribes to Supabase postgres_changes and reconciles a table as soon as
+ * another device changes it — no waiting for the 60s full reconcile. The full
+ * reconcile stays as the safety net (Realtime does not replay events missed
+ * while the socket is down). Default ON; set SUPABASE_REALTIME_ENABLED=0 to
+ * fall back to polling only (graceful — a dead socket is never fatal).
+ */
+const REALTIME_ENABLED = (process.env.SUPABASE_REALTIME_ENABLED ?? '1').trim() !== '0';
+/** Coalesce a burst of realtime events on one table into a single targeted sync. */
+const REALTIME_DEBOUNCE_MS = Number(process.env.SUPABASE_REALTIME_DEBOUNCE_MS) || 2_500;
+
+/** Table names mirrored to Supabase (the set the realtime stream filters on). */
+const SYNC_TABLE_NAMES = new Set<string>(TABLE_DEFS.map((d) => d.table));
 
 /**
  * Upper bound for auth-host network calls (session restore/refresh). Supabase's
@@ -109,6 +134,12 @@ export class SupabaseSyncService extends EventEmitter {
     private running = false;
     private status: SupabaseSyncStatus = { state: 'idle' };
 
+    // Realtime change-stream state.
+    private realtimeChannel: RealtimeChannel | null = null;
+    private realtimeToken: string | null = null;
+    private realtimeHadSubscribed = false;
+    private realtimePending = new Map<string, NodeJS.Timeout>();
+
     private constructor() {
         super();
     }
@@ -130,6 +161,7 @@ export class SupabaseSyncService extends EventEmitter {
             clearInterval(this.dirtyTimer);
             this.dirtyTimer = null;
         }
+        this.teardownRealtime();
         this.client = null;
         this.started = false;
         this.running = false;
@@ -166,6 +198,96 @@ export class SupabaseSyncService extends EventEmitter {
             },
         });
         return this.client;
+    }
+
+    // ---------------------------------------------------------------------------
+    // Realtime change-stream (targeted pull on other-device writes)
+    // ---------------------------------------------------------------------------
+
+    /**
+     * Subscribe (or re-subscribe after a token change) to Supabase
+     * postgres_changes for the synced tables. Fire-and-forget: the socket
+     * connects in the background, and the 60s reconcile stays as the safety net
+     * if it never comes up. Idempotent for the same access token.
+     */
+    private ensureRealtime(client: SupabaseClient, accessToken: string): void {
+        if (!REALTIME_ENABLED) return;
+        if (this.realtimeChannel && this.realtimeToken === accessToken) return; // already up
+
+        this.teardownRealtime();
+        this.realtimeToken = accessToken;
+        this.realtimeHadSubscribed = false;
+
+        try {
+            // Pin the signed-in JWT so RLS filters the event stream to this user.
+            // (supabase-js keeps the callback as the source of truth on heartbeat,
+            // so this only bootstraps the first join — see realtime-js setAuth.)
+            void client.realtime.setAuth(accessToken);
+
+            const channel = client
+                .channel('natively-sync')
+                .on(
+                    'postgres_changes',
+                    { event: '*', schema: 'public' },
+                    (payload: RealtimePostgresChangesPayload<Record<string, unknown>>) => {
+                        const table = payload.table;
+                        if (table && SYNC_TABLE_NAMES.has(table)) {
+                            this.handleRealtimeEvent(table);
+                        }
+                    },
+                )
+                .subscribe((status) => {
+                    if (status === 'SUBSCRIBED') {
+                        if (this.realtimeHadSubscribed) {
+                            // Reconnected after a drop: Realtime does not replay
+                            // missed events, so reconcile now to catch up.
+                            console.log('[SupabaseSyncService] realtime reconnected — reconciling to catch up');
+                            void this.syncNow();
+                        } else {
+                            this.realtimeHadSubscribed = true;
+                            console.log('[SupabaseSyncService] realtime subscribed');
+                        }
+                    } else if (status === 'CHANNEL_ERROR' || status === 'TIMED_OUT') {
+                        console.warn('[SupabaseSyncService] realtime channel', status);
+                    }
+                });
+
+            this.realtimeChannel = channel;
+        } catch (e) {
+            console.warn(
+                '[SupabaseSyncService] realtime setup failed (polling still runs):',
+                (e as Error)?.message || e,
+            );
+            this.teardownRealtime();
+        }
+    }
+
+    private teardownRealtime(): void {
+        if (this.realtimeChannel && this.client) {
+            try {
+                void this.client.removeChannel(this.realtimeChannel);
+            } catch {
+                /* ignore */
+            }
+        }
+        this.realtimeChannel = null;
+        this.realtimeToken = null;
+        this.realtimeHadSubscribed = false;
+        for (const timer of this.realtimePending.values()) clearTimeout(timer);
+        this.realtimePending.clear();
+    }
+
+    /** Coalesce a burst of events for one table into a single targeted sync. */
+    private handleRealtimeEvent(table: string): void {
+        const existing = this.realtimePending.get(table);
+        if (existing) clearTimeout(existing);
+        this.realtimePending.set(
+            table,
+            setTimeout(() => {
+                this.realtimePending.delete(table);
+                void this.runSync({ silent: true, tables: [table] });
+            }, REALTIME_DEBOUNCE_MS),
+        );
     }
 
     // ---------------------------------------------------------------------------
@@ -220,6 +342,7 @@ export class SupabaseSyncService extends EventEmitter {
             clearInterval(this.dirtyTimer);
             this.dirtyTimer = null;
         }
+        this.teardownRealtime();
     }
 
     // ---------------------------------------------------------------------------
@@ -294,10 +417,23 @@ export class SupabaseSyncService extends EventEmitter {
             }
 
             const client = this.ensureClient();
-            await client.auth.setSession({
-                access_token: session.access_token,
-                refresh_token: session.refresh_token,
-            });
+
+            // Only re-hydrate the sync client when its token actually changed.
+            // setSession re-fetches the user over /auth/v1 (which can hang up to
+            // the auth bound), so calling it on every write-through / realtime
+            // pass would multiply those calls for no benefit once the token is
+            // already current. The very first sync still hydrates it.
+            const { data: currentSession } = await client.auth.getSession();
+            if (currentSession.session?.access_token !== session.access_token) {
+                await client.auth.setSession({
+                    access_token: session.access_token,
+                    refresh_token: session.refresh_token,
+                });
+            }
+
+            // Keep the realtime change-stream aligned with the current session
+            // (no-op when the channel is already subscribed with this token).
+            this.ensureRealtime(client, session.access_token);
 
             const { DatabaseManager } = require('../db/DatabaseManager');
             const dm = DatabaseManager.getInstance();

@@ -33,8 +33,13 @@ plus the SQLite → Supabase sync tooling.
     grants to the `authenticated` role.
   - `0002_two_way_sync.sql` — `updated_at` on every table +
     `sync_tombstones` (deletion markers) for two-way sync.
+  - `0003_realtime.sql` — adds the 20 synced tables to the
+    `supabase_realtime` publication so the app can subscribe to
+    postgres_changes and pull changes immediately (RLS still filters the
+    stream per user). Requires the postgres role (Management API / SQL
+    editor); re-running is idempotent.
 - Apply/iterate with:
-  `node scripts/supabase/apply-sql.cjs supabase/migrations/0002_two_way_sync.sql`
+  `node scripts/supabase/apply-sql.cjs supabase/migrations/0003_realtime.sql`
   (idempotent — safe to re-run).
 - Multi-tenancy model: every row is stamped `user_id = auth.uid()`; RLS
   policies restrict each account to its own rows. The app reads/writes through
@@ -65,6 +70,14 @@ plus the SQLite → Supabase sync tooling.
     network from pinning the UI in "syncing" for minutes: past the deadline the
     remaining tables are skipped and the sync reports an error (retried next
     cycle). Auth-host calls are bounded at 15s separately (see below).
+  - **Realtime (fast cross-device path, default ON):** the app subscribes to
+    Supabase postgres_changes (migration `0003_realtime.sql`) and reconciles a
+    table within ~`SUPABASE_REALTIME_DEBOUNCE_MS` (2.5s) of another device
+    changing it, instead of waiting for the 60s reconcile. The 60s reconcile
+    stays as the safety net (Realtime does not replay events missed while the
+    socket is disconnected), and on reconnect the app reconciles immediately.
+    Set `SUPABASE_REALTIME_ENABLED=0` to fall back to polling only; a dead
+    socket degrades gracefully (never fatal).
   - **One-time cutover** on first sign-in after this architecture: a safety
     merge pushes everything local (including rows created while signed out),
     the local business tables are wiped with triggers suspended (the wipe
