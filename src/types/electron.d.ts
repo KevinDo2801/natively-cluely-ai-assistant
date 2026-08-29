@@ -475,6 +475,17 @@ export interface ElectronAPI {
   onCodexSignedOut: (callback: () => void) => () => void;
   onCodexTokensRefreshed: (callback: (info: { expiresAt: number }) => void) => () => void;
 
+  // Supabase auth (email + password) — Settings "Account" tab
+  authGetStatus: () => Promise<{ success: boolean; signedIn: boolean; email?: string; userId?: string; error?: string }>;
+  authSignUp: (email: string, password: string) => Promise<{ success: boolean; email?: string; needsEmailConfirmation?: boolean; error?: string }>;
+  authSignIn: (email: string, password: string) => Promise<{ success: boolean; email?: string; error?: string }>;
+  authSignOut: () => Promise<{ success: boolean; error?: string }>;
+  authResetPassword: (email: string) => Promise<{ success: boolean; email?: string; error?: string }>;
+  authChangePassword: (newPassword: string) => Promise<{ success: boolean; email?: string; error?: string }>;
+  onAuthChanged: (callback: (status: { signedIn: boolean; email?: string; userId?: string }) => void) => () => void;
+  onAuthRecovery: (callback: (info: { email?: string }) => void) => () => void;
+  onAuthDeepLinkError: (callback: (info: { message: string }) => void) => () => void;
+
   // Demo
   seedDemo: () => Promise<{ success: boolean }>;
 

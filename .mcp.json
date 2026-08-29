@@ -6,6 +6,17 @@
         "serve"
       ],
       "type": "stdio"
+    },
+    "supabase": {
+      "command": "npx",
+      "args": [
+        "-y",
+        "@supabase/mcp-server-supabase@latest"
+      ],
+      "env": {
+        "SUPABASE_ACCESS_TOKEN": "${SUPABASE_ACCESS_TOKEN}"
+      },
+      "type": "stdio"
     }
   }
 }

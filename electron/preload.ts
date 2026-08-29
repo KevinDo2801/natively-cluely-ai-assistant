@@ -570,6 +570,17 @@ interface ElectronAPI {
   codexSignOut: () => Promise<{ success: boolean; error?: string }>;
   codexRefreshTokens: () => Promise<{ success: boolean; email?: string; expiresAt?: number; error?: string }>;
 
+  // Supabase auth (email + password) — Settings "Account" tab
+  authGetStatus: () => Promise<{ success: boolean; signedIn: boolean; email?: string; userId?: string; error?: string }>;
+  authSignUp: (email: string, password: string) => Promise<{ success: boolean; email?: string; needsEmailConfirmation?: boolean; error?: string }>;
+  authSignIn: (email: string, password: string) => Promise<{ success: boolean; email?: string; error?: string }>;
+  authSignOut: () => Promise<{ success: boolean; error?: string }>;
+  authResetPassword: (email: string) => Promise<{ success: boolean; email?: string; error?: string }>;
+  authChangePassword: (newPassword: string) => Promise<{ success: boolean; email?: string; error?: string }>;
+  onAuthChanged: (callback: (status: { signedIn: boolean; email?: string; userId?: string }) => void) => () => void;
+  onAuthRecovery: (callback: (info: { email?: string }) => void) => () => void;
+  onAuthDeepLinkError: (callback: (info: { message: string }) => void) => () => void;
+
   // Demo
   seedDemo: () => Promise<{ success: boolean }>;
 
@@ -1928,6 +1939,29 @@ contextBridge.exposeInMainWorld('electronAPI', {
     const subscription = (_: any, info: any) => callback(info || {});
     ipcRenderer.on('codex:tokens:refreshed', subscription);
     return () => { ipcRenderer.removeListener('codex:tokens:refreshed', subscription); };
+  },
+
+  // Supabase auth (email + password) — Settings "Account" tab
+  authGetStatus: () => ipcRenderer.invoke('auth:get-status'),
+  authSignUp: (email: string, password: string) => ipcRenderer.invoke('auth:signup', email, password),
+  authSignIn: (email: string, password: string) => ipcRenderer.invoke('auth:signin', email, password),
+  authSignOut: () => ipcRenderer.invoke('auth:signout'),
+  authResetPassword: (email: string) => ipcRenderer.invoke('auth:reset-password', email),
+  authChangePassword: (newPassword: string) => ipcRenderer.invoke('auth:change-password', newPassword),
+  onAuthChanged: (callback: (status: { signedIn: boolean; email?: string; userId?: string }) => void) => {
+    const subscription = (_: any, status: any) => callback(status || { signedIn: false });
+    ipcRenderer.on('auth:changed', subscription);
+    return () => { ipcRenderer.removeListener('auth:changed', subscription); };
+  },
+  onAuthRecovery: (callback: (info: { email?: string }) => void) => {
+    const subscription = (_: any, info: any) => callback(info || {});
+    ipcRenderer.on('auth:recovery', subscription);
+    return () => { ipcRenderer.removeListener('auth:recovery', subscription); };
+  },
+  onAuthDeepLinkError: (callback: (info: { message: string }) => void) => {
+    const subscription = (_: any, info: any) => callback(info || { message: 'Unknown error' });
+    ipcRenderer.on('auth:deep-link-error', subscription);
+    return () => { ipcRenderer.removeListener('auth:deep-link-error', subscription); };
   },
 
   // Demo

@@ -8156,14 +8156,51 @@ if (!gotSingleInstanceLock) {
 
 ensureNativeModuleAbi();
 
+// ── Supabase auth deep link (natively://auth/callback) ──────────────────────
+// Supabase confirmation + password-recovery emails redirect to this protocol,
+// which the OS routes back to the running app. handleSupabaseDeepLink forwards
+// the URL to SupabaseAuthService, which restores the session and (for recovery
+// links) lets the renderer show the "set new password" form via IPC events.
+const SUPABASE_PROTOCOL = 'natively';
+
+function handleSupabaseDeepLink(url: string): void {
+  if (!url || typeof url !== 'string' || !url.startsWith(`${SUPABASE_PROTOCOL}://`)) return;
+  try {
+    const { SupabaseAuthService } = require('./services/SupabaseAuthService');
+    SupabaseAuthService.getInstance().handleDeepLink(url).catch((e: any) => {
+      console.warn('[Main] Supabase deep link failed:', e?.message || e);
+    });
+  } catch (e) {
+    console.warn('[Main] Supabase deep link handler unavailable:', e);
+  }
+}
+
+/** Pull the first natively:// URL out of a command-line argv array (Windows). */
+function extractDeepLinkFromArgv(argv: string[]): string | null {
+  for (const arg of argv || []) {
+    if (typeof arg === 'string' && arg.startsWith(`${SUPABASE_PROTOCOL}://`)) return arg;
+  }
+  return null;
+}
+
+// macOS: a natively:// URL delivered to the running instance fires 'open-url'.
+// Register early (before whenReady) so a cold launch via the link is not missed.
+app.on('open-url', (event: Electron.Event, url: string) => {
+  event.preventDefault();
+  handleSupabaseDeepLink(url);
+});
+
 async function initializeApp() {
   logStartupPhase('initializeApp:start');
 
   // When a duplicate launch is attempted (e.g. user invokes Spotlight again
   // while Natively is running), focus and recenter the existing window so the
-  // launch is visibly handled instead of silently absorbed.
-  app.on('second-instance', () => {
+  // launch is visibly handled instead of silently absorbed. On Windows a
+  // second-instance launch also carries the deep link (if any) in argv.
+  app.on('second-instance', (_event, argv) => {
     try {
+      const link = extractDeepLinkFromArgv(argv);
+      if (link) handleSupabaseDeepLink(link);
       const appState = AppState.getInstance();
       appState.centerAndShowWindow();
     } catch (err) {
@@ -8208,6 +8245,35 @@ async function initializeApp() {
   // 2. Wait for app to be ready
   logStartupPhase('before-app-whenReady');
   await app.whenReady()
+
+  // Register the natively:// protocol so Supabase confirmation/recovery links
+  // hand the session back to the app. In dev (`process.defaultApp`) we point
+  // the protocol at the electron binary + the main script; packaged builds use
+  // the app bundle directly. macOS also needs the CFBundleURLTypes entry from
+  // package.json `build.mac.protocols` to accept the link before first launch.
+  try {
+    if (process.defaultApp) {
+      // Dev mode: register the protocol to launch the ELECTRON BINARY with an
+      // ABSOLUTE app path. A relative path breaks — the dev loop launches with
+      // `electron .` (process.argv[1] === '.'), and when the OS opens a
+      // natively:// link it runs the handler with C:\WINDOWS\system32 as the
+      // working directory, so '.' resolves there and Electron reports
+      // "Unable to find Electron app at C:\WINDOWS\system32". app.getAppPath()
+      // is always absolute, so the handler launches the real app directory.
+      app.setAsDefaultProtocolClient(SUPABASE_PROTOCOL, process.execPath, [app.getAppPath()]);
+    } else {
+      app.setAsDefaultProtocolClient(SUPABASE_PROTOCOL);
+    }
+  } catch (e) {
+    console.warn('[Main] Failed to register natively:// protocol:', (e as Error)?.message);
+  }
+
+  // Windows/Linux: a cold launch via natively:// delivers the URL in argv.
+  // Captured here, but CONSUMED after initializeIpcHandlers() so the auth
+  // service's event subscriptions (auth:changed / auth:recovery) are already
+  // wired and the renderer receives the live status.
+  const startupLink = extractDeepLinkFromArgv(process.argv);
+
   nativeOomTrace.initialize()
   nativeOomTrace.record('app-ready', {
     pid: process.pid,
@@ -8350,6 +8416,10 @@ async function initializeApp() {
 
   // Initialize IPC handlers before window creation
   initializeIpcHandlers(appState)
+
+  // Consume a deep link delivered on a cold launch (Windows/Linux argv) now
+  // that the auth IPC subscriptions are wired.
+  if (startupLink) handleSupabaseDeepLink(startupLink);
 
   // Deterministic fault injection for the init-failure contract (F-110):
   // inert unless the env var is set. Sits inside initializeApp's unguarded

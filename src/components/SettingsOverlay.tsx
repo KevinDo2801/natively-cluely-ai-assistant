@@ -16,6 +16,7 @@ import { AIProvidersSettings } from './settings/AIProvidersSettings';
 import { PhoneMirrorSettings } from './settings/PhoneMirrorSettings';
 import { IntelligenceSettings } from './settings/IntelligenceSettings';
 import { SkillsSettings } from './settings/SkillsSettings';
+import { AccountSettings } from './settings/AccountSettings';
 import { LocalWhisperModelPanel, type ChannelConfig as LocalWhisperChannelConfig } from './LocalWhisperModelPanel';
 import { motion, AnimatePresence, useReducedMotion } from 'framer-motion';
 import { useShortcuts } from '../hooks/useShortcuts';
@@ -403,6 +404,7 @@ const ProviderSelect: React.FC<ProviderSelectProps> = ({ value, options, onChang
    direction rather than guessing. Keep in sync with the <nav> below. */
 const SETTINGS_NAV_ORDER = [
     'general',
+    'account',
     'ai-providers',
     'skills',
     'calendar',
@@ -1793,6 +1795,13 @@ const SettingsOverlay: React.FC<SettingsOverlayProps> = ({
                                         <Monitor size={16} /> {t('General')}
                                     </button>
                                     <button
+                                        onClick={() => setActiveTab('account')}
+                                        className={navItemClass(activeTab === 'account')}
+                                    >
+                                        {activeTab === 'account' && navActivePill}
+                                        <User size={16} /> {t('Account')}
+                                    </button>
+                                    <button
                                         onClick={() => setActiveTab('ai-providers')}
                                         className={navItemClass(activeTab === 'ai-providers')}
                                     >
@@ -1910,6 +1919,10 @@ const SettingsOverlay: React.FC<SettingsOverlayProps> = ({
                                     ? { duration: 0 }
                                     : { duration: 0.22, ease: [0.23, 1, 0.32, 1] }}
                             >
+                            {activeTab === 'account' && (
+                                <AccountSettings />
+                            )}
+
                             {activeTab === 'general' && (
                                 <div className="space-y-6 animated fadeIn">
                                     <div className="space-y-3.5">

@@ -192,7 +192,15 @@
         "NSScreenCaptureUsageDescription": "Natively needs Screen Recording permission to capture system audio for meeting transcription.",
         "NSMicrophoneUsageDescription": "Natively needs microphone access to transcribe your voice during meetings.",
         "NSAudioCaptureUsageDescription": "Natively needs system audio access to transcribe meeting audio."
-      }
+      },
+      "protocols": [
+        {
+          "name": "Natively",
+          "schemes": [
+            "natively"
+          ]
+        }
+      ]
     },
     "win": {
       "target": [
@@ -257,6 +265,7 @@
     "@electron/rebuild": "^4.0.3",
     "@napi-rs/cli": "^3.5.1",
     "@playwright/test": "^1.59.1",
+    "@supabase/supabase-js": "^2.112.4",
     "@types/better-sqlite3": "^7.6.13",
     "@types/color": "^4.2.0",
     "@types/diff": "^6.0.0",

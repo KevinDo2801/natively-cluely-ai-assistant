@@ -198,6 +198,21 @@ export interface StoredCredentials {
          */
         lastRefreshAt?: number;
     };
+    /**
+     * Supabase auth session (email + password identity — the Settings "Account"
+     * tab). Persisted (encrypted via safeStorage) so the user stays signed in
+     * across restarts. Written by SupabaseAuthService on sign-in / sign-up /
+     * token refresh / deep-link recovery; cleared on sign-out.
+     * Shape: { accessToken, refreshToken, expiresAt (ms), userId?, email? }.
+     */
+    supabaseSession?: {
+        accessToken: string;
+        refreshToken: string;
+        /** Epoch ms when the access token expires. */
+        expiresAt: number;
+        userId?: string;
+        email?: string;
+    };
 }
 
 export class CredentialsManager {
@@ -672,6 +687,26 @@ export class CredentialsManager {
         this.credentials.codexOAuthTokens = undefined;
         this.saveCredentials();
         console.log('[CredentialsManager] Codex OAuth tokens cleared');
+    }
+
+    public getSupabaseSession(): { accessToken: string; refreshToken: string; expiresAt: number; userId?: string; email?: string } | null {
+        const s = this.credentials.supabaseSession;
+        if (!s || typeof s.accessToken !== 'string' || typeof s.refreshToken !== 'string') return null;
+        return { ...s };
+    }
+
+    public setSupabaseSession(session: { accessToken: string; refreshToken: string; expiresAt: number; userId?: string; email?: string }): void {
+        if (this.refuseWriteWhileDegraded('set Supabase session')) return;
+        this.credentials.supabaseSession = { ...session };
+        this.saveCredentials();
+        console.log('[CredentialsManager] Supabase session updated');
+    }
+
+    public clearSupabaseSession(): void {
+        if (this.refuseWriteWhileDegraded('clear Supabase session')) return;
+        this.credentials.supabaseSession = undefined;
+        this.saveCredentials();
+        console.log('[CredentialsManager] Supabase session cleared');
     }
 
     public getLitellmApiKey(): string | undefined {

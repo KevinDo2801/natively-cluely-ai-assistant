@@ -9125,6 +9125,71 @@ export function initializeIpcHandlers(appState: AppState): void {
     }
   });
 
+  // ── Supabase auth (email + password) — Settings "Account" tab ────────────
+  const { SupabaseAuthService } = require('./services/SupabaseAuthService');
+  const supabaseAuth = SupabaseAuthService.getInstance();
+  supabaseAuth.init();
+  const broadcastSupabaseAuthEvent = (channel: string, payload: any) => {
+    try {
+      BrowserWindow.getAllWindows().forEach((win) => {
+        if (win.isDestroyed()) return;
+        win.webContents.send(channel, payload);
+      });
+    } catch { /* broadcast best-effort */ }
+  };
+  supabaseAuth.on('changed', (status: any) => broadcastSupabaseAuthEvent('auth:changed', status));
+  supabaseAuth.on('recovery', (info: any) => broadcastSupabaseAuthEvent('auth:recovery', info));
+  supabaseAuth.on('error', (info: any) => broadcastSupabaseAuthEvent('auth:deep-link-error', info));
+
+  safeHandle('auth:get-status', async () => {
+    try {
+      const status = await supabaseAuth.refreshStatus();
+      return { success: true, ...status };
+    } catch (error: any) {
+      return { success: false, error: error?.message || String(error) };
+    }
+  });
+
+  safeHandle('auth:signup', async (_event, email: string, password: string) => {
+    try {
+      return await supabaseAuth.signUp(String(email || '').trim(), String(password || ''));
+    } catch (error: any) {
+      return { success: false, error: error?.message || String(error) };
+    }
+  });
+
+  safeHandle('auth:signin', async (_event, email: string, password: string) => {
+    try {
+      return await supabaseAuth.signIn(String(email || '').trim(), String(password || ''));
+    } catch (error: any) {
+      return { success: false, error: error?.message || String(error) };
+    }
+  });
+
+  safeHandle('auth:signout', async () => {
+    try {
+      return await supabaseAuth.signOut();
+    } catch (error: any) {
+      return { success: false, error: error?.message || String(error) };
+    }
+  });
+
+  safeHandle('auth:reset-password', async (_event, email: string) => {
+    try {
+      return await supabaseAuth.resetPasswordForEmail(String(email || '').trim());
+    } catch (error: any) {
+      return { success: false, error: error?.message || String(error) };
+    }
+  });
+
+  safeHandle('auth:change-password', async (_event, newPassword: string) => {
+    try {
+      return await supabaseAuth.changePassword(String(newPassword || ''));
+    } catch (error: any) {
+      return { success: false, error: error?.message || String(error) };
+    }
+  });
+
   safeHandle('set-model', async (_, modelId: string) => {
     try {
       const llmHelper = appState.processingHelper.getLLMHelper();
