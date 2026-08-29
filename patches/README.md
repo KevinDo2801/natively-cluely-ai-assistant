@@ -1,8 +1,13 @@
 # Native-module preinstall patches
 
-These patches inject a `preinstall` script into `better-sqlite3` and `keytar`
-that runs `scripts/verify-native-arch.js` before either package's own `install`
-script (`prebuild-install || node-gyp rebuild`) executes.
+These patches inject a `preinstall` script into `better-sqlite3` that runs
+`scripts/verify-native-arch.js` before the package's own `install` script
+(`prebuild-install || node-gyp rebuild`) executes.
+
+> `keytar` used to be patched here too, but it was removed from the app in the
+> Phase 0 dependency cleanup — `patches/keytar+7.9.0.patch` was deleted because
+> patch-package fails a fresh `npm ci` when a patch targets a package that is
+> not in `node_modules`.
 
 ## Why
 
