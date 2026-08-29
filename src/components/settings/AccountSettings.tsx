@@ -3,6 +3,7 @@ import { useT } from '../../i18n';
 import {
     AlertCircle,
     Check,
+    Cloud,
     Eye,
     EyeOff,
     KeyRound,
@@ -10,6 +11,7 @@ import {
     LogIn,
     LogOut,
     Mail,
+    RefreshCw,
     UserRound,
 } from 'lucide-react';
 
@@ -20,6 +22,13 @@ interface Status {
     signedIn: boolean;
     email?: string;
     userId?: string;
+}
+
+interface SyncState {
+    state: 'idle' | 'syncing' | 'ok' | 'error';
+    lastSyncedAt?: number;
+    lastCounts?: { rows: number; upserted: number; failed: number };
+    lastError?: string;
 }
 
 interface Notice {
@@ -52,6 +61,10 @@ export const AccountSettings: React.FC = () => {
 
     const [busy, setBusy] = useState(false);
     const [notice, setNotice] = useState<Notice | null>(null);
+
+    // Cloud sync (local SQLite → Supabase) status, pushed by the main process.
+    const [sync, setSync] = useState<SyncState>({ state: 'idle' });
+    const [syncBusy, setSyncBusy] = useState(false);
 
     const applyStatus = useCallback((s: Status) => {
         setStatus(s);
@@ -90,12 +103,19 @@ export const AccountSettings: React.FC = () => {
             if (cancelled) return;
             setNotice({ tone: 'error', text: info?.message || t('The link was invalid or expired.') });
         });
+        const unsubSync = api?.onSyncStatus?.((s) => {
+            if (!cancelled && s) setSync(s);
+        });
+        api?.syncGetStatus?.()
+            .then((s) => { if (!cancelled && s) setSync(s); })
+            .catch(() => { /* status event will reconcile later */ });
 
         return () => {
             cancelled = true;
             unsubChanged?.();
             unsubRecovery?.();
             unsubError?.();
+            unsubSync?.();
         };
     }, [applyStatus, t]);
 
@@ -208,6 +228,32 @@ export const AccountSettings: React.FC = () => {
         setConfirm('');
         clearNotice();
     };
+
+    const requestSync = async () => {
+        if (syncBusy || sync.state === 'syncing') return;
+        setSyncBusy(true);
+        try {
+            const s = await window.electronAPI?.syncNow?.();
+            if (s) setSync(s);
+        } catch {
+            /* the sync:status event carries the error state */
+        } finally {
+            setSyncBusy(false);
+        }
+    };
+
+    const syncStatusLine = (() => {
+        if (sync.state === 'syncing') return t('Pushing your local data to the cloud…');
+        if (sync.state === 'error') {
+            return `${t('Sync failed')}: ${sync.lastError || t('unknown error')}`;
+        }
+        if (sync.state === 'ok' && sync.lastSyncedAt) {
+            const time = new Date(sync.lastSyncedAt).toLocaleTimeString();
+            const counts = sync.lastCounts ? ` — ${sync.lastCounts.rows} ${t('rows synced')}` : '';
+            return `${t('Last synced')} ${time}${counts}`;
+        }
+        return t('Not synced yet — your local data is pushed to your account automatically.');
+    })();
 
     const noticeTone = (tone: Notice['tone']) =>
         tone === 'ok'
@@ -404,6 +450,28 @@ export const AccountSettings: React.FC = () => {
                                     className="ml-auto inline-flex items-center gap-1.5 px-3 py-1.5 rounded-md text-[11px] font-medium text-text-secondary hover:text-red-400 hover:bg-red-500/10 transition-colors disabled:opacity-50"
                                 >
                                     <LogOut size={13} /> {t('Sign out')}
+                                </button>
+                            </div>
+
+                            {/* Cloud sync — local SQLite is pushed to the signed-in account */}
+                            <div className="p-5">
+                                <h4 className="text-xs font-semibold text-text-primary mb-1.5 flex items-center gap-1.5">
+                                    <Cloud size={13} className="text-text-tertiary" /> {t('Cloud sync')}
+                                </h4>
+                                <p className={`text-[11px] mb-2.5 ${sync.state === 'error' ? 'text-red-400' : 'text-text-secondary'}`}>
+                                    {sync.state === 'syncing' && (
+                                        <Loader2 size={11} className="inline-block animate-spin mr-1 -mt-px" />
+                                    )}
+                                    {syncStatusLine}
+                                </p>
+                                <button
+                                    type="button"
+                                    onClick={requestSync}
+                                    disabled={syncBusy || sync.state === 'syncing'}
+                                    className={secondaryBtnClass}
+                                >
+                                    <RefreshCw size={13} className={syncBusy || sync.state === 'syncing' ? 'animate-spin' : ''} />
+                                    {syncBusy || sync.state === 'syncing' ? t('Syncing…') : t('Sync now')}
                                 </button>
                             </div>
 

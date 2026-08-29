@@ -1,6 +1,7 @@
 import { contextBridge, ipcRenderer } from 'electron';
 import type { SkillUploadPayload } from './services/skills/SkillValidator';
 import { PAGE_CAPTURE_FALLBACK_CHANNEL, PAGE_CAPTURE_STARTED_CHANNEL, type PageCaptureFallbackNotice } from './services/pageCaptureFallback';
+import type { SupabaseSyncStatus } from './services/SupabaseSyncService';
 
 /**
  * Metadata the companion extension sends with a captured page (drives the
@@ -580,6 +581,11 @@ interface ElectronAPI {
   onAuthChanged: (callback: (status: { signedIn: boolean; email?: string; userId?: string }) => void) => () => void;
   onAuthRecovery: (callback: (info: { email?: string }) => void) => () => void;
   onAuthDeepLinkError: (callback: (info: { message: string }) => void) => () => void;
+
+  // Supabase cloud sync — status + manual push
+  syncGetStatus: () => Promise<SupabaseSyncStatus>;
+  syncNow: () => Promise<SupabaseSyncStatus>;
+  onSyncStatus: (callback: (status: SupabaseSyncStatus) => void) => () => void;
 
   // Demo
   seedDemo: () => Promise<{ success: boolean }>;
@@ -1962,6 +1968,15 @@ contextBridge.exposeInMainWorld('electronAPI', {
     const subscription = (_: any, info: any) => callback(info || { message: 'Unknown error' });
     ipcRenderer.on('auth:deep-link-error', subscription);
     return () => { ipcRenderer.removeListener('auth:deep-link-error', subscription); };
+  },
+
+  // Supabase cloud sync — status + manual push
+  syncGetStatus: () => ipcRenderer.invoke('sync:get-status'),
+  syncNow: () => ipcRenderer.invoke('sync:now'),
+  onSyncStatus: (callback: (status: SupabaseSyncStatus) => void) => {
+    const subscription = (_: any, status: any) => callback(status || { state: 'idle' });
+    ipcRenderer.on('sync:status', subscription);
+    return () => { ipcRenderer.removeListener('sync:status', subscription); };
   },
 
   // Demo

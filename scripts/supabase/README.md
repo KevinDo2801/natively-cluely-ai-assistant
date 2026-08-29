@@ -1,7 +1,8 @@
-# Supabase connection scripts
+# Supabase: schema + cloud sync
 
 Reusable helpers so an agent (Claude Code, DSH, etc.) can connect to the
-Natively Supabase project **without being asked for keys/URLs each time**.
+Natively Supabase project **without being asked for keys/URLs each time**,
+plus the SQLite → Supabase sync tooling.
 
 ## Project
 
@@ -13,31 +14,50 @@ Natively Supabase project **without being asked for keys/URLs each time**.
 
 ## Credentials — stored in `.env` (git-ignored, never committed)
 
-The following are read from the environment. Add them to your root `.env`
-(already in `.gitignore`) — an example is in `.env.example`:
-
 | Variable | Purpose |
 |----------|---------|
 | `SUPABASE_URL` | Project URL, e.g. `https://dudtzrgxamgjojrxhzrw.supabase.co` |
-| `SUPABASE_PROJECT_REF` | The project ref (needed for Management API SQL) |
-| `SUPABASE_ANON_KEY` | anon/public key — read-only, safe to use broadly |
-| `SUPABASE_SERVICE_KEY` | service_role key — FULL admin, never expose to clients |
-| `SUPABASE_MCP_TOKEN` | Personal access token (`sbp_...`) for Management API queries |
-| `SUPABASE_ACCESS_TOKEN` | Same token; consumed by the MCP server in `.mcp.json` |
+| `SUPABASE_PROJECT_REF` | Project ref (needed for Management API SQL) |
+| `SUPABASE_ANON_KEY` | anon/public key — read by the APP (Account tab + cloud sync) |
+| `SUPABASE_SERVICE_KEY` | service_role key — sync CLI + agent tooling, FULL admin |
+| `SUPABASE_SECRET_KEY` | `sb_secret_...` key (new API-keys system) — optional fallback |
+| `SUPABASE_MCP_TOKEN` | Personal access token (`sbp_...`) for the Management API |
+| `SUPABASE_SYNC_USER_EMAIL` | optional — pick the sync target when the project has >1 auth user |
+| `NATIVELY_DB_PATH` | optional — override the local SQLite path for the sync CLI |
 
-## How an agent should use it
+## Database schema
 
-Ask the user for the **task** only; the connection info is available from
-`.env`. Load the secrets into the environment before running:
+- Migration file: [`supabase/migrations/0001_initial_schema.sql`](../../supabase/migrations/0001_initial_schema.sql)
+  (20 tables mirroring the local SQLite schema, pgvector, RLS on every table,
+  composite `(parent_id, user_id)` FKs, grants to the `authenticated` role).
+- Apply/iterate with:
+  `node scripts/supabase/apply-sql.cjs supabase/migrations/0001_initial_schema.sql`
+  (idempotent — safe to re-run).
+- Multi-tenancy model: every row is stamped `user_id = auth.uid()`; RLS
+  policies restrict each account to its own rows. The app writes through
+  PostgREST with the signed-in user's JWT (anon key), the sync CLI uses the
+  service_role key.
+- Embeddings are pgvector `vector` columns (unconstrained dims) with an
+  `embedding_dims` companion column; current local data is 768-dim
+  (gemini-embedding-2). No ANN index yet — pgvector can't index unconstrained
+  columns, so a future step can pin a dimension and add an HNSW index.
 
-```bash
-# Load .env then call helpers
-source <(grep -E '^SUPABASE_' .env | sed 's/^/export /')  # (POSIX shells)
-# Windows PowerShell:
-Get-Content .env | ForEach-Object { if ($_ -match '^SUPABASE_') { [Environment]::SetEnvironmentVariable(($_.Split('=')[0]), ($_.Split('=',2)[1])) } }
-```
+## Cloud sync (local SQLite → Supabase)
 
-### `client.mjs`
+- **In-app (automatic):** while signed in (Settings → Account), the main
+  process pushes the local database on sign-in and then every 5 minutes
+  (`electron/services/SupabaseSyncService.ts` + shared engine
+  `electron/services/supabaseSyncEngine.js`). The Account tab shows the sync
+  status and a "Sync now" button.
+- **CLI (one-shot):**
+  `npm run supabase:sync` (add `-- --dry-run`, `-- --user-email you@example.com`,
+  `-- --db-path <path>`, `-- --batch 500`). Runs under Electron's Node so the
+  repo's better-sqlite3 (Electron ABI) loads; the target auth user is
+  resolved from `auth.admin.listUsers()`.
+- Semantics: upsert-by-PK (idempotent, parent tables first), push-only —
+  local deletions are not propagated yet.
+
+## `client.mjs`
 
 Exports:
 - `createSupabaseClient({ service })` — a supabase-js client (anon by default).

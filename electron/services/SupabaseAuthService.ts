@@ -222,6 +222,31 @@ export class SupabaseAuthService extends EventEmitter {
   }
 
   /**
+   * Returns a session whose access token is valid for at least 60 more
+   * seconds, refreshing it (and re-persisting) when it has lapsed. Used by
+   * SupabaseSyncService before every cloud push so PostgREST never sees an
+   * expired JWT. Returns null when nobody is signed in or the refresh failed.
+   */
+  public async ensureFreshSession(): Promise<Session | null> {
+    try {
+      const client = this.ensureClient();
+      const { data } = await client.auth.getSession();
+      if (!data.session) return null;
+      if (data.session.expires_at && data.session.expires_at * 1000 < Date.now() + 60_000) {
+        const { data: refreshed, error } = await client.auth.refreshSession();
+        if (error || !refreshed.session) return null;
+        this.saveToStorage(refreshed.session);
+        this.cachedStatus = this.toStatus(refreshed.session);
+        this.emit('changed', this.cachedStatus);
+        return refreshed.session;
+      }
+      return data.session;
+    } catch {
+      return null;
+    }
+  }
+
+  /**
    * Refresh the cached status from the server. Used on the Account tab mount so
    * a restored-but-expired session is reconciled instead of shown as signed-in.
    */

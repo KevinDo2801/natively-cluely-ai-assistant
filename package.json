@@ -19,6 +19,7 @@
     "typecheck:ts7": "node node_modules/typescript7/lib/tsc.js -p tsconfig.json --noEmit",
     "typecheck:ts7:electron": "node node_modules/typescript7/lib/tsc.js -p electron/tsconfig.json --noEmit",
     "preview": "vite preview",
+    "supabase:sync": "electron scripts/supabase/sync-local-to-supabase.cjs",
     "postinstall": "patch-package && cross-env SHARP_IGNORE_GLOBAL_LIBVIPS=1 npm rebuild sharp && node scripts/rebuild-native-electron.js && node scripts/download-models.js && node scripts/ensure-sqlite-vec.js && node scripts/patch-electron-plist.js && node scripts/verify-native-arch.js",
     "rebuild:native": "node scripts/rebuild-native-electron.js && node scripts/verify-native-arch.js",
     "prepare": "husky",

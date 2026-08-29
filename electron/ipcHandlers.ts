@@ -9190,6 +9190,28 @@ export function initializeIpcHandlers(appState: AppState): void {
     }
   });
 
+  // ── Supabase cloud sync (local SQLite → Supabase) ─────────────────────────
+  const { SupabaseSyncService } = require('./services/SupabaseSyncService');
+  const supabaseSync = SupabaseSyncService.getInstance();
+  supabaseSync.on('status', (status: any) => broadcastSupabaseAuthEvent('sync:status', status));
+  // Keep the cloud copy alive exactly while a user is signed in. Sign-in fires
+  // 'changed' both live and when a persisted session is restored at launch.
+  supabaseAuth.on('changed', (status: any) => {
+    if (status?.signedIn) supabaseSync.start();
+    else supabaseSync.stop();
+  });
+  if (supabaseAuth.getStatus().signedIn) supabaseSync.start();
+
+  safeHandle('sync:get-status', async () => supabaseSync.getStatus());
+
+  safeHandle('sync:now', async () => {
+    try {
+      return await supabaseSync.syncNow();
+    } catch (error: any) {
+      return { state: 'error', lastError: error?.message || String(error) };
+    }
+  });
+
   safeHandle('set-model', async (_, modelId: string) => {
     try {
       const llmHelper = appState.processingHelper.getLLMHelper();
