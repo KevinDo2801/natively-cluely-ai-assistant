@@ -792,9 +792,13 @@ async function syncTable({ db, client, userId, def, direction = 'both', onProgre
  * @param {string[]} [opts.tables] only reconcile these tables (expanded with
  *   their FK ancestors, iterated in TABLE_DEFS order — used by the in-app
  *   write-through loop to push just the tables a local write dirtied)
- * @returns {Promise<{tables: Array, totalRows: number, totalPushed: number, totalPulled: number, totalDeleted: number, totalFailed: number}>}
+ * @param {number} [opts.deadline] epoch-ms cap for the WHOLE reconciliation.
+ *   When exceeded, the remaining tables are skipped (counted as table errors)
+ *   so a flaky edge cannot pin the UI in "syncing" for minutes. Each table is
+ *   still individually bounded by CLOUD_REQUEST_TIMEOUT_MS.
+ * @returns {Promise<{tables: Array, totalRows: number, totalPushed: number, totalPulled: number, totalDeleted: number, totalFailed: number, totalTableErrors: number}>}
  */
-async function syncAll({ db, client, userId, direction = 'both', onProgress, dryRun = false, batchSize = DEFAULT_BATCH_SIZE, tables = null }) {
+async function syncAll({ db, client, userId, direction = 'both', onProgress, dryRun = false, batchSize = DEFAULT_BATCH_SIZE, tables = null, deadline = null }) {
   if (!userId) throw new Error('syncAll: userId is required');
   let defs = TABLE_DEFS;
   if (Array.isArray(tables) && tables.length) {
@@ -809,7 +813,24 @@ async function syncAll({ db, client, userId, direction = 'both', onProgress, dry
   let totalFailed = 0;
   let totalTableErrors = 0;
 
-  for (const def of defs) {
+  const skipped = (table) => ({
+    table, rows: 0, cloudRows: 0, pushed: 0, pulled: 0, deletedLocal: 0, deletedCloud: 0,
+    tombstonesPushed: 0, tombstonesPulled: 0, failed: [], error: 'skipped: global sync deadline exceeded',
+  });
+
+  for (let i = 0; i < defs.length; i++) {
+    const def = defs[i];
+    if (deadline && Date.now() > deadline) {
+      // Stop reconciling: the remaining tables are marked as errors so the
+      // caller reports a failed sync (and retries on the next cycle) instead
+      // of leaving the loop running for minutes against a black-holed edge.
+      for (let j = i; j < defs.length; j++) {
+        resultTables.push(skipped(defs[j].table));
+        totalTableErrors++;
+        onProgress && onProgress({ table: defs[j].table, phase: 'error', error: 'skipped: global sync deadline exceeded' });
+      }
+      break;
+    }
     const result = await syncTable({ db, client, userId, def, direction, onProgress, dryRun, batchSize });
     resultTables.push(result);
     totalRows += result.rows;

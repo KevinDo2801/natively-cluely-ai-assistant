@@ -117,4 +117,6 @@ export function syncAll(opts: {
     batchSize?: number;
     /** Only reconcile these tables (FK ancestors are added automatically). */
     tables?: string[];
+    /** Epoch-ms cap for the whole reconciliation; remaining tables are skipped. */
+    deadline?: number;
 }): Promise<SyncSummary>;

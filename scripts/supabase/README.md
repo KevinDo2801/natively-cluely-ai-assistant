@@ -57,11 +57,14 @@ plus the SQLite → Supabase sync tooling.
   - **Pull:** a full reconcile runs every 60s (and on the "Sync now" button)
     so changes from other devices flow down. Env overrides:
     `SUPABASE_SYNC_PULL_MS`, `SUPABASE_SYNC_DIRTY_POLL_MS`,
+    `SUPABASE_SYNC_MAX_MS` (whole-sync cap, default 60s),
     `SUPABASE_SYNC_REQUEST_TIMEOUT_MS` (per-request PostgREST bound, default
     30s). Every cloud request is bounded — Supabase's edge has been observed
     to black-hole individual requests while answering others, and an un-bounded
-    read would freeze the sync loop forever. Auth-host calls are bounded at
-    15s separately (see below).
+    read would freeze the sync loop forever. The whole-sync cap stops a flaky
+    network from pinning the UI in "syncing" for minutes: past the deadline the
+    remaining tables are skipped and the sync reports an error (retried next
+    cycle). Auth-host calls are bounded at 15s separately (see below).
   - **One-time cutover** on first sign-in after this architecture: a safety
     merge pushes everything local (including rows created while signed out),
     the local business tables are wiped with triggers suspended (the wipe

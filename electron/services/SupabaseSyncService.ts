@@ -63,6 +63,16 @@ const DIRTY_POLL_MS = Number(process.env.SUPABASE_SYNC_DIRTY_POLL_MS) || 1_000;
 const CUTOVER_APP_STATE_KEY = 'supabase_cloud_first_cutover_done';
 
 /**
+ * Upper bound for ONE full reconciliation. Supabase's edge can black-hole
+ * requests (observed during outages); without a cap, a flaky network makes a
+ * full sync (20 tables, each request bounded to 30s) take many minutes — and
+ * the UI sits in "syncing" that whole time while write-through is blocked.
+ * With this cap, a slow sync is aborted after SYNC_MAX_DURATION_MS and
+ * reported as an error (retried on the next cycle) instead of spinning.
+ */
+const SYNC_MAX_DURATION_MS = Number(process.env.SUPABASE_SYNC_MAX_MS) || 60_000;
+
+/**
  * Upper bound for auth-host network calls (session restore/refresh). Supabase's
  * /auth/v1 host can hang indefinitely while /rest/v1 stays healthy; without a
  * bound, a hung setSession/refreshSession freezes the sync loop forever.
@@ -297,15 +307,16 @@ export class SupabaseSyncService extends EventEmitter {
             }
 
             let summary: SyncSummary;
+            const deadline = Date.now() + SYNC_MAX_DURATION_MS;
             if (opts.tables) {
                 // Write-through pass: only the dirtied tables (+ FK ancestors).
-                summary = await syncAll({ db, client, userId: session.user.id, tables: opts.tables });
+                summary = await syncAll({ db, client, userId: session.user.id, tables: opts.tables, deadline });
             } else {
                 // One-time cutover: make Supabase the truth, rebuild the local cache.
                 if (dm.getAppState(CUTOVER_APP_STATE_KEY) !== '1') {
                     await this.runCutover(db, client, dm, session.user.id);
                 }
-                summary = await syncAll({ db, client, userId: session.user.id });
+                summary = await syncAll({ db, client, userId: session.user.id, deadline });
             }
 
             if (summary.totalFailed > 0 || summary.totalTableErrors > 0) {
@@ -377,7 +388,12 @@ export class SupabaseSyncService extends EventEmitter {
         this.setStatus({ ...previous, state: 'syncing', phase: 'cutover' });
         console.log('[SupabaseSyncService] cloud-first cutover: merging local, then rebuilding the cache from Supabase…');
 
-        const safety = await syncAll({ db, client, userId, direction: 'both' });
+        // The cutover is a one-time bulk rebuild, so it gets a more generous
+        // deadline than a routine reconcile — but still bounded so a black-holed
+        // edge cannot leave it running forever. On failure it aborts cleanly and
+        // retries on the next sign-in (local data stays intact).
+        const cutoverDeadline = Date.now() + SYNC_MAX_DURATION_MS * 3;
+        const safety = await syncAll({ db, client, userId, direction: 'both', deadline: cutoverDeadline });
         if (safety.totalFailed > 0 || safety.totalTableErrors > 0) {
             throw new Error(
                 `cutover pre-sync failed: ${safety.totalFailed} row(s), ${safety.totalTableErrors} table(s) — local data left untouched`,
@@ -387,7 +403,7 @@ export class SupabaseSyncService extends EventEmitter {
         wipeSyncedTables(db);
         clearAllDirty(db);
 
-        const pull = await syncAll({ db, client, userId, direction: 'pull' });
+        const pull = await syncAll({ db, client, userId, direction: 'pull', deadline: cutoverDeadline });
         if (pull.totalFailed > 0 || pull.totalTableErrors > 0) {
             throw new Error(`cutover pull failed: ${pull.totalFailed} row(s), ${pull.totalTableErrors} table(s)`);
         }
