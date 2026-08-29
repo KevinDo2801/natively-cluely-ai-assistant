@@ -58,6 +58,10 @@ function shell(cmd) {
   }
 }
 
+function escapeRegExp(s) {
+  return s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+}
+
 console.log(`[release-gate] repoRoot=${repoRoot}`);
 
 // 1. version vs git tag
@@ -158,6 +162,13 @@ check('packaged app-update.yml has provider=github + releaseType=release', () =>
     path.join(repoRoot, 'release', 'mac', 'Natively.app', 'Contents', 'Resources', 'app-update.yml'),
     path.join(repoRoot, 'release', 'mac-arm64', 'Natively.app', 'Contents', 'Resources', 'app-update.yml'),
   ];
+  // Expected owner/repo come from package.json's publish config (the single
+  // source of truth), so retargeting releases (e.g. to a developer fork) can
+  // never silently desync this gate.
+  const pkg = readJson(path.join(repoRoot, 'package.json'));
+  const publish = Array.isArray(pkg?.build?.publish) ? pkg.build.publish[0] : pkg?.build?.publish;
+  const expectedOwner = publish?.owner;
+  const expectedRepo = publish?.repo;
   let found = false;
   for (const f of candidates) {
     if (!fs.existsSync(f)) continue;
@@ -166,11 +177,11 @@ check('packaged app-update.yml has provider=github + releaseType=release', () =>
     if (!/provider:\s*github/.test(text)) {
       throw new Error(`${f}: provider is not github:\n${text}`);
     }
-    if (!/owner:\s*Natively-AI-assistant/.test(text)) {
-      throw new Error(`${f}: owner is not Natively-AI-assistant:\n${text}`);
+    if (!expectedOwner || !new RegExp(`owner:\\s*${escapeRegExp(expectedOwner)}`).test(text)) {
+      throw new Error(`${f}: owner does not match package.json publish config (${expectedOwner ?? 'unset'}):\n${text}`);
     }
-    if (!/repo:\s*natively-cluely-ai-assistant/.test(text)) {
-      throw new Error(`${f}: repo is not natively-cluely-ai-assistant:\n${text}`);
+    if (!expectedRepo || !new RegExp(`repo:\\s*${escapeRegExp(expectedRepo)}`).test(text)) {
+      throw new Error(`${f}: repo does not match package.json publish config (${expectedRepo ?? 'unset'}):\n${text}`);
     }
     if (!/releaseType:\s*release/.test(text)) {
       throw new Error(`${f}: releaseType is not "release":\n${text}`);
