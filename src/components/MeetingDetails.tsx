@@ -1,4 +1,4 @@
-import React, { useState, useRef, useEffect, useId } from 'react';
+import React, { useState, useRef, useEffect } from 'react';
 import { useT } from '../i18n';
 import { useResolvedTheme } from '../hooks/useResolvedTheme';
 import { ArrowLeft, Search, Mail, Link, ChevronDown, Play, ArrowUp, Copy, Check, MoreHorizontal, Settings, ArrowRight, RefreshCw, Info, Eye, EyeOff, History, Pencil, X, ChevronRight, Mic } from 'lucide-react';
@@ -108,7 +108,6 @@ const DETAIL_PILLS: { kind: DetailKind; label: string }[] = [
 
 // iOS drawer easing (Vaul/Ionic) for the panel height reveal; content crossfade
 // uses a snappier out-curve.
-const DRAWER_EASE = [0.32, 0.72, 0, 1] as [number, number, number, number];
 const CROSSFADE_EASE = [0.23, 1, 0.32, 1] as [number, number, number, number];
 
 // Mount cascade: blocks settle in with a short blur-bridged stagger.
@@ -442,21 +441,12 @@ const CodeHero: React.FC<{ lang: string; code: string; technique?: string }> = (
  * - Leads with a one-line thesis (first sentence of the approach), then the code.
  * - Technique rides as a chip inside the code header; complexity as an always-visible
  *   chip beneath it — the fact people came for is never behind a click.
- * - Deep reasoning (full approach / dry run / follow-up) collapses into one pill row
- *   with a sliding highlight and a single continuous-height panel (blur-bridged
- *   crossfade when switching, iOS drawer curve for open/close).
+ * - Deep reasoning (full approach / dry run / follow-up) is rendered inline in full,
+ *   never collapsed behind a pill — so no explanation text is hidden.
  */
 const CodingAnswerBlock: React.FC<{ sections: CodingSection[]; firstView?: boolean }> = ({ sections, firstView = false }) => {
     const t = useT();
     const reduce = useReducedMotion();
-    const [activeDetail, setActiveDetail] = useState<DetailKind | null>(null);
-    const panelRef = useRef<HTMLDivElement>(null);
-    const pillsRef = useRef<HTMLDivElement>(null);
-    const [panelHeight, setPanelHeight] = useState(0);
-    // framer-motion resolves layoutId GLOBALLY. The usage tab renders one
-    // CodingAnswerBlock per Q&A, so a shared literal id would cross-animate the
-    // active-pill highlight between separate answers. Scope it per instance.
-    const pillLayoutId = useId();
     // Only play the mount cascade the first time this answer is seen this session.
     const animateMount = firstView && !reduce;
 
@@ -468,8 +458,6 @@ const CodingAnswerBlock: React.FC<{ sections: CodingSection[]; firstView?: boole
     const others    = tagged.filter(s => s.kind === 'other');
 
     const thesis = approach ? firstSentence(approach.body.trim()) : '';
-    // Only surface the full approach as a pill when it says more than the thesis.
-    const approachIsRicher = approach ? approach.body.trim().length > thesis.length + 24 : false;
 
     const parsedCode = code ? extractCodeBlock(code.body) : null;
     const techniqueChip = technique ? techniqueLabel(technique.body) : '';
@@ -477,52 +465,18 @@ const CodingAnswerBlock: React.FC<{ sections: CodingSection[]; firstView?: boole
     const complexitySection = tagged.find(s => s.kind === 'complexity');
     const complexityChip = complexitySection ? extractComplexity(complexitySection.body) : null;
 
-    // Build the ordered detail map. Approach (full) is optional; complexity stays a
-    // pill only when we couldn't distil a chip from it.
-    const detailMap = new Map<DetailKind, CodingSection>();
-    if (approach && approachIsRicher) detailMap.set('approach', approach);
-    const dryRun = tagged.find(s => s.kind === 'dry-run');
-    if (dryRun) detailMap.set('dry-run', dryRun);
-    if (complexitySection && !complexityChip) detailMap.set('complexity', complexitySection);
-    const followup = tagged.find(s => s.kind === 'followup');
-    if (followup) detailMap.set('followup', followup);
-
-    const availablePills = DETAIL_PILLS.filter(p => detailMap.has(p.kind));
-    const activeSection  = activeDetail != null ? detailMap.get(activeDetail) : undefined;
-
-    // Measure active content so the container height animates continuously (no
-    // collapse-to-zero flicker) even when switching directly between pills.
-    // Key on stable primitives — activeSection is a fresh object each render
-    // (detailMap is rebuilt from sections.map), so depending on it would tear
-    // down and rebuild the observer on every parent re-render.
-    const activeBody = activeSection?.body;
-    useEffect(() => {
-        if (activeBody == null) { setPanelHeight(0); return; }
-        const el = panelRef.current;
-        if (!el) return;
-        setPanelHeight(el.scrollHeight);
-        const ro = new ResizeObserver(() => setPanelHeight(el.scrollHeight));
-        ro.observe(el);
-        return () => ro.disconnect();
-    }, [activeDetail, activeBody]);
-
     const childVariant = reduce ? MOUNT_CHILD_REDUCED : MOUNT_CHILD;
 
-    // Arrow-key navigation across the pill strip (macOS segmented-control feel).
-    const onPillKeyDown = (e: React.KeyboardEvent<HTMLDivElement>) => {
-        const keys = ['ArrowLeft', 'ArrowRight', 'Home', 'End'];
-        if (!keys.includes(e.key)) return;
-        const btns = pillsRef.current ? Array.from(pillsRef.current.querySelectorAll<HTMLButtonElement>('[role="tab"]')) : [];
-        if (!btns.length) return;
-        e.preventDefault();
-        const currentIdx = btns.findIndex(b => b === document.activeElement);
-        let next = currentIdx < 0 ? 0 : currentIdx;
-        if (e.key === 'ArrowLeft')  next = (currentIdx - 1 + btns.length) % btns.length;
-        if (e.key === 'ArrowRight') next = (currentIdx + 1) % btns.length;
-        if (e.key === 'Home')       next = 0;
-        if (e.key === 'End')        next = btns.length - 1;
-        btns[next]?.focus();
-    };
+    // Render every known reasoning section inline in full so no explanation
+    // text (approach / technique / dry run / complexity / follow-up) is ever
+    // hidden behind a collapsed pill.
+    const expandedSections = tagged
+        .filter(s => s.kind !== 'code' && s.kind !== 'other')
+        .map(s => ({
+            key: `${s.kind}-${s.title}`,
+            label: DETAIL_PILLS.find(p => p.kind === s.kind)?.label ?? s.title,
+            body: s.body.trim(),
+        }));
 
     return (
         <motion.div
@@ -569,87 +523,15 @@ const CodingAnswerBlock: React.FC<{ sections: CodingSection[]; firstView?: boole
                 </motion.div>
             ))}
 
-            {/* Detail pill strip + continuous-height panel */}
-            {availablePills.length > 0 && (
-                <motion.div variants={childVariant} className="flex flex-col gap-2">
-                    <div className="flex items-center gap-2">
-                        <div className="h-px flex-1 bg-white/[0.06]" />
-                        {/* Segmented-control semantics: roving tabindex, arrow-key nav */}
-                        <div
-                            ref={pillsRef}
-                            role="tablist"
-                            aria-label={t("Answer detail")}
-                            className="flex items-center gap-0.5"
-                            onKeyDown={onPillKeyDown}
-                        >
-                            {availablePills.map((pill, i) => {
-                                const isActive = activeDetail === pill.kind;
-                                // Roving tabindex: the active pill (or the first, when none
-                                // active) is the single tab stop; arrows move between the rest.
-                                const isTabStop = isActive || (activeDetail == null && i === 0);
-                                return (
-                                    <button
-                                        key={pill.kind}
-                                        role="tab"
-                                        aria-selected={isActive}
-                                        aria-expanded={isActive}
-                                        tabIndex={isTabStop ? 0 : -1}
-                                        onClick={() => setActiveDetail(prev => prev === pill.kind ? null : pill.kind)}
-                                        className={[
-                                            'relative inline-flex items-center gap-1 px-2.5 py-1 rounded-full text-[12.5px] font-medium select-none cursor-pointer',
-                                            'transition-[color,background-color,transform] duration-150 ease-out active:scale-[0.97]',
-                                            'focus:outline-none focus-visible:ring-2 focus-visible:ring-white/25',
-                                            isActive ? 'text-text-primary' : 'text-white/35 hover:text-text-tertiary hover:bg-white/[0.04]',
-                                        ].join(' ')}
-                                    >
-                                        {isActive && (
-                                            <motion.span
-                                                layoutId={`codingActivePill-${pillLayoutId}`}
-                                                className="absolute inset-0 rounded-full bg-white/[0.08] ring-1 ring-inset ring-white/[0.06]"
-                                                transition={reduce ? { duration: 0 } : { type: 'spring', stiffness: 420, damping: 34 }}
-                                            />
-                                        )}
-                                        <span className="relative z-10">{pill.label}</span>
-                                    </button>
-                                );
-                            })}
-                        </div>
-                        <div className="h-px flex-1 bg-white/[0.06]" />
-                    </div>
-
-                    {/* One container; height retargets continuously, content crossfades w/ blur.
-                        Open 260ms / close 200ms — exits are quicker than entrances. */}
-                    <motion.div
-                        animate={{ height: activeSection ? panelHeight : 0 }}
-                        transition={reduce
-                            ? { duration: 0.12 }
-                            : { duration: activeSection ? 0.26 : 0.2, ease: DRAWER_EASE }}
-                        style={{ overflow: 'hidden' }}
-                    >
-                        <div ref={panelRef} className="pt-0.5">
-                            <AnimatePresence initial={false} mode="popLayout">
-                                {activeSection && (
-                                    <motion.div
-                                        key={activeDetail ?? 'none'}
-                                        initial={reduce ? { opacity: 0 } : { opacity: 0, y: 4, filter: 'blur(3px)' }}
-                                        animate={reduce ? { opacity: 1 } : { opacity: 1, y: 0, filter: 'blur(0px)' }}
-                                        exit={reduce ? { opacity: 0 } : { opacity: 0, y: -4, filter: 'blur(3px)' }}
-                                        // Content settles just after the box starts opening so it
-                                        // never flashes into a not-yet-open panel on switch.
-                                        transition={{ duration: 0.18, ease: CROSSFADE_EASE, delay: reduce ? 0 : 0.04 }}
-                                    >
-                                        <div className="rounded-xl px-4 py-3.5 bg-white/[0.025] border border-white/[0.05] ring-1 ring-inset ring-white/[0.02]">
-                                            <ReactMarkdown remarkPlugins={[remarkGfm]} components={mdComponents}>
-                                                {cleanMarkdown(activeSection.body.trim())}
-                                            </ReactMarkdown>
-                                        </div>
-                                    </motion.div>
-                                )}
-                            </AnimatePresence>
-                        </div>
-                    </motion.div>
+            {/* Full reasoning — every known section inline, never collapsed */}
+            {expandedSections.map(section => (
+                <motion.div key={section.key} variants={childVariant} className="flex flex-col gap-1.5">
+                    <p className="text-[10px] font-semibold uppercase tracking-widest text-white/20 select-none cursor-default">{section.label}</p>
+                    <ReactMarkdown remarkPlugins={[remarkGfm]} components={mdComponents}>
+                        {cleanMarkdown(section.body)}
+                    </ReactMarkdown>
                 </motion.div>
-            )}
+            ))}
         </motion.div>
     );
 };
