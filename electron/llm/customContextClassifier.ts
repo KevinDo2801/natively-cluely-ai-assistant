@@ -45,7 +45,7 @@ export interface ClassifiedCustomContext {
 // signal. Kept deliberately small so long notes fall through to searchable.
 const PINNED_MAX_CHARS = 160;
 const PINNED_DIRECTIVE_RE =
-  /^(always|never|please|use|prefer|avoid|keep|be |speak|respond|answer|don'?t|do not|make sure|remember|note:|tone:|style:|i am |i'?m |my role|my name is|call me)\b/i;
+  /^(always|never|please|use|prefer|avoid|keep|be |speak|respond|answer|don'?t|do not|make sure|remember|note:|tone:|style:|i am |i'?m |my role|my name is|call me|luôn|hãy|phải)\b/i;
 
 // Sensitive = compensation / confidential commercial data / private strategy.
 // Matched per-chunk so only the sensitive lines are gated, not the whole blob.
@@ -82,9 +82,9 @@ const isLikelyDirective = (chunk: string): boolean =>
 // classified sensitive BEFORE this ever runs, so a salary "directive" can
 // never ride this lane.
 const FORMAT_DIRECTIVE_MAX_CHARS = 200;
-const DIRECTIVE_DEONTIC_RE = /\b(should|must|always|never|only|regardless|please)\b/i;
+const DIRECTIVE_DEONTIC_RE = /\b(should|must|always|never|only|regardless|please|luôn|hãy|phải)\b/i;
 const DIRECTIVE_IMPERATIVE_OPEN_RE = /^(answer|respond|reply|use|write|code|solve|keep|prefer|avoid|give|explain|speak|output|format)\b/i;
-const DIRECTIVE_OUTPUT_SUBJECT_RE = /\b(code|coding|answers?|responses?|repl(?:y|ies)|outputs?|solutions?|explanations?|questions?|words?|sentences?|bullet(?:\s+points?)?|language|format|style|spanish|english|french|german|hindi|malayalam)\b/i;
+const DIRECTIVE_OUTPUT_SUBJECT_RE = /\b(code|coding|answers?|responses?|repl(?:y|ies)|outputs?|solutions?|explanations?|questions?|words?|sentences?|bullet(?:\s+points?)?|language|format|style|spanish|english|french|german|hindi|malayalam|vietnamese|tiếng việt|tiếng anh|tiếng nhật|tiếng hàn|tiếng trung)\b/i;
 
 /** True when the chunk is an output-format directive (see block comment). */
 // A chunk that TELLS the assistant to inject content ("Always mention that I

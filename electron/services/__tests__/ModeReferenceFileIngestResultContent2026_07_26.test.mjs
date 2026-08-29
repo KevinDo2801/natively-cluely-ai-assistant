@@ -61,9 +61,18 @@ describe('ModeReferenceFileIngestResult includes content (the actual bug)', () =
   });
 
   test('the returned object literal actually includes `content: extracted.content`', () => {
-    const returnStart = ingestionSrc.lastIndexOf('return {');
-    const returnEnd = ingestionSrc.indexOf('};', returnStart);
-    const returnBody = ingestionSrc.slice(returnStart, returnEnd);
+    // Pin to ingestModeReferenceFile's OWN return block. The original used
+    // `lastIndexOf('return {')`, which drifted to the LATER
+    // ingestModeReferenceFileContent function (paste-text path) once that was
+    // added — its return legitimately uses `file.content`, so the pinned
+    // assertion failed with the fix correctly in place.
+    const fnStart = ingestionSrc.indexOf('export const ingestModeReferenceFile = async (');
+    assert.ok(fnStart >= 0, 'ingestModeReferenceFile not found in source');
+    const fnTail = ingestionSrc.slice(fnStart);
+    const returnStart = fnTail.indexOf('return {');
+    assert.ok(returnStart >= 0, 'ingestModeReferenceFile return block not found');
+    const returnEnd = fnTail.indexOf('};', returnStart);
+    const returnBody = fnTail.slice(returnStart, returnEnd);
     assert.match(returnBody, /content:\s*extracted\.content/, 'the actual returned value must carry the real extracted content, not be omitted');
   });
 });

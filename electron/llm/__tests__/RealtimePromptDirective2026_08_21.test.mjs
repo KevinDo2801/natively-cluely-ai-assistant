@@ -106,6 +106,8 @@ describe('RC-2: isFormatDirective predicate', () => {
     [true, 'Keep answers under 40 words.'],
     [true, 'Respond in Spanish.'],
     [true, 'Never use bullet points in answers.'],
+    [true, 'always answer in Vietnamese, even if the person asks in English'],
+    [true, 'luôn trả lời bằng tiếng việt, dù người hỏi bằng tiếng anh'],
     [false, 'I used Java at my last job for backend services.'],
     [false, 'My main project is Natively, a meeting copilot with 16,000 users.'],
     [false, 'The interviewer is from the analytics team and cares about SQL.'],

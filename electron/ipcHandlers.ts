@@ -47,7 +47,7 @@ import { isIntelligenceFlagEnabled, getSourceOwnerEnforcementStage } from './int
 import { recordAttribution, hindsightModeFor, type AttributionInput } from './intelligence/IntelligenceAttribution';
 import { routeContext, isBackwardLookingQuery } from './intelligence/ContextRouter';
 import { SearchOrchestrator, type SearchCandidate } from './intelligence/SearchOrchestrator';
-import { CHAT_MODE_PROMPT } from './llm/prompts';
+import { CHAT_MODE_PROMPT, HARD_SYSTEM_PROMPT } from './llm/prompts';
 
 // Prompt System v2 (flag promptSystemV2): the manual-chat base prompt. When
 // the flag is ON this is the composed core+mode+answer prompt (which LLMHelper
@@ -81,6 +81,61 @@ function resolveManualChatBasePrompt(
     if (v2) return v2;
   } catch { /* legacy fallback */ }
   return CHAT_MODE_PROMPT;
+}
+
+/**
+ * Caller-owned prompt contract + mode instructions (2026-09): when a caller
+ * composes the FULL context (`skipSystemPrompt + context` — overlay chat with
+ * a live transcript, quick actions), the v2 base and the mode template stay
+ * out by design. But the active mode's user-authored "Real-time prompt"
+ * (customContext) must STILL ride the SYSTEM channel, at the highest priority
+ * after the safety core: the caller's context is USER-channel content, and the
+ * instruction boundary demotes instructions found there — which is exactly why
+ * a mode instruction like "always answer in Vietnamese" was silently ignored
+ * on the chat overlay and answers came back in English.
+ *
+ * Returns '' when the mode has no pinned instructions — preserving the
+ * pre-fix caller-owned prompt byte-for-byte (streamChat falls back to
+ * HARD_SYSTEM_PROMPT, the same core this helper appends to).
+ */
+function buildCallerOwnedModeInstructionsSystemPrompt(
+  answerType: AnswerType | undefined,
+  manualActiveMode: any,
+): string {
+  try {
+    const { ModesManager } = require('./services/ModesManager');
+    const _mm = ModesManager.getInstance();
+    const activeMode = manualActiveMode ?? _mm.getActiveModeInfo?.() ?? null;
+    const pinned = _mm.getActiveModePinnedInstructions?.(
+      answerType,
+      activeMode?.id ?? undefined,
+    );
+    if (!pinned) {
+      console.log('[ManualChat] caller-owned mode instructions: NONE injected', {
+        modeId: activeMode?.id ?? null,
+        modeName: activeMode?.name ?? null,
+        answerType,
+        reason: pinned === null || pinned === undefined ? 'accessor_unavailable' : 'no_real_time_prompt_or_scoped_out',
+      });
+      return '';
+    }
+    console.log('[ManualChat] caller-owned mode instructions INJECTED', {
+      modeId: activeMode?.id ?? null,
+      modeName: activeMode?.name ?? null,
+      pinnedLength: pinned.length,
+      answerType,
+    });
+    const { appendCustomModeSystemPromptLayer } = require('./llm/documentGroundedPrompt');
+    return appendCustomModeSystemPromptLayer({
+      baseSystemPrompt: HARD_SYSTEM_PROMPT,
+      // The caller owns the persona (its composed context) — never stack the
+      // mode template on top of it; only the user-authored instructions ride.
+      modePromptSuffix: undefined,
+      pinnedInstructions: pinned,
+      isActiveCustomMode:
+        activeMode?.isCustom === true || _mm.isCustomMode?.(activeMode),
+    });
+  } catch { return ''; }
 }
 import { isAssistantIdentityQuestion, profileFactsReady } from './llm/manualProfileIntelligence';
 import { buildManualProfileEvidenceRoute } from './llm/profileAnswerBackend';
@@ -1283,6 +1338,32 @@ export function initializeIpcHandlers(appState: AppState): void {
                   action: 'answer',
                   tier: v2TierForPromptTier(llmHelper?.getPromptTier?.()),
                   activeMode: modeInfo,
+                  // Real-time prompt always runs (2026-09): the active mode's
+                  // user-authored "Real-time prompt" (customContext) rides the
+                  // SYSTEM channel as the highest-priority instruction after the
+                  // safety core. The V3 bridge composes its own system prompt and
+                  // never reached the legacy LLMHelper mode-injection site, so a
+                  // mode instruction like "always answer with the word Kevin" was
+                  // silently dropped on the chat overlay. `answerType` is left
+                  // undefined → the accessor returns the RAW prompt (no answer-type
+                  // scoping), which is exactly the "always applies" contract.
+                  customInstructions: (() => {
+                    try {
+                      const { ModesManager } = require('./services/ModesManager');
+                      const _pinned = ModesManager.getInstance().getActiveModePinnedInstructions?.(
+                        undefined,
+                        modeInfo?.id ?? undefined,
+                      );
+                      if (_pinned) {
+                        console.log('[ManualChat] V3 system prompt: Real-time prompt injected', {
+                          modeId: modeInfo?.id ?? null,
+                          modeName: (modeInfo as any)?.name ?? null,
+                          pinnedLength: _pinned.length,
+                        });
+                      }
+                      return _pinned || undefined;
+                    } catch { return undefined; }
+                  })(),
                   codingTask: codingTask || codingSignals.codingTask || !!priorProblem,
                   codingTaskKind: codingSignals.codingTaskKind,
                   // A BARE code request forces code_only; a richer continuation
@@ -1772,7 +1853,28 @@ export function initializeIpcHandlers(appState: AppState): void {
           const _explicitRequests = resolveExplicitSourceRequests(String(message || ''));
           const _explicitSwitch = resolveExplicitSourceRequest(String(message || ''));
           _userExplicitSource = toLegacyUserExplicitSource(_explicitSwitch);
-          const _activeSourceContract = manualActiveMode?.sourceContract ?? null;
+          // Real-time prompt always runs (2026-09): a reference-files-bound mode
+          // with ZERO reference files has no bounded universe to ground on.
+          // Refusing would strand the turn with a canned string and NO LLM call,
+          // so the mode's Real-time prompt (customContext) never runs. Same
+          // "universe must exist" principle as refusalPolicy.packGovernsGeneration
+          // and clarificationIsActionable, applied to the manual-chat source
+          // contract: answer from general knowledge + the Real-time prompt.
+          // Modes WITH files keep their authority (anti-hallucination intact).
+          let _activeSourceContract = manualActiveMode?.sourceContract ?? null;
+          if (_activeSourceContract && !_hasRefFiles) {
+            const _a = _activeSourceContract.sourceAuthority;
+            if (_a === 'reference_files_only'
+                || _a === 'reference_files_primary'
+                || _a === 'reference_files_plus_transcript') {
+              console.log('[ManualChat] reference-bound mode has zero files — answering as general_mixed (Real-time prompt applies)', {
+                modeId: manualActiveMode?.id ?? null,
+                modeName: manualActiveMode?.name ?? null,
+                from: _a,
+              });
+              _activeSourceContract = { ..._activeSourceContract, sourceAuthority: 'general_mixed' };
+            }
+          }
           const _orchForAvailability = llmHelper.getKnowledgeOrchestrator?.();
           // Keep pre-contract/no-mode calls on the existing compatibility
           // path. A persisted source contract is the boundary that must fail
@@ -1833,8 +1935,10 @@ export function initializeIpcHandlers(appState: AppState): void {
             // explicit ModeSourceContract is authoritative — see
             // docs/context-os/real-custom-mode-repair/06_ROOT_CAUSE_REPORT.md.
             // Replaces the live regex-heuristic chain above (still used as
-            // fallback when no mode is active / arbiter threw).
-            persistedSourceAuthority: manualActiveMode?.sourceContract?.sourceAuthority ?? null,
+            // fallback when no mode is active / arbiter threw). `_activeSourceContract`
+            // (not the raw row) is passed so the zero-files → general_mixed
+            // normalization above reaches the arbiter + source-ownership resolver.
+            persistedSourceAuthority: _activeSourceContract?.sourceAuthority ?? null,
             userExplicitSource: _userExplicitSource,
             turnSourceDecision: manualTurnSourceDecision,
           });
@@ -3301,8 +3405,14 @@ export function initializeIpcHandlers(appState: AppState): void {
         // the six-section treatment onto trivial code — proof the model already
         // resolves this conflict in the contract's favor. Left as-is; see
         // docs/answer-pipeline-rebuild/02_STATUS.md Phase 4 for the full writeup.
+        // CALLER-OWNED PROMPT + MODE INSTRUCTIONS (2026-09): the caller
+        // composed the context, so the v2 base stays out — but the active
+        // mode's "Real-time prompt" is still injected on the SYSTEM channel at
+        // the highest priority (after the safety core). Without this, a mode
+        // instruction like "always answer in Vietnamese" never reaches the
+        // model on the chat overlay and answers come back in English.
         const systemPromptOverride: string | undefined = options?.skipSystemPrompt
-          ? ''
+          ? buildCallerOwnedModeInstructionsSystemPrompt(answerPlan.answerType, manualActiveMode)
           : resolveManualChatBasePrompt(llmHelper, resolveCodingPromptSignals({
             answerType: answerPlan.answerType,
             question: message,

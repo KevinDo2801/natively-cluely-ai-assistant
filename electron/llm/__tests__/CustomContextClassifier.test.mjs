@@ -37,6 +37,17 @@ describe('classifyCustomContext', () => {
     assert.equal(c.pinned.length, 1);
     assert.equal(c.sensitive.length, 0);
   });
+  test('Vietnamese language directive → pinned, survives the coding gate (2026-09)', () => {
+    const raw = 'luôn trả lời bằng tiếng việt, dù người hỏi bằng tiếng anh';
+    const c = classifyCustomContext(raw);
+    assert.equal(c.pinned.length, 1, 'a short Vietnamese imperative must classify as pinned, not searchable');
+    assert.equal(c.sensitive.length, 0);
+    // The coding/technical gate keeps output-format directives; the Vietnamese
+    // language directive must ride that lane (previously it was dropped and
+    // coding answers ignored the mode's language instruction).
+    assert.match(buildScopedCustomContext(raw, 'dsa_question_answer').text, /tiếng việt/);
+    assert.match(buildScopedCustomContext(raw, 'technical_concept_answer').text, /tiếng việt/);
+  });
   test('salary/comp line → sensitive', () => {
     const c = classifyCustomContext('My current CTC is 30 LPA and I want 45.');
     assert.equal(c.sensitive.length, 1);
