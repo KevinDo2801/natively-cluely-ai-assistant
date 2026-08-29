@@ -32,19 +32,26 @@ export class MeetingPersistence {
      * Stops the meeting immediately, snapshots data, and triggers background processing.
      * Returns immediately so UI can switch.
      */
-    public async stopMeeting(liveMeetingId?: string | null): Promise<{ meetingId: string; memoryEligibleCount: number } | null> {
+    public async stopMeeting(liveMeetingId?: string | null, opts?: { isResumed?: boolean }): Promise<{ meetingId: string; memoryEligibleCount: number } | null> {
         console.log('[MeetingPersistence] Stopping meeting and queueing save...');
+        const isResumed = opts?.isResumed === true;
 
         // 0. Force-save any pending interim transcript
         this.session.flushInterimTranscript();
 
         // 1. Snapshot valid data BEFORE resetting
-        const durationMs = Date.now() - this.session.getSessionStartTime();
+        // MEETING CONTINUE (v33): a resumed session reports (original + continued)
+        // duration and keeps the original start_time on the timeline.
+        const resumedBaseline = this.session.getResumedBaseline();
+        const startTime = resumedBaseline?.startTime ?? this.session.getSessionStartTime();
+        const durationMs = (resumedBaseline?.durationMs ?? 0) + Math.max(0, Date.now() - this.session.getSessionStartTime());
         if (durationMs < 1000) {
             console.log("Meeting too short, ignoring.");
             // Live meeting note (v31): the row created at Start must not be left
             // behind as an orphan — delete it so no stale "Live" entry survives.
-            if (liveMeetingId) {
+            // MEETING CONTINUE (v33): never delete a resumed note — it holds real
+            // history. A sub-1s resume simply leaves the existing note untouched.
+            if (liveMeetingId && !isResumed) {
                 try {
                     DatabaseManager.getInstance().deleteMeeting(liveMeetingId);
                     console.log(`[MeetingPersistence] Deleted live meeting row for too-short meeting: ${liveMeetingId}`);
@@ -72,7 +79,12 @@ export class MeetingPersistence {
             console.error('[MeetingPersistence] Failed to read retention settings, defaulting to discard for safety:', err);
             doNotPersist = true; // Fail-secure fallback
         }
-        if (doNotPersist) {
+        // MEETING CONTINUE (v33): a resumed meeting is an explicit extension of
+        // an already-persisted note. "Never" retention cannot retroactively
+        // apply, and the doNotPersist branch DELETES liveMeetingId — which for a
+        // resumed session is the user's existing note. Resumed meetings always
+        // save (old + new transcript, summary regenerated over the whole note).
+        if (doNotPersist && !isResumed) {
             console.log('[MeetingPersistence] doNotPersist set — skipping save (no DB row, no summary).');
             try {
                 const { telemetryService } = require('./services/telemetry/TelemetryService');
@@ -107,13 +119,13 @@ export class MeetingPersistence {
         let memoryEligibleCount = 0;
         try {
             const { isMemoryEligibleSegment } = require('./intelligence/MeetingMemoryService');
-            memoryEligibleCount = this.session.getFullTranscript()
+            memoryEligibleCount = this.session.getSttTranscript()
                 .filter((seg: any) => isMemoryEligibleSegment(seg)).length;
         } catch (err) {
             // Fail OPEN to the legacy behavior (process everything): a broken
             // eligibility import must not silently discard real meetings.
             console.warn('[MeetingPersistence] eligibility check unavailable — processing normally:', err);
-            memoryEligibleCount = this.session.getFullTranscript().length;
+            memoryEligibleCount = this.session.getSttTranscript().length;
         }
 
         const snapshot = {
@@ -124,7 +136,7 @@ export class MeetingPersistence {
             // history (and leaked quick-action prompts into it).
             transcript: [...this.session.getSttTranscript()],
             usage: [...this.session.getFullUsage()],
-            startTime: this.session.getSessionStartTime(),
+            startTime: startTime,
             durationMs: durationMs,
             context: this.session.getFullSessionContext(),
             memoryEligibleCount,

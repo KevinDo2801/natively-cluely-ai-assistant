@@ -1414,6 +1414,10 @@ export class AppState {
   // leaves the row behind for adoptOrphanedLiveMeetings on the next launch.
   private _liveMeetingId: string | null = null;
   private _liveFlushTimer: NodeJS.Timeout | null = null;
+  // MEETING CONTINUE (v33): true when _liveMeetingId points at an EXISTING note
+  // being resumed (not a freshly-created live row). stopMeeting uses it to skip
+  // the "never" retention delete so a resumed note is never destroyed.
+  private _liveMeetingIsResumed: boolean = false;
   private static readonly LIVE_NOTE_FLUSH_MS = 5000;
   // MEETING FOLDERS (v32): the folder currently open in the launcher window.
   // Any meeting start path (launcher CTA, pill mic button, global shortcut,
@@ -5811,6 +5815,27 @@ export class AppState {
     console.log('[Main] Starting Meeting...', metadata);
     this.autoAnswerController.onMeetingStart();
 
+    // MEETING CONTINUE (v33): "Continue this session" re-opens recording on the
+    // SAME note instead of minting a new one. Resolve the existing note up front
+    // so its calendar/source linkage survives the stop-time save, and a missing
+    // id fails fast (before any window swap or audio init).
+    const continueMeetingId = metadata?.continueMeetingId as string | undefined;
+    if (continueMeetingId) {
+      const { DatabaseManager } = require('./db/DatabaseManager');
+      const existing = DatabaseManager.getInstance().getMeetingDetails(continueMeetingId);
+      if (!existing) {
+        const err = new Error('continue_meeting_not_found') as Error & { code?: string };
+        err.code = 'meeting-not-found';
+        throw err;
+      }
+      metadata = {
+        ...(metadata || {}),
+        continueMeetingId,
+        calendarEventId: existing.calendarEventId,
+        source: existing.source,
+      };
+    }
+
     // If a previous endMeeting() is still draining STT in the background, wait
     // for it to finish before we boot a new session — otherwise the BG teardown
     // could call STT.stop() on instances the new meeting just started using.
@@ -5928,7 +5953,11 @@ export class AppState {
     // SAME row is finalized — summary/usage are generated into it instead of a
     // new id. Failures are never fatal: the meeting continues untouched and the
     // stop path falls back to the legacy new-id flow.
-    this.startLiveMeetingNote(metadata);
+    if (continueMeetingId) {
+      this.resumeLiveMeetingNote(metadata, continueMeetingId);
+    } else {
+      this.startLiveMeetingNote(metadata);
+    }
 
     // Phase 3 — bind dynamic action engine to this meeting + active mode.
     // Action store is per-(sessionId, modeId), so a fresh sessionId here gives
@@ -6173,6 +6202,7 @@ export class AppState {
       }, startTime, 0);
 
       this._liveMeetingId = liveId;
+      this._liveMeetingIsResumed = false;
       // The Launcher refreshes its history list on this broadcast and shows the
       // "Live" entry at the top (newest created_at).
       this.broadcast('meetings-updated');
@@ -6187,6 +6217,61 @@ export class AppState {
       if (this._liveMeetingId) {
         try { require('./db/DatabaseManager').DatabaseManager.getInstance().deleteMeeting(this._liveMeetingId); } catch { /* best effort */ }
         this._liveMeetingId = null;
+        this._liveMeetingIsResumed = false;
+      }
+      if (this._liveFlushTimer) {
+        clearInterval(this._liveFlushTimer);
+        this._liveFlushTimer = null;
+      }
+    }
+  }
+
+  /**
+   * MEETING CONTINUE (v33): adopt the SAME note id for a resumed session. Marks
+   * the existing row live again (launcher shows "Live"), seeds the session with
+   * its prior transcript, and arms the periodic flush — mirroring
+   * startLiveMeetingNote without minting a new id. Failures are best-effort:
+   * the meeting continues and Stop falls back to the legacy new-id flow.
+   */
+  private resumeLiveMeetingNote(metadata: any, continueMeetingId: string): void {
+    try {
+      const { DatabaseManager } = require('./db/DatabaseManager');
+      const db = DatabaseManager.getInstance();
+      if (!db.isAvailable()) {
+        console.warn('[Main] DB unavailable — skipping live meeting resume.');
+        return;
+      }
+      const existing = db.getMeetingDetails(continueMeetingId);
+      if (!existing) {
+        console.error('[Main] Cannot resume — meeting not found:', continueMeetingId);
+        return;
+      }
+
+      // Seed the session FIRST (pure in-memory) so a later failure leaves no
+      // half-adopted row behind; then adopt the row and arm the flush.
+      this.intelligenceManager.seedResumedTranscript(existing.transcript || []);
+      const timing = db.getMeetingTiming(continueMeetingId);
+      if (timing) {
+        this.intelligenceManager.seedResumedMeeting(timing.startTime, timing.durationMs);
+      }
+      db.markMeetingLive(continueMeetingId);
+      this._liveMeetingId = continueMeetingId;
+      this._liveMeetingIsResumed = true;
+
+      this.broadcast('meetings-updated');
+
+      if (this._liveFlushTimer) clearInterval(this._liveFlushTimer);
+      this._liveFlushTimer = setInterval(() => {
+        this.flushLiveMeetingSnapshot();
+      }, AppState.LIVE_NOTE_FLUSH_MS);
+      console.log(`[Main] Live meeting note resumed: ${continueMeetingId}`);
+    } catch (err) {
+      // Best-effort: never block meeting start. Clear partial live state so a
+      // later Stop does not try to finalize a row we failed to fully adopt.
+      console.error('[Main] Failed to resume live meeting note (meeting continues; Stop uses the fallback path):', err);
+      if (this._liveMeetingId) {
+        this._liveMeetingId = null;
+        this._liveMeetingIsResumed = false;
       }
       if (this._liveFlushTimer) {
         clearInterval(this._liveFlushTimer);
@@ -6322,7 +6407,9 @@ export class AppState {
     // the row stays is_live=1 with the last-flushed transcript and is adopted
     // by recoverUnprocessedMeetings on the next launch (crash-survival by design).
     const liveMeetingId = this._liveMeetingId;
+    const liveMeetingIsResumed = this._liveMeetingIsResumed;
     this._liveMeetingId = null;
+    this._liveMeetingIsResumed = false;
     if (this._liveFlushTimer) {
       clearInterval(this._liveFlushTimer);
       this._liveFlushTimer = null;
@@ -6452,7 +6539,7 @@ export class AppState {
         //    intelligenceManager.stopMeeting itself runs LLM in background.
         //    liveMeetingId (may be null) makes the placeholder + final save
         //    reuse the row created at Start instead of minting a new id.
-        const stopResult = await this.intelligenceManager.stopMeeting(liveMeetingId);
+        const stopResult = await this.intelligenceManager.stopMeeting(liveMeetingId, { isResumed: liveMeetingIsResumed });
         const meetingId = stopResult?.meetingId ?? null;
 
         // 5. RAG cleanup — same logic as before, just inside the BG IIFE.
@@ -6529,6 +6616,13 @@ export class AppState {
           ...(meeting.detailedSummary.actionItems || []).map(a => `Action: ${a}`)
         ].join('. ');
       }
+
+      // MEETING CONTINUE (v33): a resumed meeting reuses an id that may already
+      // hold RAG chunks from the prior session. Re-indexing the combined
+      // transcript without clearing first would append duplicate chunks +
+      // embeddings for the old audio, so drop the meeting's prior RAG data
+      // (a no-op for a freshly-minted id).
+      this.ragManager.deleteMeetingData(meetingId);
 
       const result = await this.ragManager.processMeeting(meeting.id, segments, summary);
       console.log(`[AppState] RAG processed meeting ${meeting.id}: ${result.chunkCount} chunks`);

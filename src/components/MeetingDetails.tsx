@@ -1,7 +1,8 @@
 import React, { useState, useRef, useEffect, useId } from 'react';
 import { useT } from '../i18n';
 import { useResolvedTheme } from '../hooks/useResolvedTheme';
-import { ArrowLeft, Search, Mail, Link, ChevronDown, Play, ArrowUp, Copy, Check, MoreHorizontal, Settings, ArrowRight, RefreshCw, Info, Eye, EyeOff, History, Pencil, X, ChevronRight } from 'lucide-react';
+import { ArrowLeft, Search, Mail, Link, ChevronDown, Play, ArrowUp, Copy, Check, MoreHorizontal, Settings, ArrowRight, RefreshCw, Info, Eye, EyeOff, History, Pencil, X, ChevronRight, Mic } from 'lucide-react';
+import { isMac } from '../utils/platformUtils';
 import { motion, AnimatePresence, useReducedMotion } from 'framer-motion';
 import { genMessageId } from '../utils/messageId';
 import { mapLanguageForPrism, isBlockCode } from '../utils/prismLanguage';
@@ -913,7 +914,7 @@ const LiveNotePlaceholder: React.FC<{ kind: 'summary' | 'usage' }> = ({ kind }) 
     );
 };
 
-const MeetingDetails: React.FC<MeetingDetailsProps> = ({ meeting: initialMeeting }) => {
+const MeetingDetails: React.FC<MeetingDetailsProps> = ({ meeting: initialMeeting, onBack }) => {
     const t = useT();
     const isLight = useResolvedTheme() === 'light';
     // We need local state for the meeting object to reflect optimistic updates
@@ -922,6 +923,7 @@ const MeetingDetails: React.FC<MeetingDetailsProps> = ({ meeting: initialMeeting
     const [query, setQuery] = useState('');
     const [isCopied, setIsCopied] = useState(false);
     const [isChatOpen, setIsChatOpen] = useState(false);
+    const [isContinuing, setIsContinuing] = useState(false);
     const [submittedQuery, setSubmittedQuery] = useState('');
 
     // Stable client-side keys for the action-item and key-point lists. The
@@ -1010,6 +1012,49 @@ const MeetingDetails: React.FC<MeetingDetailsProps> = ({ meeting: initialMeeting
                 if (tone === 'professional' || tone === 'warm' || tone === 'concise' || tone === 'friendly') setFollowUpTone(tone);
             }
         } catch { /* swallow */ }
+    };
+
+    // MEETING CONTINUE (v33): re-open recording on THIS note. Reuses the normal
+    // start-meeting IPC with metadata.continueMeetingId — main adopts the same
+    // meeting row, seeds the session with its prior transcript, and switches to
+    // the overlay. Mirrors App.tsx handleStartMeeting's audio-device selection.
+    const handleContinueSession = async () => {
+        if (isContinuing) return;
+        setIsContinuing(true);
+        try {
+            localStorage.setItem('natively_last_meeting_start', Date.now().toString());
+            const inputDeviceId = localStorage.getItem('preferredInputDeviceId');
+            let outputDeviceId = localStorage.getItem('preferredOutputDeviceId');
+            // SCK is a macOS-only backend — never route it on Windows (F-003).
+            const useExperimentalSck = isMac && localStorage.getItem('useExperimentalSckBackend') === 'true';
+            if (useExperimentalSck) {
+                outputDeviceId = 'sck';
+            }
+            // A continued meeting always persists to the existing note — the main
+            // process ignores "never" retention for resumed sessions so the note
+            // (and its history) is never deleted by a resume.
+            const result = await window.electronAPI?.startMeeting?.({
+                continueMeetingId: meeting.id,
+                audio: { inputDeviceId, outputDeviceId },
+            });
+            if (result?.success) {
+                // Recording resumed — the main process swapped to the overlay.
+                // Leave the details view so the launcher lands on the (refreshed)
+                // list when the continued meeting stops.
+                onBack();
+            } else {
+                console.error('Failed to continue meeting:', result?.error);
+                if (result?.code === 'mic-permission-denied') {
+                    // The launcher's permissions card is the recoverable surface;
+                    // from the details view we surface nothing beyond the log.
+                    console.warn('[MeetingDetails] Mic permission denied while continuing meeting.');
+                }
+            }
+        } catch (err) {
+            console.error('Failed to continue meeting:', err);
+        } finally {
+            setIsContinuing(false);
+        }
     };
 
     const handleRegenerate = async (templateType?: string) => {
@@ -2159,25 +2204,38 @@ ${meeting.detailedSummary.keyPoints?.map(item => `- ${item}`).join('\n') || 'Non
                 </motion.div>
             </main>
 
-            {/* Floating Footer (Ask Bar) */}
+            {/* Floating Footer (Continue + Ask Bar) */}
             <div className={`absolute bottom-0 left-0 right-0 p-6 flex justify-center pointer-events-none ${isChatOpen ? 'z-50' : 'z-20'}`}>
-                <div className="w-full max-w-[440px] relative group pointer-events-auto">
-                    {/* Dark Glass Effect Input (Matching Reference) */}
-                    <input
-                        type="text"
-                        value={query}
-                        onChange={(e) => setQuery(e.target.value)}
-                        onKeyDown={handleInputKeyDown}
-                        placeholder={t("Ask about this meeting...")}
-                        className="w-full pl-5 pr-12 py-3 bg-transparent backdrop-blur-[24px] backdrop-saturate-[140%] shadow-[0_8px_30px_rgb(0,0,0,0.12)] border border-white/20 rounded-full text-sm text-text-primary placeholder-text-tertiary/70 focus:outline-none transition-shadow duration-200"
-                    />
-                    <button
-                        onClick={handleSubmitQuestion}
-                        className={`absolute right-2 top-1/2 -translate-y-1/2 p-1.5 rounded-full transition-all duration-200 border border-white/5 ${query.trim() ? 'bg-text-primary text-bg-primary hover:scale-105' : 'bg-bg-item-active text-text-primary hover:bg-bg-item-hover'
-                            }`}
-                    >
-                        <ArrowUp size={16} className="transform rotate-45" />
-                    </button>
+                <div className="w-full max-w-[560px] flex items-center gap-2 pointer-events-auto">
+                    {!isLive && (
+                        <button
+                            onClick={handleContinueSession}
+                            disabled={isContinuing}
+                            title={t("Continue recording on this meeting")}
+                            className="shrink-0 inline-flex items-center gap-1.5 h-[42px] px-4 bg-transparent backdrop-blur-[24px] backdrop-saturate-[140%] shadow-[0_8px_30px_rgb(0,0,0,0.12)] border border-white/20 rounded-full text-sm font-medium text-text-primary hover:bg-white/[0.06] disabled:opacity-60 transition-all duration-200"
+                        >
+                            <Mic size={15} />
+                            {isContinuing ? t('Continuing…') : t('Continue this session')}
+                        </button>
+                    )}
+                    <div className="flex-1 min-w-0 relative group">
+                        {/* Dark Glass Effect Input (Matching Reference) */}
+                        <input
+                            type="text"
+                            value={query}
+                            onChange={(e) => setQuery(e.target.value)}
+                            onKeyDown={handleInputKeyDown}
+                            placeholder={t("Ask about this meeting...")}
+                            className="w-full pl-5 pr-12 py-3 bg-transparent backdrop-blur-[24px] backdrop-saturate-[140%] shadow-[0_8px_30px_rgb(0,0,0,0.12)] border border-white/20 rounded-full text-sm text-text-primary placeholder-text-tertiary/70 focus:outline-none transition-shadow duration-200"
+                        />
+                        <button
+                            onClick={handleSubmitQuestion}
+                            className={`absolute right-2 top-1/2 -translate-y-1/2 p-1.5 rounded-full transition-all duration-200 border border-white/5 ${query.trim() ? 'bg-text-primary text-bg-primary hover:scale-105' : 'bg-bg-item-active text-text-primary hover:bg-bg-item-hover'
+                                }`}
+                        >
+                            <ArrowUp size={16} className="transform rotate-45" />
+                        </button>
+                    </div>
                 </div>
             </div>
 

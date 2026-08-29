@@ -167,6 +167,18 @@ export class SessionTracker {
     private fullTranscript: TranscriptSegment[] = [];
     private fullUsage: any[] = []; // UsageInteraction
     private sessionStartTime: number = Date.now();
+    // Meeting "continue": the transcript of the SAME note from a prior session,
+    // prepended by getSttTranscript() so persistence/recap/search/summary see the
+    // meeting as one continuous recording. Kept OUTSIDE fullTranscript so resuming
+    // does not re-trigger RAG live indexing, epoch compaction, or coding-question
+    // detection on speech that was already processed in the earlier session.
+    private resumedBaselineTranscript: TranscriptSegment[] = [];
+    // Meeting "continue" timing: the ORIGINAL note's start_time + accumulated
+    // duration. sessionStartTime is re-anchored at resume so the continued span
+    // is measured from that point; stopMeeting sums both into the total duration
+    // and keeps the meeting's original start_time on the timeline.
+    private resumedBaselineStartTime: number | null = null;
+    private resumedBaselineDurationMs: number = 0;
 
     // Rolling summarization: epoch summaries preserve early context when arrays are compacted
     private static readonly MAX_EPOCH_SUMMARIES = 5;
@@ -215,6 +227,39 @@ export class SessionTracker {
 
     public clearMeetingMetadata(): void {
         this.currentMeetingMetadata = null;
+    }
+
+    /**
+     * Seed the baseline transcript for a continued meeting. Segments are the
+     * persisted rows of the SAME note (speaker/text/timestamp — the DB stores no
+     * origin column), so they are marked `final` + origin 'stt' (real spoken
+     * audio) to flow through getSttTranscript() and meeting-memory eligibility.
+     */
+    public seedResumedTranscript(segments: Array<{ speaker: string; text: string; timestamp: number; origin?: TranscriptOrigin }>): void {
+        this.resumedBaselineTranscript = (segments || []).map((s) => ({
+            ...s,
+            final: true,
+            origin: s.origin === 'test' ? 'test' : 'stt',
+        }));
+    }
+
+    /**
+     * Seed the continued meeting's timing: the ORIGINAL note's start_time and
+     * accumulated duration. sessionStartTime is re-anchored to now so the
+     * continued span is measured from the resume point, not the last reset.
+     */
+    public seedResumedMeeting(startTime: number, durationMs: number): void {
+        this.resumedBaselineStartTime = typeof startTime === 'number' ? startTime : Date.now();
+        this.resumedBaselineDurationMs = typeof durationMs === 'number' && durationMs > 0 ? durationMs : 0;
+        this.sessionStartTime = Date.now();
+    }
+
+    /** The continued meeting's original start_time + accumulated duration (null if not resumed). */
+    public getResumedBaseline(): { startTime: number; durationMs: number } | null {
+        return this.resumedBaselineStartTime == null ? null : {
+            startTime: this.resumedBaselineStartTime,
+            durationMs: this.resumedBaselineDurationMs,
+        };
     }
 
     // ============================================
@@ -773,7 +818,8 @@ export class SessionTracker {
         // lands it replaces the interim (both fields are cleared on final),
         // so the view never duplicates.
         const pending = this.pendingInterimTranscript();
-        return pending.length > 0 ? [...committed, ...pending] : committed;
+        const combined = [...this.resumedBaselineTranscript, ...committed];
+        return pending.length > 0 ? [...combined, ...pending] : combined;
     }
 
     /**
@@ -924,6 +970,9 @@ export class SessionTracker {
         this.contextItems = [];
         this.fullTranscript = [];
         this.fullUsage = [];
+        this.resumedBaselineTranscript = [];
+        this.resumedBaselineStartTime = null;
+        this.resumedBaselineDurationMs = 0;
         this.transcriptEpochSummaries = [];
         this.sessionStartTime = Date.now();
         this.lastAssistantMessage = null;

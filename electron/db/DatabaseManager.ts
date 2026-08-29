@@ -2075,6 +2075,37 @@ export class DatabaseManager {
     // guarded and returns a neutral value when the database is unavailable —
     // live-note persistence must never be able to break the meeting itself.
 
+    /**
+     * Mark an existing (already finalized) meeting note live again so a
+     * "Continue this session" resume adopts the SAME row instead of minting a
+     * new id. Touches ONLY the is_live flag — summary_json, transcript, and
+     * usage children are left intact (they are re-written on the live flush and
+     * the stop-time final save).
+     */
+    public markMeetingLive(id: string): boolean {
+        if (!this.db) return false;
+        try {
+            const info = this.db.prepare(`UPDATE meetings SET is_live = 1, is_processed = 0, summary_status = 'queued' WHERE id = ?`).run(id);
+            return (info.changes ?? 0) > 0;
+        } catch (e) {
+            console.error('[DatabaseManager] markMeetingLive failed:', e);
+            return false;
+        }
+    }
+
+    /** Raw start_time + duration_ms for a meeting (meeting "continue" timing). */
+    public getMeetingTiming(id: string): { startTime: number; durationMs: number } | null {
+        if (!this.db) return null;
+        try {
+            const row = this.db.prepare('SELECT start_time, duration_ms FROM meetings WHERE id = ?').get(id) as any;
+            if (!row) return null;
+            return { startTime: row.start_time as number, durationMs: row.duration_ms as number };
+        } catch (e) {
+            console.error('[DatabaseManager] getMeetingTiming failed:', e);
+            return null;
+        }
+    }
+
     /** All meetings currently marked live (rows created at Start, not yet finalized). */
     public getLiveMeetings(): Meeting[] {
         if (!this.db) return [];

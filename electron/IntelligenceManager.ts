@@ -194,6 +194,16 @@ export class IntelligenceManager extends EventEmitter {
         return this.session.getFullUsage();
     }
 
+    /** Seed a continued meeting's prior transcript so the session reads as one continuous recording. */
+    seedResumedTranscript(segments: Array<{ speaker: string; text: string; timestamp: number; origin?: import('./SessionTracker').TranscriptOrigin }>): void {
+        this.session.seedResumedTranscript(segments);
+    }
+
+    /** Seed a continued meeting's original timing so stop reports original + continued duration. */
+    seedResumedMeeting(startTime: number, durationMs: number): void {
+        this.session.seedResumedMeeting(startTime, durationMs);
+    }
+
     logUsage(type: string, question: string, answer: string): void {
         this.session.logUsage(type, question, answer);
     }
@@ -346,8 +356,8 @@ export class IntelligenceManager extends EventEmitter {
      * with a live note row (v31) — makes the placeholder/final save reuse that
      * row so the note created at Start is finalized in place.
      */
-    async stopMeeting(liveMeetingId?: string | null): Promise<{ meetingId: string; memoryEligibleCount: number } | null> {
-        return this.persistence.stopMeeting(liveMeetingId);
+    async stopMeeting(liveMeetingId?: string | null, opts?: { isResumed?: boolean }): Promise<{ meetingId: string; memoryEligibleCount: number } | null> {
+        return this.persistence.stopMeeting(liveMeetingId, opts);
     }
 
     async recoverUnprocessedMeetings(): Promise<void> {
