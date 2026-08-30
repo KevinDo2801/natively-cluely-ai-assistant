@@ -95,6 +95,9 @@ const Launcher: React.FC<LauncherProps> = ({ onStartMeeting, onOpenSettings, onO
     const [isDetectable, setIsDetectable] = useState(false);
     const [isMeetingActive, setIsMeetingActive] = useState(false);
     const [selectedMeeting, setSelectedMeeting] = useState<Meeting | null>(null);
+    // Tab to open MeetingDetails with. Set by handleOpenMeeting so the
+    // launcher can auto-open a meeting's Transcript tab (meeting start/stop).
+    const [detailsInitialTab, setDetailsInitialTab] = useState<'summary' | 'transcript' | 'usage'>('summary');
     const [upcomingEvents, setUpcomingEvents] = useState<any[]>([]);
     const [isCalendarConnected, setIsCalendarConnected] = useState(false);
     const [isRefreshing, setIsRefreshing] = useState(false);
@@ -134,15 +137,37 @@ const Launcher: React.FC<LauncherProps> = ({ onStartMeeting, onOpenSettings, onO
     // intentionally double-invokes effects to surface this class of bug.
     const mountedOnceRef = useRef<boolean>(false);
 
+    // ── AUTO-OPEN TRANSCRIPT TAB (meeting start/stop) ─────────────────────
+    // When a meeting starts/stops, the launcher auto-opens that meeting in the
+    // Transcript tab. `pendingTranscriptOpenRef` stays armed across refreshes
+    // (the live row is created AFTER the isActive:true broadcast, so the first
+    // fetch may miss it; the follow-up meetings-updated refresh resolves it).
+    const pendingTranscriptOpenRef = useRef<boolean>(false);
+    // The id of the live meeting we're tracking, so a later stop can re-open
+    // the SAME (now finalized) note instead of guessing from the list.
+    const liveMeetingIdRef = useRef<string | null>(null);
+    // Mirror of selectedMeeting for the mount-only listener closures (the
+    // mount effect would otherwise capture the first render's null value).
+    const selectedMeetingRef = useRef<Meeting | null>(null);
+    useEffect(() => {
+        selectedMeetingRef.current = selectedMeeting;
+    }, [selectedMeeting]);
+
     const fetchMeetings = (folderId: string | null) => {
         if (window.electronAPI && window.electronAPI.getRecentMeetings) {
-            window.electronAPI.getRecentMeetings(folderId).then(setMeetings).catch(err => console.error("Failed to fetch meetings:", err));
+            window.electronAPI.getRecentMeetings(folderId).then((list) => {
+                setMeetings(list);
+                resolvePendingTranscriptOpen(list);
+            }).catch(err => console.error("Failed to fetch meetings:", err));
         }
     };
 
     const fetchAllMeetings = () => {
         if (window.electronAPI && window.electronAPI.getRecentMeetings) {
-            window.electronAPI.getRecentMeetings().then(setAllMeetings).catch(err => console.error("Failed to fetch all meetings:", err));
+            window.electronAPI.getRecentMeetings().then((list) => {
+                setAllMeetings(list);
+                resolvePendingTranscriptOpen(list);
+            }).catch(err => console.error("Failed to fetch all meetings:", err));
         }
     };
 
@@ -256,7 +281,16 @@ const Launcher: React.FC<LauncherProps> = ({ onStartMeeting, onOpenSettings, onO
         // Sync initial meeting active state — guarded so unmounted component isn't written to
         if (window.electronAPI?.getMeetingActive) {
             window.electronAPI.getMeetingActive()
-                .then((active) => { if (mounted) setIsMeetingActive(active); })
+                .then((active) => {
+                    if (mounted) setIsMeetingActive(active);
+                    // App (re)started while a meeting is already running: the
+                    // launcher opens the live meeting in the Transcript tab
+                    // right away instead of waiting for a future start/stop.
+                    if (active) {
+                        pendingTranscriptOpenRef.current = true;
+                        refreshData();
+                    }
+                })
                 .catch(() => {});
         }
 
@@ -266,6 +300,18 @@ const Launcher: React.FC<LauncherProps> = ({ onStartMeeting, onOpenSettings, onO
             removeMeetingStateListener = window.electronAPI.onMeetingStateChanged(({ isActive }) => {
                 setIsMeetingActive(isActive);
                 emitOrchestratorEvent({ type: 'meeting:state', isActive });
+                // AUTO-OPEN TRANSCRIPT TAB: on start, arm the pending open —
+                // the live row is created right after this broadcast and lands
+                // in the follow-up meetings-updated refresh. On stop, arm a
+                // re-open when the tracked note isn't already on screen (if it
+                // is, MeetingDetails self-transitions live → finalized and
+                // reloads it in place).
+                if (isActive) {
+                    pendingTranscriptOpenRef.current = true;
+                } else if (liveMeetingIdRef.current && selectedMeetingRef.current?.id !== liveMeetingIdRef.current) {
+                    pendingTranscriptOpenRef.current = true;
+                }
+                refreshData();
             });
         }
 
@@ -411,8 +457,9 @@ const Launcher: React.FC<LauncherProps> = ({ onStartMeeting, onOpenSettings, onO
         return () => emitOrchestratorEvent({ type: 'launcher:unmounted' });
     }, [selectedMeeting, isGlobalChatOpen, onPageChange]);
 
-    const handleOpenMeeting = async (meeting: Meeting) => {
+    const handleOpenMeeting = async (meeting: Meeting, tab: 'summary' | 'transcript' | 'usage' = 'summary') => {
         setForwardMeeting(null); // Clear forward history on new navigation
+        setDetailsInitialTab(tab);
         console.log("[Launcher] Opening meeting:", meeting.id);
         analytics.trackCommandExecuted('open_meeting_details');
 
@@ -447,6 +494,39 @@ const Launcher: React.FC<LauncherProps> = ({ onStartMeeting, onOpenSettings, onO
         if (forwardMeeting) {
             setSelectedMeeting(forwardMeeting);
             setForwardMeeting(null);
+        }
+    };
+
+    // ── AUTO-OPEN TRANSCRIPT TAB (meeting start/stop) ─────────────────────
+    // Called after every meeting-list refresh while the pending open is armed:
+    //   • live row present  → meeting just started (or launcher mounted
+    //     mid-meeting): open it in the Transcript tab (real-time stream).
+    //   • no live row, but we tracked an id → that note was finalized at
+    //     Stop: re-open the SAME id in the Transcript tab.
+    // If the target is already on screen, MeetingDetails self-manages the
+    // live → finalized transition, so we leave it alone. Stays armed until a
+    // refresh finds the target (the live row lands a tick after the
+    // isActive:true broadcast; the finalized note lands after Stop's save).
+    const resolvePendingTranscriptOpen = (list: Meeting[]) => {
+        if (!pendingTranscriptOpenRef.current) return;
+        const live = list.find(m => m.isLive);
+        if (live) {
+            pendingTranscriptOpenRef.current = false;
+            liveMeetingIdRef.current = live.id;
+            if (selectedMeetingRef.current?.id !== live.id) {
+                void handleOpenMeeting(live, 'transcript');
+            }
+            return;
+        }
+        const trackedId = liveMeetingIdRef.current;
+        if (trackedId) {
+            const target = list.find(m => m.id === trackedId);
+            if (target) {
+                pendingTranscriptOpenRef.current = false;
+                if (selectedMeetingRef.current?.id !== target.id) {
+                    void handleOpenMeeting(target, 'transcript');
+                }
+            }
         }
     };
 
@@ -928,9 +1008,11 @@ const Launcher: React.FC<LauncherProps> = ({ onStartMeeting, onOpenSettings, onO
                             transition={{ duration: 0.15 }}
                         >
                             <MeetingDetails
+                                key={selectedMeeting.id}
                                 meeting={selectedMeeting}
                                 onBack={handleBack}
                                 onOpenSettings={onOpenSettings}
+                                initialTab={detailsInitialTab}
                             />
                         </motion.div>
                     ) : (

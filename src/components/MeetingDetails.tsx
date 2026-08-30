@@ -795,6 +795,10 @@ interface MeetingDetailsProps {
     meeting: Meeting;
     onBack: () => void;
     onOpenSettings: () => void;
+    // Initial tab to open with (Launcher auto-opens the meeting in the
+    // Transcript tab when a meeting starts/stops). Defaults to Summary,
+    // matching the pre-existing behavior for manual opens.
+    initialTab?: 'summary' | 'transcript' | 'usage';
 }
 
 /**
@@ -824,12 +828,12 @@ const LiveNotePlaceholder: React.FC<{ kind: 'summary' | 'usage' }> = ({ kind }) 
     );
 };
 
-const MeetingDetails: React.FC<MeetingDetailsProps> = ({ meeting: initialMeeting, onBack }) => {
+const MeetingDetails: React.FC<MeetingDetailsProps> = ({ meeting: initialMeeting, onBack, initialTab = 'summary' }) => {
     const t = useT();
     const isLight = useResolvedTheme() === 'light';
     // We need local state for the meeting object to reflect optimistic updates
     const [meeting, setMeeting] = useState<Meeting>(initialMeeting);
-    const [activeTab, setActiveTab] = useState<'summary' | 'transcript' | 'usage'>('summary');
+    const [activeTab, setActiveTab] = useState<'summary' | 'transcript' | 'usage'>(initialTab);
     const [query, setQuery] = useState('');
     const [isCopied, setIsCopied] = useState(false);
     const [isChatOpen, setIsChatOpen] = useState(false);
