@@ -494,11 +494,12 @@ export class WindowHelper {
     const width = LAUNCHER_DEFAULT_WIDTH;
     const height = LAUNCHER_DEFAULT_HEIGHT;
 
-    // Calculate centered X, and top-centered Y (5% from top)
+    // Fully center the launcher on the primary display's work area (X and Y),
+    // per the work area, not the screen bounds. `center: true` is dropped from
+    // the options below because an explicit x/y already overrides it; keeping
+    // both would be redundant and confusing.
     const x = Math.round(workArea.x + (workArea.width - width) / 2);
-    // Ensure y is at least workArea.y (don't go offscreen top)
-    const topMargin = Math.round(workArea.height * 0.05);
-    const y = Math.round(workArea.y + topMargin);
+    const y = Math.round(workArea.y + (workArea.height - height) / 2);
 
     // --- 1. Create Launcher Window ---
 
@@ -538,7 +539,8 @@ export class WindowHelper {
       focusable: true,
       resizable: true,
       movable: true,
-      center: true,
+      // No `center: true`: an explicit x/y is passed above and overrides it, so
+      // it would be dead configuration. Position comes from createWindow().
       // Phase 1 — disguise/app icons resolved by the WindowAdapter per
       // platform (darwin icns / win32 ico, fakeicon sub-dir for disguise).
       icon: this.adapter.launcherIconPath(this.appState.getDisguise() as LauncherDisguise, app.isPackaged),
