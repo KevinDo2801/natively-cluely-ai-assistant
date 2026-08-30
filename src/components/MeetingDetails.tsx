@@ -536,6 +536,34 @@ const CodingAnswerBlock: React.FC<{ sections: CodingSection[]; firstView?: boole
     );
 };
 
+// The on-screen Recap (and other quick actions like clarify/follow-up) is a full
+// system prompt the user never typed, but it is persisted verbatim as the usage
+// `question` for AI-traced turns. Surfacing that whole prompt in the usage tab
+// leaks the internal instruction ("recap ONLY the transcript, based ONLY on…")
+// the user never asked for. So collapse the known quick-action prompts back to
+// their short, user-meaningful label — mirroring NativelyInterface's
+// QUICK_ACTION_LABELS — when rendering the usage history. The raw prompt stays
+// intact in storage/DB; this is display-only.
+const QUICK_ACTION_PROMPT_LABELS: Array<{ prefix: string; label: string }> = [
+    {
+        prefix: 'Recap what has actually been discussed in this meeting so far',
+        label: 'Recap',
+    },
+    {
+        prefix: 'Suggest 3-5 strategic follow-up questions based on the conversation.',
+        label: 'Follow-up Questions',
+    },
+    {
+        prefix: 'Based on the conversation, ask a concise clarifying question',
+        label: 'Clarify',
+    },
+];
+
+const displayUsageQuestion = (question: string): string => {
+    const match = QUICK_ACTION_PROMPT_LABELS.find(({ prefix }) => question.trimStart().startsWith(prefix));
+    return match ? match.label : question;
+};
+
 // One Q&A pair in the usage/history tab. Owns its first-view entrance (question
 // enters from the right, answer settles just after) and a hover-revealed
 // answer-action bar (copy full answer + timestamp). Entrance plays only the first
@@ -576,7 +604,7 @@ const UsageInteraction: React.FC<{
                         accepted but severe AA shortfall, recorded in
                         PeriwinkleContrastGuard.test.mjs. */}
                     <motion.div {...enter({ x: 8 }, staggerDelay)} className="bubble-user px-5 py-2.5 rounded-2xl rounded-tr-sm max-w-[80%] text-[15px] leading-relaxed select-text">
-                        {interaction.question}
+                        {interaction.question ? displayUsageQuestion(interaction.question) : ''}
                     </motion.div>
                     <span className="mt-1 pr-1 text-[11px] text-text-tertiary select-none cursor-default opacity-0 translate-y-1 group-hover/q:opacity-100 group-hover/q:translate-y-0 transition-all duration-[160ms] ease-out">
                         {formatTime(interaction.timestamp)}
@@ -1170,7 +1198,7 @@ ${meeting.detailedSummary.keyPoints?.map(item => `- ${item}`).join('\n') || 'Non
         } else if (activeTab === 'transcript' && meeting.transcript) {
             textToCopy = meeting.transcript.map(t => `[${formatTime(t.timestamp)}] ${resolveSpeakerName(t.speaker)}: ${t.text}`).join('\n');
         } else if (activeTab === 'usage' && meeting.usage) {
-            textToCopy = meeting.usage.map(u => `Q: ${u.question || ''}\nA: ${u.answer || ''}`).join('\n\n');
+            textToCopy = meeting.usage.map(u => `Q: ${u.question ? displayUsageQuestion(u.question) : ''}\nA: ${u.answer || ''}`).join('\n\n');
         }
 
         if (!textToCopy) return;
