@@ -65,28 +65,13 @@ function makeSchema(db) {
 }
 
 // Mirrors DatabaseManager.upsertLiveMeetingSnapshot's transaction body
-// (db/DatabaseManager.ts).
+// (db/DatabaseManager.ts) — the id-preserving child rewrite.
 function upsertLiveMeetingSnapshot(db, meetingId, transcript, usage) {
-  const deleteTranscripts = db.prepare(`DELETE FROM transcripts WHERE meeting_id = ?`);
-  const deleteInteractions = db.prepare(`DELETE FROM ai_interactions WHERE meeting_id = ?`);
-  const insertTranscript = db.prepare(`
-    INSERT INTO transcripts (meeting_id, speaker, content, timestamp_ms)
-    VALUES (?, ?, ?, ?)
-  `);
-  const insertInteraction = db.prepare(`
-    INSERT INTO ai_interactions (meeting_id, type, timestamp, user_query, ai_response, metadata_json)
-    VALUES (?, ?, ?, ?, ?, ?)
-  `);
   db.transaction(() => {
-    deleteTranscripts.run(meetingId);
-    if (transcript) {
-      for (const segment of transcript) {
-        insertTranscript.run(meetingId, segment.speaker, segment.text, segment.timestamp);
-      }
-    }
-    deleteInteractions.run(meetingId);
-    if (usage) {
-      for (const entry of usage) {
+    rewriteChildren(
+      db, meetingId,
+      (transcript || []).map((segment) => ({ speaker: segment.speaker ?? null, text: segment.text ?? null, timestamp: segment.timestamp })),
+      (usage || []).map((entry) => {
         let metadata = null;
         if (Array.isArray(entry.items)) {
           metadata = JSON.stringify(entry.items);
@@ -95,10 +80,50 @@ function upsertLiveMeetingSnapshot(db, meetingId, transcript, usage) {
         }
         const answerText = Array.isArray(entry.answer) ? null : (entry.answer || null);
         const queryText = entry.question || null;
-        insertInteraction.run(meetingId, entry.type || 'chat', entry.timestamp || Date.now(), queryText, answerText, metadata);
-      }
-    }
+        return { type: entry.type || 'chat', timestamp: entry.timestamp || Date.now(), userQuery: queryText, aiResponse: answerText, metadata };
+      }),
+    );
   })();
+}
+
+// Mirrors DatabaseManager.rewriteMeetingChildren (id-preserving diff upsert).
+function rewriteChildren(db, meetingId, transcript, interactions) {
+  const selT = db.prepare('SELECT id, timestamp_ms, speaker, content FROM transcripts WHERE meeting_id = ?');
+  const updT = db.prepare('UPDATE transcripts SET speaker = ?, content = ? WHERE id = ?');
+  const insT = db.prepare('INSERT INTO transcripts (meeting_id, speaker, content, timestamp_ms) VALUES (?, ?, ?, ?)');
+  const delT = db.prepare('DELETE FROM transcripts WHERE id = ?');
+  const selI = db.prepare('SELECT id, timestamp, type, user_query, ai_response, metadata_json FROM ai_interactions WHERE meeting_id = ?');
+  const updI = db.prepare('UPDATE ai_interactions SET type = ?, user_query = ?, ai_response = ?, metadata_json = ? WHERE id = ?');
+  const insI = db.prepare('INSERT INTO ai_interactions (meeting_id, type, timestamp, user_query, ai_response, metadata_json) VALUES (?, ?, ?, ?, ?, ?)');
+  const delI = db.prepare('DELETE FROM ai_interactions WHERE id = ?');
+
+  const tMap = new Map();
+  for (const r of selT.all(meetingId)) tMap.set(r.timestamp_ms, { id: r.id, speaker: r.speaker, content: r.content });
+  const seenT = new Set();
+  for (const seg of transcript) {
+    seenT.add(seg.timestamp);
+    const ex = tMap.get(seg.timestamp);
+    if (ex) {
+      if (ex.speaker !== seg.speaker || ex.content !== seg.text) updT.run(seg.speaker, seg.text, ex.id);
+    } else {
+      insT.run(meetingId, seg.speaker, seg.text, seg.timestamp);
+    }
+  }
+  for (const [ts, ex] of tMap) if (!seenT.has(ts)) delT.run(ex.id);
+
+  const iMap = new Map();
+  for (const r of selI.all(meetingId)) iMap.set(r.timestamp, { id: r.id, type: r.type, userQuery: r.user_query, aiResponse: r.ai_response, metadata: r.metadata_json });
+  const seenI = new Set();
+  for (const e of interactions) {
+    seenI.add(e.timestamp);
+    const ex = iMap.get(e.timestamp);
+    if (ex) {
+      if (ex.type !== e.type || ex.userQuery !== e.userQuery || ex.aiResponse !== e.aiResponse || ex.metadata !== e.metadata) updI.run(e.type, e.userQuery, e.aiResponse, e.metadata, ex.id);
+    } else {
+      insI.run(meetingId, e.type, e.timestamp, e.userQuery, e.aiResponse, e.metadata);
+    }
+  }
+  for (const [ts, ex] of iMap) if (!seenI.has(ts)) delI.run(ex.id);
 }
 
 // Mirrors DatabaseManager.adoptOrphanedLiveMeetings (db/DatabaseManager.ts).
@@ -224,7 +249,8 @@ describe('live meeting note source guard (compiled DatabaseManager has the v31 s
     assert.match(src, /upsertLiveMeetingSnapshot/, 'must export the live flush method');
     assert.match(src, /adoptOrphanedLiveMeetings/, 'must export the orphan adoption method');
     assert.match(src, /getLiveMeetings/, 'must export the live-row query');
-    assert.match(src, /DELETE FROM transcripts WHERE meeting_id = \?/, 'flush must clear children before re-insert (idempotency)');
+    assert.match(src, /rewriteMeetingChildren/, 'flush must use the id-preserving child rewrite (idempotency without id churn)');
+    assert.doesNotMatch(src, /DELETE FROM transcripts WHERE meeting_id = \?/, 'must NOT bulk-delete transcripts by meeting_id (id churn → tombstone churn)');
   });
 
   test('the transient JIT scaffold row is excluded from history + recovery', () => {

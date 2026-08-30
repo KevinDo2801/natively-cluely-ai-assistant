@@ -65,23 +65,15 @@ function makeSchema(db) {
 }
 
 // Mirrors DatabaseManager.saveMeeting's transaction body, INCLUDING the
-// DELETE-first idempotency fix under test (db/DatabaseManager.ts).
+// id-preserving child rewrite (rewriteMeetingChildren, db/DatabaseManager.ts)
+// that replaced the old DELETE-all + re-insert approach (which churned
+// autoincrement ids and, with the v33 tombstone trigger, generated ~250k
+// tombstones during a long live meeting).
 function saveMeeting(db, meeting, startTimeMs, durationMs) {
   const insertMeeting = db.prepare(`
     INSERT OR REPLACE INTO meetings (id, title, start_time, duration_ms, summary_json, created_at, calendar_event_id, source, is_processed, summary_status, is_live)
     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
   `);
-  const insertTranscript = db.prepare(`
-    INSERT INTO transcripts (meeting_id, speaker, content, timestamp_ms)
-    VALUES (?, ?, ?, ?)
-  `);
-  const insertInteraction = db.prepare(`
-    INSERT INTO ai_interactions (meeting_id, type, timestamp, user_query, ai_response, metadata_json)
-    VALUES (?, ?, ?, ?, ?, ?)
-  `);
-  const deleteTranscripts = db.prepare(`DELETE FROM transcripts WHERE meeting_id = ?`);
-  const deleteInteractions = db.prepare(`DELETE FROM ai_interactions WHERE meeting_id = ?`);
-
   const summaryJson = JSON.stringify({ legacySummary: meeting.summary, detailedSummary: meeting.detailedSummary });
 
   const tx = db.transaction(() => {
@@ -92,21 +84,59 @@ function saveMeeting(db, meeting, startTimeMs, durationMs) {
       meeting.summaryStatus || (meeting.isProcessed ? 'completed' : 'queued'),
       meeting.isLive ? 1 : 0,
     );
-    deleteTranscripts.run(meeting.id);
-    if (meeting.transcript) {
-      for (const seg of meeting.transcript) {
-        insertTranscript.run(meeting.id, seg.speaker, seg.text, seg.timestamp);
-      }
-    }
-    deleteInteractions.run(meeting.id);
-    if (meeting.usage) {
-      for (const u of meeting.usage) {
-        const answerText = Array.isArray(u.answer) ? null : (u.answer || null);
-        insertInteraction.run(meeting.id, u.type, u.timestamp, u.question || null, answerText, u.items ? JSON.stringify(u.items) : null);
-      }
-    }
+    rewriteChildren(
+      db, meeting.id,
+      (meeting.transcript || []).map((seg) => ({ speaker: seg.speaker ?? null, text: seg.text ?? null, timestamp: seg.timestamp })),
+      (meeting.usage || []).map((u) => ({
+        type: u.type,
+        timestamp: u.timestamp,
+        userQuery: u.question || null,
+        aiResponse: Array.isArray(u.answer) ? null : (u.answer || null),
+        metadata: u.items ? JSON.stringify(u.items) : null,
+      })),
+    );
   });
   tx();
+}
+
+// Mirrors DatabaseManager.rewriteMeetingChildren (id-preserving diff upsert).
+function rewriteChildren(db, meetingId, transcript, interactions) {
+  const selT = db.prepare('SELECT id, timestamp_ms, speaker, content FROM transcripts WHERE meeting_id = ?');
+  const updT = db.prepare('UPDATE transcripts SET speaker = ?, content = ? WHERE id = ?');
+  const insT = db.prepare('INSERT INTO transcripts (meeting_id, speaker, content, timestamp_ms) VALUES (?, ?, ?, ?)');
+  const delT = db.prepare('DELETE FROM transcripts WHERE id = ?');
+  const selI = db.prepare('SELECT id, timestamp, type, user_query, ai_response, metadata_json FROM ai_interactions WHERE meeting_id = ?');
+  const updI = db.prepare('UPDATE ai_interactions SET type = ?, user_query = ?, ai_response = ?, metadata_json = ? WHERE id = ?');
+  const insI = db.prepare('INSERT INTO ai_interactions (meeting_id, type, timestamp, user_query, ai_response, metadata_json) VALUES (?, ?, ?, ?, ?, ?)');
+  const delI = db.prepare('DELETE FROM ai_interactions WHERE id = ?');
+
+  const tMap = new Map();
+  for (const r of selT.all(meetingId)) tMap.set(r.timestamp_ms, { id: r.id, speaker: r.speaker, content: r.content });
+  const seenT = new Set();
+  for (const seg of transcript) {
+    seenT.add(seg.timestamp);
+    const ex = tMap.get(seg.timestamp);
+    if (ex) {
+      if (ex.speaker !== seg.speaker || ex.content !== seg.text) updT.run(seg.speaker, seg.text, ex.id);
+    } else {
+      insT.run(meetingId, seg.speaker, seg.text, seg.timestamp);
+    }
+  }
+  for (const [ts, ex] of tMap) if (!seenT.has(ts)) delT.run(ex.id);
+
+  const iMap = new Map();
+  for (const r of selI.all(meetingId)) iMap.set(r.timestamp, { id: r.id, type: r.type, userQuery: r.user_query, aiResponse: r.ai_response, metadata: r.metadata_json });
+  const seenI = new Set();
+  for (const e of interactions) {
+    seenI.add(e.timestamp);
+    const ex = iMap.get(e.timestamp);
+    if (ex) {
+      if (ex.type !== e.type || ex.userQuery !== e.userQuery || ex.aiResponse !== e.aiResponse || ex.metadata !== e.metadata) updI.run(e.type, e.userQuery, e.aiResponse, e.metadata, ex.id);
+    } else {
+      insI.run(meetingId, e.type, e.timestamp, e.userQuery, e.aiResponse, e.metadata);
+    }
+  }
+  for (const [ts, ex] of iMap) if (!seenI.has(ts)) delI.run(ex.id);
 }
 
 const placeholder = {
@@ -190,12 +220,14 @@ describe('saveMeeting idempotency (audit finding #1)', () => {
   });
 });
 
-describe('saveMeeting source guard (compiled code has the DELETE-first fix)', () => {
-  test('compiled DatabaseManager clears children before inserting them', () => {
+describe('saveMeeting source guard (compiled code uses the id-preserving child rewrite)', () => {
+  test('compiled DatabaseManager rewrites children without churning ids/tombstones', () => {
     const compiled = path.resolve(__dirname, '../../../dist-electron/electron/db/DatabaseManager.js');
     assert.ok(fs.existsSync(compiled), `compiled DatabaseManager.js missing — run build:electron (${compiled})`);
     const src = fs.readFileSync(compiled, 'utf8');
-    assert.match(src, /DELETE FROM transcripts WHERE meeting_id/, 'must delete transcripts before re-insert');
-    assert.match(src, /DELETE FROM ai_interactions WHERE meeting_id/, 'must delete ai_interactions before re-insert');
+    assert.match(src, /rewriteMeetingChildren/, 'must use the id-preserving child rewrite');
+    assert.match(src, /DELETE FROM transcripts WHERE id = \?/, 'must delete stale transcripts by id (not meeting_id)');
+    assert.doesNotMatch(src, /DELETE FROM transcripts WHERE meeting_id = \?/, 'must NOT bulk-delete transcripts by meeting_id (id churn → tombstone churn)');
+    assert.doesNotMatch(src, /DELETE FROM ai_interactions WHERE meeting_id = \?/, 'must NOT bulk-delete interactions by meeting_id');
   });
 });

@@ -604,36 +604,47 @@ async function applyToCloud(client, def, userId, actions, batchSize, onProgress)
     failed.push(...res.failed);
   }
 
-  for (const d of actions.pushDeletes) {
+  // Batch row deletions by PK list instead of one request per row.
+  for (let i = 0; i < actions.pushDeletes.length; i += batchSize) {
+    const keys = actions.pushDeletes.slice(i, i + batchSize).map((d) => d.pkValue);
     const { error } = await client
       .from(table)
       .delete()
-      .eq(pk, d.pkValue)
+      .in(pk, keys)
       .eq('user_id', userId)
       .abortSignal(requestTimeoutSignal());
-    if (error) failed.push({ id: d.key, error: `delete: ${error.message}` });
+    if (error) failed.push({ id: `del:${table}:${i}`, error: `delete: ${error.message}` });
   }
 
-  for (const t of actions.tombPush) {
+  // Batch tombstone upserts — one request per batch, not per row. A single
+  // device can accumulate hundreds of thousands of tombstones during a live
+  // meeting (segments are rewritten and re-deleted); the old per-row loop
+  // made that backlog un-pushable within any sane timeout.
+  for (let i = 0; i < actions.tombPush.length; i += batchSize) {
+    const batch = actions.tombPush.slice(i, i + batchSize).map((t) => ({
+      user_id: userId,
+      table_name: t.table,
+      row_id: t.rowId,
+      deleted_at: toIso(t.deletedAtMs),
+    }));
     const { error } = await client
       .from('sync_tombstones')
-      .upsert(
-        { user_id: userId, table_name: t.table, row_id: t.rowId, deleted_at: toIso(t.deletedAtMs) },
-        { onConflict: 'user_id,table_name,row_id' }
-      )
+      .upsert(batch, { onConflict: 'user_id,table_name,row_id' })
       .abortSignal(requestTimeoutSignal());
-    if (error) failed.push({ id: `tomb:${t.table}:${t.rowId}`, error: `tombstone: ${error.message}` });
+    if (error) failed.push({ id: `tomb:${table}:${i}`, error: `tombstone batch: ${error.message}` });
   }
 
-  for (const key of actions.tombCloudClear) {
+  // Batch tombstone clears (revivals) by row_id list instead of one per key.
+  for (let i = 0; i < actions.tombCloudClear.length; i += batchSize) {
+    const keys = actions.tombCloudClear.slice(i, i + batchSize);
     const { error } = await client
       .from('sync_tombstones')
       .delete()
       .eq('user_id', userId)
       .eq('table_name', table)
-      .eq('row_id', key)
+      .in('row_id', keys)
       .abortSignal(requestTimeoutSignal());
-    if (error) failed.push({ id: `tombClear:${table}:${key}`, error: `tombstone clear: ${error.message}` });
+    if (error) failed.push({ id: `tombClear:${table}:${i}`, error: `tombstone clear: ${error.message}` });
   }
 
   return { upserted, failed };

@@ -6620,9 +6620,11 @@ export class AppState {
       // MEETING CONTINUE (v33): a resumed meeting reuses an id that may already
       // hold RAG chunks from the prior session. Re-indexing the combined
       // transcript without clearing first would append duplicate chunks +
-      // embeddings for the old audio, so drop the meeting's prior RAG data
-      // (a no-op for a freshly-minted id).
-      this.ragManager.deleteMeetingData(meetingId);
+      // embeddings for the old audio, so reset the meeting's prior RAG data
+      // (a no-op for a freshly-minted id). keepRows preserves chunk ids across
+      // the re-index so the v33 tombstone trigger does not record one tombstone
+      // per chunk.
+      this.ragManager.deleteMeetingData(meetingId, { keepRows: true });
 
       const result = await this.ragManager.processMeeting(meeting.id, segments, summary);
       console.log(`[AppState] RAG processed meeting ${meeting.id}: ${result.chunkCount} chunks`);

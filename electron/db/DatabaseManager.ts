@@ -1534,6 +1534,88 @@ export class DatabaseManager {
         return this.resolvedExtPath;
     }
 
+    /**
+     * Persist a meeting's child rows (transcripts + ai_interactions) idempotently
+     * WITHOUT churning their autoincrement ids.
+     *
+     * The previous implementation DELETEd all children for the meeting and
+     * re-INSERTed them, assigning a fresh autoincrement id to every row on every
+     * call. With the v33 tombstone DELETE trigger, each rewrite recorded a
+     * tombstone for every OLD id (the re-insert's new id never cleared it), so a
+     * live-meeting flush every LIVE_NOTE_FLUSH_MS accumulated one tombstone per
+     * segment per flush — ~250k over a long meeting — which the sync loop could
+     * not push through (the 2026-08-30 "12 table errors" incident).
+     *
+     * Rows are now keyed by their stable, per-meeting-unique `timestamp` (verified:
+     * distinct == total for both tables): unchanged rows keep their id and are
+     * skipped entirely (no updated_at/tombstone churn), new rows get a fresh id,
+     * and rows absent from the snapshot are deleted — a genuine deletion whose
+     * tombstone still propagates to the cloud. Callers pre-normalize the values;
+     * this method only owns the id-preserving reconcile.
+     *
+     * MUST be called inside a surrounding db.transaction() (both callers do).
+     */
+    private rewriteMeetingChildren(
+        meetingId: string,
+        transcript: Array<{ speaker: string | null; text: string | null; timestamp: number }>,
+        interactions: Array<{ type: string; timestamp: number; userQuery: string | null; aiResponse: string | null; metadata: string | null }>,
+    ): void {
+        const db = this.db;
+        if (!db) return;
+
+        const selT = db.prepare(`SELECT id, timestamp_ms, speaker, content FROM transcripts WHERE meeting_id = ?`);
+        const updT = db.prepare(`UPDATE transcripts SET speaker = ?, content = ? WHERE id = ?`);
+        const insT = db.prepare(`INSERT INTO transcripts (meeting_id, speaker, content, timestamp_ms) VALUES (?, ?, ?, ?)`);
+        const delT = db.prepare(`DELETE FROM transcripts WHERE id = ?`);
+
+        const selI = db.prepare(`SELECT id, timestamp, type, user_query, ai_response, metadata_json FROM ai_interactions WHERE meeting_id = ?`);
+        const updI = db.prepare(`UPDATE ai_interactions SET type = ?, user_query = ?, ai_response = ?, metadata_json = ? WHERE id = ?`);
+        const insI = db.prepare(`INSERT INTO ai_interactions (meeting_id, type, timestamp, user_query, ai_response, metadata_json) VALUES (?, ?, ?, ?, ?, ?)`);
+        const delI = db.prepare(`DELETE FROM ai_interactions WHERE id = ?`);
+
+        // Transcripts — keyed by timestamp_ms (stable + unique per meeting).
+        const tMap = new Map<number, { id: number; speaker: string | null; content: string | null }>();
+        for (const r of selT.all(meetingId) as Array<{ id: number; timestamp_ms: number; speaker: string | null; content: string | null }>) {
+            tMap.set(r.timestamp_ms, { id: r.id, speaker: r.speaker, content: r.content });
+        }
+        const seenT = new Set<number>();
+        for (const seg of transcript) {
+            seenT.add(seg.timestamp);
+            const existing = tMap.get(seg.timestamp);
+            if (existing) {
+                if (existing.speaker !== seg.speaker || existing.content !== seg.text) {
+                    updT.run(seg.speaker, seg.text, existing.id);
+                }
+            } else {
+                insT.run(meetingId, seg.speaker, seg.text, seg.timestamp);
+            }
+        }
+        for (const [ts, existing] of tMap) {
+            if (!seenT.has(ts)) delT.run(existing.id);
+        }
+
+        // Interactions — keyed by timestamp (stable + unique per meeting).
+        const iMap = new Map<number, { id: number; type: string; userQuery: string | null; aiResponse: string | null; metadata: string | null }>();
+        for (const r of selI.all(meetingId) as Array<{ id: number; timestamp: number; type: string; user_query: string | null; ai_response: string | null; metadata_json: string | null }>) {
+            iMap.set(r.timestamp, { id: r.id, type: r.type, userQuery: r.user_query, aiResponse: r.ai_response, metadata: r.metadata_json });
+        }
+        const seenI = new Set<number>();
+        for (const e of interactions) {
+            seenI.add(e.timestamp);
+            const existing = iMap.get(e.timestamp);
+            if (existing) {
+                if (existing.type !== e.type || existing.userQuery !== e.userQuery || existing.aiResponse !== e.aiResponse || existing.metadata !== e.metadata) {
+                    updI.run(e.type, e.userQuery, e.aiResponse, e.metadata, existing.id);
+                }
+            } else {
+                insI.run(meetingId, e.type, e.timestamp, e.userQuery, e.aiResponse, e.metadata);
+            }
+        }
+        for (const [ts, existing] of iMap) {
+            if (!seenI.has(ts)) delI.run(existing.id);
+        }
+    }
+
     public saveMeeting(meeting: Meeting, startTimeMs: number, durationMs: number) {
         if (!this.db) {
             console.error('[DatabaseManager] DB not initialized');
@@ -1554,27 +1636,6 @@ export class DatabaseManager {
         // re-save) must NOT drop the folder assignment — the folder_id of the
         // existing row wins unless the caller explicitly supplies one.
         const readUserTitle = this.db.prepare(`SELECT title, COALESCE(user_titled, 0) AS user_titled, folder_id FROM meetings WHERE id = ?`);
-
-        const insertTranscript = this.db.prepare(`
-            INSERT INTO transcripts (meeting_id, speaker, content, timestamp_ms)
-            VALUES (?, ?, ?, ?)
-        `);
-
-        const insertInteraction = this.db.prepare(`
-            INSERT INTO ai_interactions (meeting_id, type, timestamp, user_query, ai_response, metadata_json)
-            VALUES (?, ?, ?, ?, ?, ?)
-        `);
-
-        // Idempotency: the meetings row uses INSERT OR REPLACE, but transcripts
-        // and ai_interactions are append-only with autoincrement ids, so a second
-        // saveMeeting() for the same id (the normal flow: stopMeeting writes a
-        // placeholder snapshot, then processAndSaveMeeting writes the final one —
-        // see MeetingPersistence) would APPEND a duplicate copy of every child
-        // row. Recovery re-saves and RAG reprocessing would then read doubled
-        // transcripts. Clearing the existing children inside the same transaction
-        // before re-inserting makes saveMeeting idempotent for a given meeting id.
-        const deleteTranscripts = this.db.prepare(`DELETE FROM transcripts WHERE meeting_id = ?`);
-        const deleteInteractions = this.db.prepare(`DELETE FROM ai_interactions WHERE meeting_id = ?`);
 
         const summaryJson = JSON.stringify({
             legacySummary: meeting.summary,
@@ -1606,26 +1667,20 @@ export class DatabaseManager {
                 folderId
             );
 
-            // 2. Insert Transcript
-            // Clear any prior child rows for this meeting first so re-saving the
-            // same meeting id (placeholder → final) does not duplicate them.
-            deleteTranscripts.run(meeting.id);
-            if (meeting.transcript) {
-                for (const segment of meeting.transcript) {
-                    insertTranscript.run(
-                        meeting.id,
-                        segment.speaker,
-                        segment.text,
-                        segment.timestamp
-                    );
-                }
-            }
-
-            // 3. Insert Interactions
-            deleteInteractions.run(meeting.id);
-            if (meeting.usage) {
-                for (const usage of meeting.usage) {
-                    let metadata = null;
+            // 2+3. Child rows (transcripts + interactions) — id-preserving diff
+            // upsert. The old delete-all + re-insert churned autoincrement ids and,
+            // with the v33 tombstone trigger, generated one tombstone per segment per
+            // flush (~250k over a long live meeting) that the sync loop could not push
+            // through. See rewriteMeetingChildren.
+            this.rewriteMeetingChildren(
+                meeting.id,
+                (meeting.transcript || []).map((segment) => ({
+                    speaker: segment.speaker ?? null,
+                    text: segment.text ?? null,
+                    timestamp: segment.timestamp,
+                })),
+                (meeting.usage || []).map((usage) => {
+                    let metadata: string | null = null;
                     if (usage.items) {
                         metadata = JSON.stringify(usage.items);
                     } else if (usage.type === 'followup_questions' && usage.answer) {
@@ -1636,21 +1691,17 @@ export class DatabaseManager {
                             metadata = JSON.stringify(usage.answer);
                         }
                     }
-
-                    // Normalization
-                    const answerText = Array.isArray(usage.answer) ? null : usage.answer || null;
+                    const answerText = Array.isArray(usage.answer) ? null : (usage.answer || null);
                     const queryText = usage.question || null;
-
-                    insertInteraction.run(
-                        meeting.id,
-                        usage.type,
-                        usage.timestamp,
-                        queryText,
-                        answerText,
-                        metadata
-                    );
-                }
-            }
+                    return {
+                        type: usage.type,
+                        timestamp: usage.timestamp,
+                        userQuery: queryText,
+                        aiResponse: answerText,
+                        metadata,
+                    };
+                }),
+            );
         });
 
         try {
@@ -2147,27 +2198,20 @@ export class DatabaseManager {
     public upsertLiveMeetingSnapshot(meetingId: string, transcript: Array<{ speaker: string; text: string; timestamp: number }>, usage: any[]): boolean {
         if (!this.db) return false;
         try {
-            const deleteTranscripts = this.db.prepare(`DELETE FROM transcripts WHERE meeting_id = ?`);
-            const deleteInteractions = this.db.prepare(`DELETE FROM ai_interactions WHERE meeting_id = ?`);
-            const insertTranscript = this.db.prepare(`
-                INSERT INTO transcripts (meeting_id, speaker, content, timestamp_ms)
-                VALUES (?, ?, ?, ?)
-            `);
-            const insertInteraction = this.db.prepare(`
-                INSERT INTO ai_interactions (meeting_id, type, timestamp, user_query, ai_response, metadata_json)
-                VALUES (?, ?, ?, ?, ?, ?)
-            `);
             this.db.transaction(() => {
-                deleteTranscripts.run(meetingId);
-                if (transcript) {
-                    for (const segment of transcript) {
-                        insertTranscript.run(meetingId, segment.speaker, segment.text, segment.timestamp);
-                    }
-                }
-                deleteInteractions.run(meetingId);
-                if (usage) {
-                    for (const entry of usage) {
-                        let metadata = null;
+                // Id-preserving diff upsert — the old delete-all + re-insert churned
+                // autoincrement ids and, with the v33 tombstone trigger, generated one
+                // tombstone per segment per flush (~250k over a long live meeting).
+                // See rewriteMeetingChildren.
+                this.rewriteMeetingChildren(
+                    meetingId,
+                    (transcript || []).map((segment) => ({
+                        speaker: segment.speaker ?? null,
+                        text: segment.text ?? null,
+                        timestamp: segment.timestamp,
+                    })),
+                    (usage || []).map((entry) => {
+                        let metadata: string | null = null;
                         if (Array.isArray(entry.items)) {
                             metadata = JSON.stringify(entry.items);
                         } else if (entry.type === 'followup_questions' && Array.isArray(entry.answer)) {
@@ -2175,9 +2219,15 @@ export class DatabaseManager {
                         }
                         const answerText = Array.isArray(entry.answer) ? null : (entry.answer || null);
                         const queryText = entry.question || null;
-                        insertInteraction.run(meetingId, entry.type || 'chat', entry.timestamp || Date.now(), queryText, answerText, metadata);
-                    }
-                }
+                        return {
+                            type: entry.type || 'chat',
+                            timestamp: entry.timestamp || Date.now(),
+                            userQuery: queryText,
+                            aiResponse: answerText,
+                            metadata,
+                        };
+                    }),
+                );
             })();
             return true;
         } catch (e) {

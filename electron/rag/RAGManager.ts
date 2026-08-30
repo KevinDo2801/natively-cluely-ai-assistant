@@ -472,7 +472,7 @@ export class RAGManager {
     /**
      * Delete RAG data for a meeting
      */
-    deleteMeetingData(meetingId: string): void {
+    deleteMeetingData(meetingId: string, opts?: { keepRows?: boolean }): void {
         // Shutdown guard: RAGManager holds a RAW better-sqlite3 handle
         // (`this.db = config.db`), so after the fatal path's
         // closeWithoutCheckpoint() this reference is a closed connection and
@@ -492,7 +492,7 @@ export class RAGManager {
         }
 
         // 1. Delete from vector store (chunks and summaries)
-        this.vectorStore.deleteChunksForMeeting(meetingId);
+        this.vectorStore.deleteChunksForMeeting(meetingId, opts);
         
         // 2. Clear embedding queue for this meeting to prevent "Chunk not found" errors on re-processing
         try {
@@ -530,8 +530,10 @@ export class RAGManager {
         console.log(`[RAGManager] Reprocessing meeting ${meetingId}`);
 
         try {
-            // delete existing RAG data first to avoid duplicates
-            this.deleteMeetingData(meetingId);
+            // Reset existing RAG data first (embeddings + queue) but keep the chunk
+            // rows so the id-preserving saveChunks re-uses their ids instead of
+            // churning them (which recorded a tombstone per chunk per reprocess).
+            this.deleteMeetingData(meetingId, { keepRows: true });
 
             // Fetch meeting details from DB
             const { DatabaseManager } = require('../db/DatabaseManager');

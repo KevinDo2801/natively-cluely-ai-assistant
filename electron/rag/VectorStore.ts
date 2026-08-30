@@ -114,29 +114,56 @@ export class VectorStore {
      * Save chunks to database (without embeddings)
      */
     saveChunks(chunks: Chunk[]): number[] {
+        const select = this.db.prepare(`SELECT id, chunk_index FROM chunks WHERE meeting_id = ?`);
+        const update = this.db.prepare(`
+            UPDATE chunks SET speaker = ?, start_timestamp_ms = ?, end_timestamp_ms = ?, cleaned_text = ?, token_count = ?
+            WHERE id = ?
+        `);
         const insert = this.db.prepare(`
             INSERT INTO chunks (meeting_id, chunk_index, speaker, start_timestamp_ms, end_timestamp_ms, cleaned_text, token_count)
             VALUES (?, ?, ?, ?, ?, ?, ?)
         `);
+        const deleteStale = this.db.prepare(`DELETE FROM chunks WHERE id = ?`);
 
         const ids: number[] = [];
 
-        const insertAll = this.db.transaction(() => {
+        const run = this.db.transaction(() => {
+            // Group by meeting id so stale-row deletion is scoped per meeting.
+            const byMeeting = new Map<string, Chunk[]>();
             for (const chunk of chunks) {
-                const result = insert.run(
-                    chunk.meetingId,
-                    chunk.chunkIndex,
-                    chunk.speaker,
-                    chunk.startMs,
-                    chunk.endMs,
-                    chunk.text,
-                    chunk.tokenCount
-                );
-                ids.push(result.lastInsertRowid as number);
+                const list = byMeeting.get(chunk.meetingId);
+                if (list) list.push(chunk);
+                else byMeeting.set(chunk.meetingId, [chunk]);
+            }
+
+            for (const [meetingId, list] of byMeeting) {
+                // Id-preserving upsert keyed by (meeting_id, chunk_index): unchanged
+                // chunks keep their id. The old delete-all + re-insert churned ids and,
+                // with the v33 tombstone trigger, recorded one tombstone per chunk per
+                // reprocess.
+                const idByIndex = new Map<number, number>();
+                for (const r of select.all(meetingId) as Array<{ id: number; chunk_index: number }>) {
+                    idByIndex.set(r.chunk_index, r.id);
+                }
+                const seen = new Set<number>();
+                for (const chunk of list) {
+                    seen.add(chunk.chunkIndex);
+                    const existingId = idByIndex.get(chunk.chunkIndex);
+                    if (existingId !== undefined) {
+                        update.run(chunk.speaker, chunk.startMs, chunk.endMs, chunk.text, chunk.tokenCount, existingId);
+                        ids.push(existingId);
+                    } else {
+                        const result = insert.run(chunk.meetingId, chunk.chunkIndex, chunk.speaker, chunk.startMs, chunk.endMs, chunk.text, chunk.tokenCount);
+                        ids.push(result.lastInsertRowid as number);
+                    }
+                }
+                for (const [index, id] of idByIndex) {
+                    if (!seen.has(index)) deleteStale.run(id);
+                }
             }
         });
 
-        insertAll();
+        run();
         return ids;
     }
 
@@ -331,7 +358,7 @@ export class VectorStore {
     /**
      * Delete all chunks for a meeting (removes from all tracked dimension tables)
      */
-    deleteChunksForMeeting(meetingId: string): void {
+    deleteChunksForMeeting(meetingId: string, opts?: { keepRows?: boolean }): void {
         if (!this.isDatabaseUsable()) {
             console.warn(
                 `[VectorStore] deleteChunksForMeeting(${meetingId}): database is closed — skipping. ` +
@@ -363,7 +390,15 @@ export class VectorStore {
             }
         }
 
-        this.db.prepare('DELETE FROM chunks WHERE meeting_id = ?').run(meetingId);
+        if (opts?.keepRows) {
+            // Re-index path: keep the chunk rows so a reprocess re-uses their ids,
+            // and only reset their embeddings for re-embedding. The old DELETE-all
+            // churned ids and, with the v33 tombstone trigger, recorded one tombstone
+            // per chunk per reprocess.
+            this.db.prepare('UPDATE chunks SET embedding = NULL WHERE meeting_id = ?').run(meetingId);
+        } else {
+            this.db.prepare('DELETE FROM chunks WHERE meeting_id = ?').run(meetingId);
+        }
     }
 
     /**
@@ -429,9 +464,13 @@ export class VectorStore {
      * Save or update meeting summary
      */
     saveSummary(meetingId: string, summaryText: string): void {
+        // ON CONFLICT DO UPDATE preserves the row id (meeting_id is UNIQUE); the old
+        // INSERT OR REPLACE deleted the row and re-inserted with a fresh id, which
+        // churned ids and recorded a tombstone per re-save via the v33 trigger.
         this.db.prepare(`
-            INSERT OR REPLACE INTO chunk_summaries (meeting_id, summary_text)
+            INSERT INTO chunk_summaries (meeting_id, summary_text)
             VALUES (?, ?)
+            ON CONFLICT(meeting_id) DO UPDATE SET summary_text = excluded.summary_text, embedding = NULL
         `).run(meetingId, summaryText);
     }
 
