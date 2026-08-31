@@ -9193,7 +9193,22 @@ export function initializeIpcHandlers(appState: AppState): void {
   // ── Supabase cloud sync (local SQLite → Supabase) ─────────────────────────
   const { SupabaseSyncService } = require('./services/SupabaseSyncService');
   const supabaseSync = SupabaseSyncService.getInstance();
-  supabaseSync.on('status', (status: any) => broadcastSupabaseAuthEvent('sync:status', status));
+  supabaseSync.on('status', (status: any) => {
+    broadcastSupabaseAuthEvent('sync:status', status);
+    // Cloud → local changes (rows pulled down or deleted) mutate the local
+    // SQLite cache AFTER the launcher has already fetched its meeting list on
+    // mount, so without this the UI stays stale until a restart. Re-broadcast
+    // the app's own 'meetings-updated' signal so Launcher refetches in place.
+    // Push-only passes are excluded: they changed the cloud, not the rows the
+    // renderer is already showing.
+    if (
+      status?.state === 'ok' &&
+      status.lastCounts &&
+      (status.lastCounts.pulled > 0 || status.lastCounts.deleted > 0)
+    ) {
+      broadcastSupabaseAuthEvent('meetings-updated', null);
+    }
+  });
   // Keep the cloud copy alive exactly while a user is signed in. Sign-in fires
   // 'changed' both live and when a persisted session is restored at launch.
   supabaseAuth.on('changed', (status: any) => {
