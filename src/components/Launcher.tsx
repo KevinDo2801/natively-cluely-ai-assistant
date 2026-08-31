@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { useT } from '../i18n';
-import { ToggleLeft, ToggleRight, Search, Calendar, ArrowRight, ArrowLeft, MoreHorizontal, Globe, Clock, ChevronRight, Settings, LayoutGrid, RefreshCw, Eye, EyeOff, Ghost, Plus, Mail, Link as LinkIcon, ChevronDown, Trash2, Bell, Download, DownloadCloud, CheckCircle, AlertCircle, User, UserSearch, Sparkles, ArrowUpRight, Folder, FolderPlus, FolderOpen, Check, Pencil, X } from 'lucide-react';
+import { ToggleLeft, ToggleRight, Search, Calendar, ArrowRight, ArrowLeft, MoreHorizontal, Globe, Clock, ChevronRight, Settings, LayoutGrid, RefreshCw, Eye, EyeOff, Ghost, Plus, Mail, Link as LinkIcon, ChevronDown, Trash2, Bell, Download, DownloadCloud, CheckCircle, AlertCircle, AudioLines, User, UserSearch, Sparkles, ArrowUpRight, Folder, FolderPlus, FolderOpen, Check, Pencil, X } from 'lucide-react';
 import { generateMeetingPDF } from '../utils/pdfGenerator';
 import icon from "./icon.png";
 import LinkCalendarPrompt from './ui/LinkCalendarPrompt';
@@ -102,6 +102,57 @@ const Launcher: React.FC<LauncherProps> = ({ onStartMeeting, onOpenSettings, onO
     const [isCalendarConnected, setIsCalendarConnected] = useState(false);
     const [isRefreshing, setIsRefreshing] = useState(false);
     const [showNotification, setShowNotification] = useState(false);
+
+    // ── STT language quick-toggle (VI/EN) ─────────────────────────────────
+    // Mirrors the persisted recognition language (Settings → Audio).
+    // 'vi' → 'vietnamese'; 'en' → any English variant (english-us/uk/in/au/ca);
+    // null → anything else (auto, other languages) — no segment highlighted.
+    const [sttLanguage, setSttLanguage] = useState<'vi' | 'en' | null>(null);
+
+    // Cached RECOGNITION_LANGUAGES map (electron/config/languages.ts) so the
+    // toggle can tell English variants apart by their group without re-fetching.
+    const recognitionLangsRef = useRef<Record<string, any> | null>(null);
+
+    // Resolve a persisted STT language key to a toggle segment. Only VI and
+    // the English group map to a segment — 'auto' or any other language shows
+    // NO selection (both buttons unhighlighted).
+    const resolveToggleLang = (key: string): 'vi' | 'en' | null => {
+        if (key === 'vietnamese') return 'vi';
+        const langs = recognitionLangsRef.current;
+        if (langs) return langs[key]?.group === 'English' ? 'en' : null;
+        // Ref not loaded yet — known English keys from electron/config/languages.ts.
+        return ['english-us', 'english-uk', 'english-in', 'english-au', 'english-ca'].includes(key) ? 'en' : null;
+    };
+
+    // Load the persisted STT recognition language once on mount so the toggle
+    // reflects what Settings → Audio currently uses, then keep it in sync via
+    // the 'credentials-changed' broadcast (fired when the language is changed
+    // from Settings or anywhere else).
+    useEffect(() => {
+        let cancelled = false;
+        const syncFromMain = () => {
+            window.electronAPI?.getSttLanguage?.()
+                .then((key: string) => {
+                    if (!cancelled) setSttLanguage(resolveToggleLang(key));
+                })
+                .catch(() => { /* keep current value */ });
+        };
+        (async () => {
+            try {
+                const langs = await window.electronAPI?.getRecognitionLanguages?.();
+                if (!cancelled) recognitionLangsRef.current = langs ?? null;
+            } catch { /* fall back to the known-key list */ }
+            syncFromMain();
+        })();
+        const unsubscribe = window.electronAPI?.onCredentialsChanged?.(syncFromMain);
+        return () => { cancelled = true; unsubscribe?.(); };
+    }, []);
+
+    const handleSttLanguageSelect = (lang: 'vi' | 'en') => {
+        setSttLanguage(lang);
+        window.electronAPI?.setRecognitionLanguage?.(lang === 'vi' ? 'vietnamese' : 'english-us')
+            .catch(() => {});
+    };
 
     // ── Meeting folders (v32) — Google-Drive style organization ──
     const [folders, setFolders] = useState<Folder[]>([]);
@@ -1137,6 +1188,32 @@ const Launcher: React.FC<LauncherProps> = ({ onStartMeeting, onOpenSettings, onO
                                                     </motion.div>
                                                 )}
                                             </AnimatePresence>
+                                        </div>
+
+                                        {/* Language quick-toggle (VI/EN) — left of Start Natively.
+                                            Segmented pill matching the app's status pills. Switches the
+                                            STT recognition language (vietnamese ↔ english-us).
+                                            mr-3 keeps a gap between the pill and the Start Natively CTA. */}
+                                        <div className="flex items-center gap-2 mr-3 shrink-0 select-none" title={t('Language')}>
+                                            <AudioLines size={16} strokeWidth={2} className="text-text-secondary shrink-0" />
+                                            <div className={`flex items-center gap-0.5 border rounded-full p-0.5 transition-colors ${isLight ? 'bg-bg-elevated border-border-muted shadow-sm' : 'bg-[#101011] border-border-muted'}`}>
+                                                <button
+                                                    type="button"
+                                                    aria-pressed={sttLanguage === 'vi'}
+                                                    onClick={() => handleSttLanguageSelect('vi')}
+                                                    className={`px-2.5 py-1 rounded-full text-[11px] font-semibold leading-none transition-all duration-200 cursor-pointer ${sttLanguage === 'vi' ? 'bg-accent-primary text-on-accent shadow-sm' : 'text-text-secondary hover:text-text-primary'}`}
+                                                >
+                                                    VI
+                                                </button>
+                                                <button
+                                                    type="button"
+                                                    aria-pressed={sttLanguage === 'en'}
+                                                    onClick={() => handleSttLanguageSelect('en')}
+                                                    className={`px-2.5 py-1 rounded-full text-[11px] font-semibold leading-none transition-all duration-200 cursor-pointer ${sttLanguage === 'en' ? 'bg-accent-primary text-on-accent shadow-sm' : 'text-text-secondary hover:text-text-primary'}`}
+                                                >
+                                                    EN
+                                                </button>
+                                            </div>
                                         </div>
 
                                         {/* Unified CTA pill — plain <button> (no `layout`, no `initial`) so both

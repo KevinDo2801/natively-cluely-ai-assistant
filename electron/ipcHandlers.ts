@@ -9342,6 +9342,9 @@ export function initializeIpcHandlers(appState: AppState): void {
 
   safeHandle('set-recognition-language', async (_, key: string) => {
     appState.setRecognitionLanguage(key);
+    // Keep every window (launcher quick-toggle, settings dropdown) in sync:
+    // the renderers re-read getSttLanguage() on this event.
+    broadcastCredentialsChanged();
     return { success: true };
   });
 

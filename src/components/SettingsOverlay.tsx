@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useMemo, useRef, useLayoutEffect } from 'react';
+import React, { useState, useEffect, useMemo, useRef, useLayoutEffect, useCallback } from 'react';
 import { useLanguage, useT } from '../i18n';
 import packageJson from '../../package.json';
 import {
@@ -883,61 +883,66 @@ const SettingsOverlay: React.FC<SettingsOverlayProps> = ({
         return () => clearTimeout(timeoutId);
     }, [overlayOpacity]);
 
-    useEffect(() => {
-        const loadLanguages = async () => {
-            if (window.electronAPI?.getRecognitionLanguages) {
-                const langs = await window.electronAPI.getRecognitionLanguages();
-                setAvailableLanguages(langs);
+    // Load recognition + AI response languages. Runs when Settings opens (and
+    // again on credentials-changed while open) so the dropdowns always reflect
+    // the CURRENT persisted values — e.g. a VI/EN quick-toggle in the Launcher
+    // header must show up here the moment Settings is opened.
+    const loadLanguages = useCallback(async () => {
+        if (window.electronAPI?.getRecognitionLanguages) {
+            const langs = await window.electronAPI.getRecognitionLanguages();
+            setAvailableLanguages(langs);
 
-                // Load stored preference or auto-detect
-                const storedStt = await window.electronAPI.getSttLanguage();
-                let currentLangKey = storedStt;
+            // Load stored preference or auto-detect
+            const storedStt = await window.electronAPI.getSttLanguage();
+            let currentLangKey = storedStt;
 
-                if (!currentLangKey) {
-                    const systemLocale = navigator.language;
-                    // Try to find exact match or primary match
-                    const match = Object.entries(langs).find(([_, config]: [string, any]) =>
-                        config.bcp47 === systemLocale ||
-                        config.iso639 === systemLocale ||
-                        (config.alternates && config.alternates.includes(systemLocale))
-                    );
+            if (!currentLangKey) {
+                const systemLocale = navigator.language;
+                // Try to find exact match or primary match
+                const match = Object.entries(langs).find(([_, config]: [string, any]) =>
+                    config.bcp47 === systemLocale ||
+                    config.iso639 === systemLocale ||
+                    (config.alternates && config.alternates.includes(systemLocale))
+                );
 
-                    currentLangKey = match ? match[0] : 'english-us';
+                currentLangKey = match ? match[0] : 'english-us';
 
-                    // Save the auto-detected default
-                    if (window.electronAPI?.setRecognitionLanguage) {
-                        window.electronAPI.setRecognitionLanguage(currentLangKey);
-                    }
-                }
-
-                setRecognitionLanguage(currentLangKey);
-
-                // Initialize Group based on current language
-                if (langs[currentLangKey]) {
-                    setSelectedSttGroup(langs[currentLangKey].group);
-                } else {
-                    setSelectedSttGroup('English');
+                // Save the auto-detected default
+                if (window.electronAPI?.setRecognitionLanguage) {
+                    window.electronAPI.setRecognitionLanguage(currentLangKey);
                 }
             }
 
-            if (window.electronAPI?.getAiResponseLanguages) {
-                const aiLangs = await window.electronAPI.getAiResponseLanguages();
-                // Sort: Auto first, English second, then alphabetical
-                const sortedAiLangs = [...aiLangs].sort((a, b) => {
-                    if (a.code === 'auto') return -1;
-                    if (b.code === 'auto') return 1;
-                    if (a.label === 'English') return -1;
-                    if (b.label === 'English') return 1;
-                    return a.label.localeCompare(b.label);
-                });
-                setAvailableAiLanguages(sortedAiLangs);
+            setRecognitionLanguage(currentLangKey);
 
-                const storedAi = await window.electronAPI.getAiResponseLanguage();
-                setAiResponseLanguage(storedAi || 'auto');
+            // Initialize Group based on current language
+            if (langs[currentLangKey]) {
+                setSelectedSttGroup(langs[currentLangKey].group);
+            } else {
+                setSelectedSttGroup('English');
             }
-        };
-        loadLanguages();
+        }
+
+        if (window.electronAPI?.getAiResponseLanguages) {
+            const aiLangs = await window.electronAPI.getAiResponseLanguages();
+            // Sort: Auto first, English second, then alphabetical
+            const sortedAiLangs = [...aiLangs].sort((a, b) => {
+                if (a.code === 'auto') return -1;
+                if (b.code === 'auto') return 1;
+                if (a.label === 'English') return -1;
+                if (b.label === 'English') return 1;
+                return a.label.localeCompare(b.label);
+            });
+            setAvailableAiLanguages(sortedAiLangs);
+
+            const storedAi = await window.electronAPI.getAiResponseLanguage();
+            setAiResponseLanguage(storedAi || 'auto');
+        }
     }, []);
+
+    useEffect(() => {
+        if (isOpen) loadLanguages();
+    }, [isOpen, loadLanguages]);
 
     // Load per-model language capability whenever the local provider is
     // active. The channel config is ALSO pushed live by LocalWhisperModelPanel
@@ -1242,7 +1247,7 @@ const SettingsOverlay: React.FC<SettingsOverlayProps> = ({
     useEffect(() => {
         if (!window.electronAPI?.onCredentialsChanged) return;
         const unsubscribe = window.electronAPI.onCredentialsChanged(() => {
-            if (isOpen) {
+            if (settingsWasOpenRef.current) {
                 // Re-fetch credentials silently — purely additive, no state reset
                 window.electronAPI?.getStoredCredentials?.().then((creds: any) => {
                     if (!creds) return;
@@ -1257,10 +1262,13 @@ const SettingsOverlay: React.FC<SettingsOverlayProps> = ({
                     setHasStoredIbmWatsonKey(creds.hasIbmWatsonKey);
                     setHasStoredSonioxKey(creds.hasSonioxKey || false);
                 }).catch(() => { /* silently ignore */ });
+                // Recognition/AI-response language may also have changed (e.g. the
+                // Launcher VI/EN quick-toggle) — refresh the dropdowns live.
+                loadLanguages();
             }
         });
         return () => unsubscribe();
-    }, []); // mount-once: isOpen is checked inside the callback
+    }, [loadLanguages]); // mount-once: settingsWasOpenRef is checked inside the callback
 
     const handleSttProviderChange = async (provider: 'none' | 'google' | 'groq' | 'openai' | 'deepgram' | 'elevenlabs' | 'azure' | 'ibmwatson' | 'soniox' | 'nvidia_nim' | 'natively' | 'local-whisper') => {
         setSttProvider(provider);
