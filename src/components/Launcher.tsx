@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { useT } from '../i18n';
-import { ToggleLeft, ToggleRight, Search, Calendar, ArrowRight, ArrowLeft, MoreHorizontal, Globe, Clock, ChevronRight, Settings, LayoutGrid, RefreshCw, Eye, EyeOff, Ghost, Plus, Mail, Link as LinkIcon, ChevronDown, Trash2, Bell, Download, DownloadCloud, CheckCircle, AlertCircle, AudioLines, User, UserSearch, Sparkles, ArrowUpRight, Folder, FolderPlus, FolderOpen, Check, Pencil, X } from 'lucide-react';
+import { ToggleLeft, ToggleRight, Search, Calendar, ArrowRight, ArrowLeft, MoreHorizontal, Globe, Clock, ChevronRight, Settings, LayoutGrid, RefreshCw, Eye, EyeOff, Ghost, Plus, Mail, Link as LinkIcon, ChevronDown, Trash2, Bell, Download, DownloadCloud, CheckCircle, AlertCircle, AudioLines, User, UserSearch, Sparkles, Folder, FolderPlus, FolderOpen, Check, Pencil, X } from 'lucide-react';
 import { generateMeetingPDF } from '../utils/pdfGenerator';
 import icon from "./icon.png";
 import LinkCalendarPrompt from './ui/LinkCalendarPrompt';
@@ -183,7 +183,6 @@ const Launcher: React.FC<LauncherProps> = ({ onStartMeeting, onOpenSettings, onO
 
     const [showModesOnboarding, setShowModesOnboarding] = useState(false);
     const [showProfileOnboarding, setShowProfileOnboarding] = useState(false);
-    const [launchCount, setLaunchCount] = useState<number>(0);
     // StrictMode-safe guard for mount-only side-effects: the dev build
     // intentionally double-invokes effects to surface this class of bug.
     const mountedOnceRef = useRef<boolean>(false);
@@ -281,14 +280,6 @@ const Launcher: React.FC<LauncherProps> = ({ onStartMeeting, onOpenSettings, onO
         } else {
             mountedOnceRef.current = true;
 
-            // Track launch count for showing the "What's New" pill
-            const storedCount = localStorage.getItem('natively_launch_count_v2.7');
-            const currentCount = storedCount ? parseInt(storedCount, 10) : 0;
-            const newCount = currentCount + 1;
-            localStorage.setItem('natively_launch_count_v2.7', newCount.toString());
-            if (mounted) {
-                setLaunchCount(newCount);
-            }
             // Seed demo data if needed (safe to call always — runs ONCE on mount)
             if (window.electronAPI && window.electronAPI.seedDemo) {
                 window.electronAPI.seedDemo().catch(err => console.error("Failed to seed demo:", err));
@@ -1137,21 +1128,6 @@ const Launcher: React.FC<LauncherProps> = ({ onStartMeeting, onOpenSettings, onO
                                                     <span className="t-toggle-thumb" aria-hidden="true" />
                                                 </button>
                                              </div>
-
-                                             {/* What's New Pill */}
-                                             {launchCount < 10 && (
-                                                 <button
-                                                     onClick={() => onOpenSettings('about')}
-                                                     className={`flex items-center gap-1 border rounded-full px-3 py-1.5 transition-all duration-200 cursor-pointer active:scale-95 text-xs font-semibold shrink-0 select-none group ${
-                                                         isLight 
-                                                             ? 'bg-emerald-500/5 hover:bg-emerald-500/10 border-emerald-500/20 text-emerald-600' 
-                                                             : 'bg-emerald-400/10 hover:bg-emerald-400/20 border-emerald-500/20 text-emerald-400'
-                                                     }`}
-                                                 >
-                                                     <span>{t("What's New in 2.8")}</span>
-                                                     <ArrowUpRight size={12} className="group-hover:translate-x-0.5 group-hover:-translate-y-0.5 transition-transform" />
-                                                 </button>
-                                             )}
                                          </div>
                                          {/* Center: Ollama Pull Status Pill (flex-1 to center evenly) */}
                                         <div className="flex-1 flex justify-center mx-4">
