@@ -209,6 +209,8 @@ interface ElectronAPI {
     hasIbmWatsonKey: boolean;
     ibmWatsonRegion: string;
     hasSonioxKey: boolean;
+    hasAssemblyAiKey: boolean;
+    sttAssemblyAiKey?: string;
   }>;
   // Free Trial
   startTrial: () => Promise<{
@@ -264,6 +266,7 @@ interface ElectronAPI {
       | 'azure'
       | 'ibmwatson'
       | 'soniox'
+      | 'assemblyai'
       | 'nvidia_nim'
       | 'natively'
       | 'local-whisper',
@@ -331,10 +334,11 @@ interface ElectronAPI {
   setIbmWatsonApiKey: (apiKey: string) => Promise<{ success: boolean; error?: string }>;
   setGroqSttModel: (model: string) => Promise<{ success: boolean; error?: string }>;
   setSonioxApiKey: (apiKey: string) => Promise<{ success: boolean; error?: string }>;
+  setAssemblyAiApiKey: (apiKey: string) => Promise<{ success: boolean; error?: string }>;
   setNvidiaNimSttModel: (model: string) => Promise<{ success: boolean; error?: string }>;
   setIbmWatsonRegion: (region: string) => Promise<{ success: boolean; error?: string }>;
   testSttConnection: (
-    provider: 'groq' | 'openai' | 'deepgram' | 'elevenlabs' | 'azure' | 'ibmwatson' | 'soniox' | 'nvidia_nim',
+    provider: 'groq' | 'openai' | 'deepgram' | 'elevenlabs' | 'azure' | 'ibmwatson' | 'soniox' | 'assemblyai' | 'nvidia_nim',
     apiKey: string,
     region?: string,
   ) => Promise<{ success: boolean; error?: string }>;
@@ -1484,6 +1488,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
       | 'azure'
       | 'ibmwatson'
       | 'soniox'
+      | 'assemblyai'
       | 'nvidia_nim'
       | 'natively'
       | 'local-whisper',
@@ -1499,10 +1504,11 @@ contextBridge.exposeInMainWorld('electronAPI', {
   setIbmWatsonApiKey: (apiKey: string) => ipcRenderer.invoke('set-ibmwatson-api-key', apiKey),
   setGroqSttModel: (model: string) => ipcRenderer.invoke('set-groq-stt-model', model),
   setSonioxApiKey: (apiKey: string) => ipcRenderer.invoke('set-soniox-api-key', apiKey),
+  setAssemblyAiApiKey: (apiKey: string) => ipcRenderer.invoke('set-assemblyai-api-key', apiKey),
   setNvidiaNimSttModel: (model: string) => ipcRenderer.invoke('set-nvidia-nim-stt-model', model),
   setIbmWatsonRegion: (region: string) => ipcRenderer.invoke('set-ibmwatson-region', region),
   testSttConnection: (
-    provider: 'groq' | 'openai' | 'deepgram' | 'elevenlabs' | 'azure' | 'ibmwatson' | 'soniox' | 'nvidia_nim',
+    provider: 'groq' | 'openai' | 'deepgram' | 'elevenlabs' | 'azure' | 'ibmwatson' | 'soniox' | 'assemblyai' | 'nvidia_nim',
     apiKey: string,
     region?: string,
   ) => ipcRenderer.invoke('test-stt-connection', provider, apiKey, region),

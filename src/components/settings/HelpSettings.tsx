@@ -608,6 +608,7 @@ const MockProviderSelectionAnim = () => {
         { id: 'groq', label: 'Groq Whisper', badge: '', recommended: false, desc: 'Fast LPU whisper transcription', color: 'orange', icon: <Mic size={14} /> },
         { id: 'azure', label: 'Azure Speech', badge: '', recommended: false, desc: 'Enterprise tier transcription', color: 'teal', icon: <Mic size={14} /> },
         { id: 'soniox', label: 'Soniox', badge: '', recommended: false, desc: 'Medical-grade transcription', color: 'cyan', icon: <Mic size={14} /> },
+        { id: 'assemblyai', label: 'AssemblyAI', badge: '', recommended: false, desc: 'Universal-3.5 Pro streaming ASR', color: 'indigo', icon: <Mic size={14} /> },
         { id: 'ibm', label: 'IBM Watson', badge: '', recommended: false, desc: 'Watson Speech-to-Text', color: 'indigo', icon: <Mic size={14} /> },
     ];
     const selected = options[0];
@@ -1075,6 +1076,16 @@ export const HelpSettings: React.FC<{ onNavigate?: (tab: string) => void }> = ({
                                 </h5>
                                 <p className="text-xs opacity-90 leading-relaxed text-text-secondary">
                                     Provides high-end medical/law tier transcriptions using their standard dashboard API Key.
+                                </p>
+                            </div>
+
+                            <div className="p-4 rounded-xl border bg-bg-item-surface border-border-subtle space-y-2">
+                                <h5 className="font-semibold text-sm text-text-primary flex justify-between items-center">
+                                    <span>9. AssemblyAI</span>
+                                    <button onClick={() => { (window as any).electronAPI?.openExternal('https://www.assemblyai.com/dashboard/home') }} className="text-accent-primary hover:underline text-[10px] flex items-center gap-1"><ExternalLink size={10} /> Link</button>
+                                </h5>
+                                <p className="text-xs opacity-90 leading-relaxed text-text-secondary">
+                                    Universal-3.5 Pro real-time transcription. Grab an API key from the AssemblyAI dashboard.
                                 </p>
                             </div>
                         </div>

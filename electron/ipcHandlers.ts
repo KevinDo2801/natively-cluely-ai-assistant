@@ -7788,6 +7788,7 @@ export function initializeIpcHandlers(appState: AppState): void {
         hasIbmWatsonKey: hasKey(creds.ibmWatsonApiKey),
         ibmWatsonRegion: creds.ibmWatsonRegion || 'us-south',
         hasSonioxKey: hasKey(creds.sonioxApiKey),
+        hasAssemblyAiKey: hasKey(creds.assemblyAiApiKey),
         // STT key values — returned so the settings UI can pre-populate input fields.
         // SECURITY FIX (P0): Return masked keys only, never raw API keys.
         // The hasSttGroqKey boolean tells UI if key exists — no raw key needed.
@@ -7798,6 +7799,7 @@ export function initializeIpcHandlers(appState: AppState): void {
         sttAzureKey: creds.azureApiKey ? `sk-...${creds.azureApiKey.slice(-4)}` : '',
         sttIbmKey: creds.ibmWatsonApiKey ? `sk-...${creds.ibmWatsonApiKey.slice(-4)}` : '',
         sttSonioxKey: creds.sonioxApiKey ? `sk-...${creds.sonioxApiKey.slice(-4)}` : '',
+        sttAssemblyAiKey: creds.assemblyAiApiKey ? `sk-...${creds.assemblyAiApiKey.slice(-4)}` : '',
         openAiSttBaseUrl: creds.openAiSttBaseUrl || '',
         hasTavilyKey: hasKey(creds.tavilyApiKey),
         // Dynamic Model Discovery - preferred models
@@ -7837,6 +7839,7 @@ export function initializeIpcHandlers(appState: AppState): void {
         hasIbmWatsonKey: false,
         ibmWatsonRegion: 'us-south',
         hasSonioxKey: false,
+        hasAssemblyAiKey: false,
         hasTavilyKey: false,
         sttGroqKey: '',
         sttOpenaiKey: '',
@@ -7845,6 +7848,7 @@ export function initializeIpcHandlers(appState: AppState): void {
         sttAzureKey: '',
         sttIbmKey: '',
         sttSonioxKey: '',
+        sttAssemblyAiKey: '',
       };
     }
   });
@@ -7933,6 +7937,7 @@ export function initializeIpcHandlers(appState: AppState): void {
         | 'azure'
         | 'ibmwatson'
         | 'soniox'
+        | 'assemblyai'
         | 'nvidia_nim'
         | 'natively'
         | 'local-whisper',
@@ -8185,6 +8190,23 @@ export function initializeIpcHandlers(appState: AppState): void {
     }
   });
 
+  safeHandle('set-assemblyai-api-key', async (_, apiKey: string) => {
+    try {
+      const { CredentialsManager } = require('./services/CredentialsManager');
+      const persisted = CredentialsManager.getInstance().setAssemblyAiApiKey(apiKey);
+      // Reconfigure the active pipeline so a key saved after provider selection
+      // is picked up immediately (mirrors the Soniox handler).
+      await appState.reconfigureSttProvider();
+      BrowserWindow.getAllWindows().forEach((win) => {
+        if (!win.isDestroyed()) win.webContents.send('credentials-changed');
+      });
+      return sttKeyPersistenceWarning(apiKey, persisted) ?? { success: true };
+    } catch (error: any) {
+      console.error('Error saving AssemblyAI API key:', error);
+      return { success: false, error: error.message };
+    }
+  });
+
   safeHandle('set-ibmwatson-region', async (_, region: string) => {
     try {
       // SSRF guard: region is interpolated into the IBM Watson STT hostname
@@ -8224,7 +8246,7 @@ export function initializeIpcHandlers(appState: AppState): void {
     'test-stt-connection',
     async (
       _,
-      provider: 'groq' | 'openai' | 'deepgram' | 'elevenlabs' | 'azure' | 'ibmwatson' | 'soniox' | 'nvidia_nim',
+      provider: 'groq' | 'openai' | 'deepgram' | 'elevenlabs' | 'azure' | 'ibmwatson' | 'soniox' | 'assemblyai' | 'nvidia_nim',
       apiKey: string,
       region?: string,
     ) => {
@@ -8365,6 +8387,76 @@ export function initializeIpcHandlers(appState: AppState): void {
 
             ws.on('close', (code: number) => {
               // Abnormal close before we resolved means the server rejected us
+              if (!resolved && code !== 1000) {
+                done({ success: false, error: `Server closed connection (code ${code})` });
+              }
+            });
+          });
+        }
+
+        if (provider === 'assemblyai') {
+          // Test AssemblyAI via WebSocket connection to the Universal-3.5 Pro
+          // streaming endpoint. A valid key authenticates during the WS upgrade
+          // and the server immediately sends a `Begin` message; an invalid key
+          // yields a handshake failure (HTTP 401 → 'unexpected-response') or an
+          // `Error` message. Success = `Begin` received; anything else = fail.
+          const WebSocket = require('ws');
+          return await new Promise<{ success: boolean; error?: string }>((resolve) => {
+            let resolved = false;
+            const done = (result: { success: boolean; error?: string }) => {
+              if (resolved) return;
+              resolved = true;
+              try {
+                ws.close();
+              } catch {}
+              resolve(result);
+            };
+
+            const params = new URLSearchParams({
+              speech_model: 'universal-3-5-pro',
+              sample_rate: '16000',
+              encoding: 'pcm_s16le',
+            });
+            const ws = new WebSocket(`wss://streaming.assemblyai.com/v3/ws?${params.toString()}`, {
+              headers: { Authorization: apiKey },
+            });
+
+            const connectTimeout = setTimeout(() => {
+              done({ success: false, error: 'Connection timed out' });
+            }, 10000);
+
+            ws.on('open', () => {
+              // Upgrade succeeded; wait for the Begin message to confirm the key.
+            });
+
+            ws.on('message', (msg: any) => {
+              try {
+                const res = JSON.parse(msg.toString());
+                if (res.type === 'Begin') {
+                  clearTimeout(connectTimeout);
+                  done({ success: true });
+                } else if (res.type === 'Error') {
+                  clearTimeout(connectTimeout);
+                  done({ success: false, error: res.message || res.error || 'AssemblyAI rejected the API key' });
+                }
+              } catch {
+                // Unparseable message — ignore and keep waiting for Begin.
+              }
+            });
+
+            ws.on('unexpected-response', (request: any, response: any) => {
+              clearTimeout(connectTimeout);
+              const status = response.statusCode;
+              done({ success: false, error: `Unexpected server response: ${status}` });
+            });
+
+            ws.on('error', (err: any) => {
+              clearTimeout(connectTimeout);
+              done({ success: false, error: err.message || 'Connection failed' });
+            });
+
+            ws.on('close', (code: number) => {
+              // Abnormal close before we resolved means the server rejected us.
               if (!resolved && code !== 1000) {
                 done({ success: false, error: `Server closed connection (code ${code})` });
               }

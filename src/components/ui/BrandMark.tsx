@@ -97,6 +97,10 @@ export const BRAND_MARK_EXEMPT: Record<string, string> = {
     // neither @lobehub/icons-static-svg (MIT) nor simple-icons (CC0). Per the rule
     // in src/assets/provider-logos/README.md, that stays a monogram.
     soniox: 'no licence-compatible mark published',
+    // AssemblyAI: no mark has been vendored into src/assets/provider-logos, so it
+    // renders the two-letter monogram like Soniox. Add a vendored SVG (and move
+    // this id into BRAND_MARKS) if a licence-compatible mark becomes available.
+    assemblyai: 'no vendored mark — renders a monogram',
 };
 
 /** True when the selector should give this row a neutral tile instead of a tint. */

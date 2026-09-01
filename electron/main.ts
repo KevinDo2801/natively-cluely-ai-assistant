@@ -1202,6 +1202,7 @@ import { AutoAnswerController } from "./intelligence/autoAnswer/AutoAnswerContro
 import { createSmartTurnPredictor } from "./intelligence/autoAnswer/AutoAnswerTurnPredictor"
 import type { SpeechEdge } from "./audio/speechEdge"
 import { SonioxStreamingSTT } from "./audio/SonioxStreamingSTT"
+import { AssemblyAIStreamingSTT } from "./audio/AssemblyAIStreamingSTT"
 import { ElevenLabsStreamingSTT } from "./audio/ElevenLabsStreamingSTT"
 import { OpenAIStreamingSTT } from "./audio/OpenAIStreamingSTT"
 import { NativelyProSTT } from "./audio/NativelyProSTT"
@@ -1213,7 +1214,7 @@ import { DatabaseManager } from "./db/DatabaseManager"
 import { warmupIntentClassifier } from "./llm"
 
 /** Unified type for all STT providers with optional extended capabilities */
-type STTProvider = (GoogleSTT | RestSTT | DeepgramStreamingSTT | SonioxStreamingSTT | ElevenLabsStreamingSTT | OpenAIStreamingSTT | NativelyProSTT | NvidiaNimStreamingSTT) & {
+type STTProvider = (GoogleSTT | RestSTT | DeepgramStreamingSTT | SonioxStreamingSTT | AssemblyAIStreamingSTT | ElevenLabsStreamingSTT | OpenAIStreamingSTT | NativelyProSTT | NvidiaNimStreamingSTT) & {
   finalize?: () => void;
   setAudioChannelCount?: (count: number) => void;
   notifySpeechEnded?: () => void;
@@ -3253,6 +3254,15 @@ export class AppState {
         console.warn(`[Main] No API key for Soniox STT, falling back to GoogleSTT`);
         stt = new GoogleSTT(speaker);
       }
+    } else if (sttProvider === 'assemblyai') {
+      const apiKey = CredentialsManager.getInstance().getAssemblyAiApiKey();
+      if (apiKey) {
+        console.log(`[Main] Using AssemblyAIStreamingSTT for ${speaker} (Universal-3.5 Pro)`);
+        stt = new AssemblyAIStreamingSTT(apiKey);
+      } else {
+        console.warn(`[Main] No API key for AssemblyAI STT, falling back to GoogleSTT`);
+        stt = new GoogleSTT(speaker);
+      }
     } else if (sttProvider === 'elevenlabs') {
       const apiKey = CredentialsManager.getInstance().getElevenLabsApiKey();
       if (apiKey) {
@@ -3343,6 +3353,7 @@ export class AppState {
     const effectiveSttId: string =
       stt instanceof DeepgramStreamingSTT ? 'deepgram'
       : stt instanceof SonioxStreamingSTT ? 'soniox'
+      : stt instanceof AssemblyAIStreamingSTT ? 'assemblyai'
       : stt instanceof OpenAIStreamingSTT ? 'openai'
       : stt instanceof ElevenLabsStreamingSTT ? 'elevenlabs'
       : stt instanceof NativelyProSTT ? 'natively'
