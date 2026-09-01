@@ -9,7 +9,9 @@
  * Connects to wss://streaming.assemblyai.com/v3/ws (the Universal-3.5 Pro
  * streaming endpoint) and authenticates with the API key in the `Authorization`
  * header (no "Bearer" prefix). Connection parameters are passed as query-string
- * parameters: `speech_model`, `sample_rate`, and `encoding` (raw 16-bit LE PCM).
+ * parameters: `speech_model`, `sample_rate`, and `encoding` (raw 16-bit LE PCM),
+ * plus `language_code` when a recognition language is pinned (ISO-639-1, e.g.
+ * `en`); it is omitted for auto-detect so the model code-switches natively.
  *
  * Inbound messages:
  *   - Begin        → session opened (id, expires_at)
@@ -51,7 +53,7 @@ export class AssemblyAIStreamingSTT extends EventEmitter {
 
     private sampleRate = 16000;
     private numChannels = 1;
-    // ISO-639-1 steering code for `language_codes`, or undefined for auto-detect.
+    // ISO-639-1 steering code for `language_code`, or undefined for auto-detect.
     private languageCode?: string;
 
     private reconnectAttempts = 0;
@@ -92,11 +94,11 @@ export class AssemblyAIStreamingSTT extends EventEmitter {
 
     /**
      * Set the recognition language hint. Maps the app's Recognition Language key
-     * to an ISO-639-1 code and steers AssemblyAI via the `language_codes` query
+     * to an ISO-639-1 code and steers AssemblyAI via the `language_code` query
      * param. `auto` (or an unknown key) clears the hint so the model auto-detects
      * natively — the documented "full multilingual" mode.
      *
-     * Because `language_codes` is a connect-time param, a change while the socket
+     * Because `language_code` is a connect-time param, a change while the socket
      * is active triggers the same debounced restart as a sample-rate change.
      */
     public setRecognitionLanguage(key: string): void {
@@ -210,12 +212,18 @@ export class AssemblyAIStreamingSTT extends EventEmitter {
             sample_rate: String(this.sampleRate),
             encoding: ASSEMBLYAI_ENCODING,
         });
-        // `language_codes` is a connect-time query param carrying a JSON-encoded
-        // array of ISO-639-1 codes (e.g. `["en"]`). Omitted entirely for
-        // auto-detect so the model keeps native multilingual code-switching.
+        // `language_code` (singular) is a connect-time query param carrying a
+        // single ISO-639-1 code (e.g. `en`). Omitted entirely for auto-detect so
+        // the model keeps native multilingual code-switching. (The official SDKs
+        // deprecate the singular form in favor of `language_codes` with a
+        // single-element array — identical wire behavior — kept here per request.)
         if (this.languageCode) {
-            params.set('language_codes', JSON.stringify([this.languageCode]));
+            params.set('language_code', this.languageCode);
         }
+        // Ask the server to report the detected language per turn (language_code
+        // + language_confidence fields on Turn messages). Verified supported on
+        // Universal-3.5 Pro Streaming in the official v3 streaming spec.
+        params.set('language_detection', 'true');
         return `${ASSEMBLYAI_WS_ENDPOINT}?${params.toString()}`;
     }
 
@@ -282,6 +290,13 @@ export class AssemblyAIStreamingSTT extends EventEmitter {
                             text: transcript,
                             isFinal,
                             confidence: 1.0,
+                            // Populated only when language_detection=true (requested
+                            // in buildUrl). The detected ISO-639-1 code + confidence
+                            // let the UI show what language the model actually heard
+                            // — e.g. selecting English but detecting Vietnamese.
+                            ...(typeof msg.language_code === 'string'
+                                ? { languageCode: msg.language_code, languageConfidence: typeof msg.language_confidence === 'number' ? msg.language_confidence : undefined }
+                                : {}),
                         });
                         break;
                     }

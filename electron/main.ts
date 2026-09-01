@@ -2321,7 +2321,7 @@ export class AppState {
   }
 
   /** Push a transcript payload to the launcher + overlay rolling-transcript bar. */
-  private emitTranscriptToSurfaces(payload: { speaker: string; text: string; timestamp: number; final: boolean; confidence: number }): void {
+  private emitTranscriptToSurfaces(payload: { speaker: string; text: string; timestamp: number; final: boolean; confidence: number; languageCode?: string; languageConfidence?: number }): void {
     const helper = this.getWindowHelper();
     this.sendToWindow(helper.getLauncherWindow(), 'native-audio-transcript', payload);
     this.sendToWindow(helper.getOverlayWindow(), 'native-audio-transcript', payload);
@@ -2334,7 +2334,7 @@ export class AppState {
    * chatty STT doesn't generate near-per-token IPC to two windows. Keyed per
    * speaker so interviewer + user channels throttle independently.
    */
-  private sendThrottledTranscript(payload: { speaker: string; text: string; timestamp: number; final: boolean; confidence: number }): void {
+  private sendThrottledTranscript(payload: { speaker: string; text: string; timestamp: number; final: boolean; confidence: number; languageCode?: string; languageConfidence?: number }): void {
     const key = payload.speaker;
     let state = this._transcriptPartialThrottle.get(key);
     if (!state) {
@@ -3372,7 +3372,7 @@ export class AppState {
     }
 
     // Wire Transcript Events
-    stt.on('transcript', (segment: { text: string, isFinal: boolean, confidence: number, speakerId?: string }) => {
+    stt.on('transcript', (segment: { text: string, isFinal: boolean, confidence: number, speakerId?: string, languageCode?: string, languageConfidence?: number }) => {
       // Accept transcripts while a meeting is active OR while we're draining
       // trailing finals after Stop. `_isDraining` covers the ~250 ms grace
       // window between Stop click and STT socket close so the user's last
@@ -3425,6 +3425,7 @@ export class AppState {
       const payload = {
         speaker: speaker,
         ...(segment.speakerId ? { speakerId: segment.speakerId } : {}),
+        ...(segment.languageCode ? { languageCode: segment.languageCode, languageConfidence: segment.languageConfidence } : {}),
         text: segment.text,
         timestamp: Date.now(),
         final: segment.isFinal,
