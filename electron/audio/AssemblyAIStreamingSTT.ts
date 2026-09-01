@@ -44,6 +44,16 @@ const RECONNECT_MAX_DELAY_MS = 30000;
 // user-triggered restart via stop()/start() resets the counter to 0.
 const RECONNECT_MAX_ATTEMPTS = 10;
 const KEEPALIVE_INTERVAL_MS = 5000;
+// AssemblyAI Universal streaming requires each inbound audio frame to span
+// between 50ms and 1000ms of audio. The app's system-audio capture can emit
+// chunks as short as 20ms (640 bytes @16kHz mono), which AssemblyAI rejects
+// with "Input Duration Violation: 20.0 ms. Expected between 50 and 1000 ms".
+// That server error increments the orchestrator's consecutive-error counter,
+// trips the 5-error threshold, and surfaces the STT "needs attention" pill on
+// the affected channel. So we buffer incoming chunks and only forward frames
+// whose duration lands inside the 50–1000ms window.
+const ASSEMBLYAI_MIN_FRAME_MS = 50;
+const ASSEMBLYAI_MAX_FRAME_MS = 1000;
 
 export class AssemblyAIStreamingSTT extends EventEmitter {
     private apiKey: string;
@@ -65,6 +75,11 @@ export class AssemblyAIStreamingSTT extends EventEmitter {
     private pendingRestartTimer: NodeJS.Timeout | null = null;
 
     private buffer: Buffer[] = [];
+    // Accumulated audio awaiting flush into a valid 50–1000ms frame (for
+    // sending over an OPEN socket). Kept separate from `buffer`, which holds
+    // audio pending a WS handshake. We flush on each write/restart and on stop.
+    private pendingFrame: Buffer[] = [];
+    private pendingFrameBytes = 0;
     private isConnecting = false;
 
     constructor(apiKey: string) {
@@ -164,6 +179,8 @@ export class AssemblyAIStreamingSTT extends EventEmitter {
         this.isActive = false;
         this.isConnecting = false;
         this.buffer = [];
+        this.pendingFrame = [];
+        this.pendingFrameBytes = 0;
         console.log('[AssemblyAIStreaming] Stopped');
     }
 
@@ -185,7 +202,70 @@ export class AssemblyAIStreamingSTT extends EventEmitter {
             return;
         }
 
-        this.ws.send(chunk);
+        // Frame the audio: buffer the incoming chunk and forward only once it
+        // forms a 50–1000ms frame. Tiny system-audio chunks (20ms) would
+        // otherwise be rejected by AssemblyAI with an Input Duration Violation.
+        this.pendingFrame.push(chunk);
+        this.pendingFrameBytes += chunk.length;
+        this.flushPendingFrame();
+    }
+
+    /**
+     * Forward accumulated audio to the open socket in frames whose duration is
+     * within AssemblyAI's 50–1000ms requirement. Sends complete MAX_FRAME
+     * slices eagerly; a trailing partial below MIN frame remains buffered for
+     * the next write (holding back a few ms of tail audio to avoid sending a
+     * too-short frame).
+     */
+    private flushPendingFrame(): void {
+        if (!this.ws || this.ws.readyState !== WebSocket.OPEN || !this.isActive) return;
+
+        const bytesPerSec = this.sampleRate * 2; // 16-bit mono PCM
+        const minBytes = Math.round((bytesPerSec * ASSEMBLYAI_MIN_FRAME_MS) / 1000);
+        const maxBytes = Math.round((bytesPerSec * ASSEMBLYAI_MAX_FRAME_MS) / 1000);
+        if (minBytes <= 0 || maxBytes <= minBytes) return;
+
+        // Send as many full MAX frames as we have room for, in order.
+        while (this.pendingFrameBytes >= maxBytes && this.pendingFrame.length > 0) {
+            const slice = this.takeFrame(maxBytes);
+            if (!slice) break;
+            this.ws.send(slice);
+        }
+
+        // Then, if we now hold at least a MIN frame, send it (leaving any
+        // remainder below MIN buffered for the next write).
+        while (this.pendingFrameBytes >= minBytes && this.pendingFrame.length > 0) {
+            const slice = this.takeFrame(this.pendingFrameBytes);
+            if (!slice) break;
+            this.ws.send(slice);
+        }
+    }
+
+    /**
+     * Concatenate at most `limit` bytes from the pending frame list and remove
+     * them from the accumulator. Returns undefined when nothing can be sent.
+     */
+    private takeFrame(limit: number): Buffer | undefined {
+        if (this.pendingFrame.length === 0 || limit <= 0) return undefined;
+
+        const parts: Buffer[] = [];
+        let taken = 0;
+        while (this.pendingFrame.length > 0 && taken < limit) {
+            const head = this.pendingFrame[0];
+            const need = limit - taken;
+            if (head.length <= need) {
+                parts.push(this.pendingFrame.shift()!);
+                taken += head.length;
+            } else {
+                // Splice the head of the leading buffer, keep the remainder.
+                parts.push(head.subarray(0, need));
+                this.pendingFrame[0] = head.subarray(need);
+                taken += need;
+            }
+        }
+
+        this.pendingFrameBytes -= taken;
+        return Buffer.concat(parts, taken);
     }
 
     /** Finalize the open turn (flush server buffer) without tearing the socket down. */
@@ -261,13 +341,19 @@ export class AssemblyAIStreamingSTT extends EventEmitter {
             this.isConnecting = false;
             console.log('[AssemblyAIStreaming] Connected');
 
-            // Flush buffered audio once the socket is open.
+            // Flush buffered audio once the socket is open. Route it through the
+            // frame accumulator so even pre-connection chunks shorter than 50ms
+            // are grouped into a valid AssemblyAI frame (Input Duration error).
             while (this.buffer.length > 0) {
                 const chunk = this.buffer.shift();
-                if (chunk && this.ws?.readyState === WebSocket.OPEN) {
-                    this.ws.send(chunk);
+                if (chunk) {
+                    this.pendingFrame.push(chunk);
+                    this.pendingFrameBytes += chunk.length;
+                    this.flushPendingFrame();
                 }
             }
+            // Flush any leftover audio buffered before the reconnect.
+            this.flushPendingFrame();
 
             this.startKeepAlive();
         });
