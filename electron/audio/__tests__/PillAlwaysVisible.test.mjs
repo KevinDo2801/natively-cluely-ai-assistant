@@ -346,8 +346,93 @@ test('the overlay hide-event backstop cannot take the standalone pill down', () 
   const sync = extractMethodBody(windowHelper, 'syncOverlayAuxVisibility');
   assert.match(
     sync,
-    /this\.pillStandalone && !want\) \{\s*\n\s*const pill = this\.pillWindow;[\s\S]{0,120}!pill\.isVisible\(\)\) pill\.showInactive\(\);/,
+    /this\.pillStandalone && !want\) \{\s*\n\s*const pill = this\.pillWindow;[\s\S]*?pill\.showInactive\(\);/,
     'a derived hide must re-assert a floating standalone pill',
+  );
+  // Windows z-order self-heal: the re-show must re-assert the topmost level
+  // first, so a DWM-demoted pill floats again instead of staying buried below
+  // other windows until restart ("sometimes the toppill ends up at the very
+  // bottom and only a restart brings it back").
+  assert.match(
+    sync,
+    /if \(pill && !pill\.isDestroyed\(\) && !pill\.isVisible\(\)\) \{\s*\n[\s\S]*?this\.adapter\.reassertAlwaysOnTop\(pill\);\s*\n\s*pill\.showInactive\(\);/,
+    'the standalone pill re-show must re-assert always-on-top before ordering it in',
+  );
+});
+
+// ── Windows z-order self-heal (the pill must ALWAYS float on top) ───────────
+// Reported: "lâu lâu cái toppill nó bị ở dưới cuối luôn" — the pill sometimes
+// sinks below every other window (DWM demotion: another app grabs topmost, a
+// fullscreen transition, a hide/show cycle) and only an app restart brings it
+// back. The pill/toggle only get setAlwaysOnTop at creation; the overlay
+// self-heals on blur and at every show. Pin the same self-heal for the aux
+// windows:
+//   1. every aux show re-asserts topmost BEFORE showInactive (group path),
+//   2. the standalone pill re-show re-asserts too (backstop above),
+//   3. blur on the pill/toggle re-asserts topmost while visible,
+//   4. a Windows-only watchdog re-asserts topmost on an interval so a demotion
+//      with no in-process event still self-heals within seconds.
+
+test('applyOverlayAuxVisibility re-asserts topmost before every aux show', () => {
+  const apply = extractMethodBody(windowHelper, 'applyOverlayAuxVisibility');
+  assert.match(
+    apply,
+    /if \(show && !win\.isVisible\(\)\) \{\s*\n[\s\S]*?this\.adapter\.reassertAlwaysOnTop\(win\);\s*\n\s*win\.showInactive\(\);/,
+    'showing the pill/toggle must re-assert always-on-top BEFORE showInactive, ' +
+      'or a DWM-demoted window lands back on screen still buried below others',
+  );
+});
+
+test('setPillStandalone re-asserts topmost before the standalone show', () => {
+  const standalone = extractMethodBody(windowHelper, 'setPillStandalone');
+  assert.match(
+    standalone,
+    /this\.adapter\.reassertAlwaysOnTop\(pill\);\s*\n\s*pill\.showInactive\(\);/,
+    'entering standalone mode must re-assert always-on-top before ordering the ' +
+      'floating pill in — the launcher-mode pill is exactly the one users report ' +
+      'sinking below every other window',
+  );
+});
+
+test('pill and toggle windows self-heal z-order on blur', () => {
+  // Mirrors the overlay's blur self-heal (WindowHelper.setupWindowListeners):
+  // while the aux window is visible, losing focus must re-assert its topmost
+  // level. Adapter no-ops on macOS, so this is Windows-only in effect.
+  // The handlers are attached inside createOverlayAuxWindows' auxPairs loop
+  // (right after the 'closed' cleanup listener), before the group-sync block.
+  const auxCreation = windowHelper.slice(
+    windowHelper.indexOf('const auxPairs:'),
+    windowHelper.indexOf('// Group sync — see the coordination model comment above.'),
+  );
+  assert.match(
+    auxCreation,
+    /win\.on\('blur', \(\) => \{\s*\n\s*if \(win\.isDestroyed\(\) \|\| !win\.isVisible\(\)\) return;\s*\n\s*this\.adapter\.reassertAlwaysOnTop\(win\);/,
+    'the pill/toggle blur handler must re-assert always-on-top while visible',
+  );
+});
+
+test('a Windows-only watchdog re-asserts aux z-order on an interval', () => {
+  assert.match(
+    windowHelper,
+    /private startTopmostWatchdog\(\): void \{\s*\n\s*if \(!this\.adapter\.isWindows\(\)\) return;/,
+    'the watchdog must be Windows-only (reassertAlwaysOnTop is a deliberate ' +
+      'macOS no-op — re-asserting triggers [NSApp activate] and steals focus)',
+  );
+  assert.match(
+    windowHelper,
+    /this\.topmostWatchdog = setInterval\(\(\) => \{\s*\n\s*if \(this\.appState\.isQuitting\(\)\) return;/,
+    'the watchdog must skip work while the app is quitting',
+  );
+  assert.match(
+    windowHelper,
+    /if \(w && !w\.isDestroyed\(\) && w\.isVisible\(\)\) this\.adapter\.reassertAlwaysOnTop\(w\);/,
+    'the watchdog must re-assert topmost for every visible overlay/pill/toggle window',
+  );
+  // The watchdog must be armed once the aux windows exist.
+  assert.match(
+    windowHelper,
+    /this\.pushPillState\(\);\s*\n\s*\/\/ Windows z-order watchdog[\s\S]*?this\.startTopmostWatchdog\(\);/,
+    'createOverlayAuxWindows must start the watchdog after seeding aux state',
   );
 });
 

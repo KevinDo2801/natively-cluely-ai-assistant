@@ -95,6 +95,8 @@ export class WindowHelper {
   // its own instead of forcing the main window to keep a gutter).
   private pillWindow: BrowserWindow | null = null;
   private toggleWindow: BrowserWindow | null = null;
+  // Windows z-order watchdog handle — see startTopmostWatchdog().
+  private topmostWatchdog: NodeJS.Timeout | null = null;
   // Pill content size as reported by its renderer (w-fit). Fallback covers
   // the first frames before the first report.
   private pillSize: { width: number; height: number } = { width: 200, height: 44 };
@@ -338,6 +340,28 @@ export class WindowHelper {
   // would no-op — we must push the value to the OS again unconditionally.
   public reassertContentProtection(): void {
     this.applyContentProtection(this.contentProtection);
+  }
+
+  // ── TopPill z-order watchdog (Windows) ───────────────────────────────────
+  // The reported bug: "lâu lâu cái toppill nó bị ở dưới cuối luôn" — the pill
+  // sometimes sinks below every other window and only an app restart brings it
+  // back. The blur/show re-asserts above self-heal when the pill is (re)shown
+  // or loses focus, but DWM can demote a topmost window with NO event in this
+  // process at all (another app calls SetWindowPos with HWND_TOPMOST, a
+  // fullscreen transition, a game, etc.). A quiet interval re-asserts the
+  // 'screen-saver' topmost level while the aux chrome is visible, so a demoted
+  // pill floats again within a couple of seconds instead of staying buried
+  // until restart. macOS never starts it: reassertAlwaysOnTop is a deliberate
+  // no-op there (re-asserting triggers [NSApp activate] and steals focus).
+  private startTopmostWatchdog(): void {
+    if (!this.adapter.isWindows()) return;
+    if (this.topmostWatchdog) return; // already running
+    this.topmostWatchdog = setInterval(() => {
+      if (this.appState.isQuitting()) return;
+      for (const w of [this.overlayWindow, this.pillWindow, this.toggleWindow]) {
+        if (w && !w.isDestroyed() && w.isVisible()) this.adapter.reassertAlwaysOnTop(w);
+      }
+    }, 3000);
   }
 
   public setWindowDimensions(width: number, height: number): void {
@@ -1574,6 +1598,18 @@ export class WindowHelper {
         if (this.pillWindow === win) this.pillWindow = null;
         if (this.toggleWindow === win) this.toggleWindow = null;
       });
+      // Windows z-order self-heal: the aux windows only ever get
+      // setAlwaysOnTop(true, 'screen-saver') at creation, and DWM can demote a
+      // topmost window at any time (another app grabs HWND_TOPMOST, a
+      // fullscreen transition, etc.). The overlay self-heals on blur
+      // (setupWindowListeners) — mirror that here so the pill/toggle re-assert
+      // their topmost level whenever they lose focus while visible, instead of
+      // sinking below every other window until the app is restarted ("lâu lâu
+      // cái toppill nó bị ở dưới cuối luôn"). Adapter no-ops on macOS.
+      win.on('blur', () => {
+        if (win.isDestroyed() || !win.isVisible()) return;
+        this.adapter.reassertAlwaysOnTop(win);
+      });
     }
 
     // Group sync — see the coordination model comment above.
@@ -1673,6 +1709,9 @@ export class WindowHelper {
     // correct Ask/Hide label and mic/stop icon (the did-finish-load replay
     // above delivers this cached state to a late-loading renderer).
     this.pushPillState();
+    // Windows z-order watchdog: keeps the pill/toggle topmost even when DWM
+    // demotes them with no in-process event (see startTopmostWatchdog).
+    this.startTopmostWatchdog();
   }
 
   // Place the pill (centered above the shell) and the toggle (outside the
@@ -1983,8 +2022,17 @@ export class WindowHelper {
     if (want) this.positionOverlayAuxWindows();
     const apply = (win: BrowserWindow | null, show: boolean) => {
       if (!win || win.isDestroyed()) return;
-      if (show && !win.isVisible()) win.showInactive();
-      else if (!show && win.isVisible()) {
+      if (show && !win.isVisible()) {
+        // Windows z-order self-heal: the aux windows only ever get
+        // setAlwaysOnTop at creation, and DWM can demote a topmost window at
+        // any time (another app grabs HWND_TOPMOST, a fullscreen transition,
+        // a hide/show cycle). Re-assert the topmost level BEFORE ordering the
+        // window in, so the pill/toggle land on top instead of sinking below
+        // every other window until the app is restarted ("lâu lâu cái toppill
+        // nó bị ở dưới cuối luôn"). Adapter no-ops on macOS.
+        this.adapter.reassertAlwaysOnTop(win);
+        win.showInactive();
+      } else if (!show && win.isVisible()) {
         // The standalone pill floats on its own — the mirroring path must
         // never take it down. Hiding it here would strand it: the flag stays
         // `pillStandalone === true`, so the later syncPillAlwaysVisibility →
@@ -2043,7 +2091,12 @@ export class WindowHelper {
     // pill floats without the shell, re-assert it after every derived hide.
     if (this.pillStandalone && !want) {
       const pill = this.pillWindow;
-      if (pill && !pill.isDestroyed() && !pill.isVisible()) pill.showInactive();
+      if (pill && !pill.isDestroyed() && !pill.isVisible()) {
+        // Windows z-order self-heal (same rationale as applyOverlayAuxVisibility):
+        // re-assert topmost before the re-show so a demoted pill floats again.
+        this.adapter.reassertAlwaysOnTop(pill);
+        pill.showInactive();
+      }
     }
   }
 
@@ -2160,6 +2213,10 @@ export class WindowHelper {
       }
       // Restore opacity (hideMainWindow may have zeroed it pre-screenshot).
       pill.setOpacity(1);
+      // Windows z-order self-heal (same rationale as applyOverlayAuxVisibility):
+      // re-assert topmost before the standalone show so the floating pill lands
+      // on top instead of sinking below every other window until restart.
+      this.adapter.reassertAlwaysOnTop(pill);
       pill.showInactive();
       this.pillStandalone = true;
       // Re-anchor into the current work area. The pill's bounds may be stale —
