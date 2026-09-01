@@ -94,6 +94,8 @@ export interface NormalizeRequestInput {
   // yet" while the session held a full transcript.
   context?: string;
   skipSystemPrompt?: boolean;
+  /** Typed-chat surface marker (manual_chat only) — see IntelligenceRequest. */
+  chatSurface?: boolean;
   // auto_transcript extras
   questionId?: string;
   answerability?: number;
@@ -138,6 +140,7 @@ export function normalizeRequest(input: NormalizeRequestInput): IntelligenceRequ
     confidence: input.confidence,
     context: input.context,
     skipSystemPrompt: input.skipSystemPrompt,
+    chatSurface: input.chatSurface,
     questionId: input.questionId,
     answerability: input.answerability,
     dialogueAct: input.dialogueAct,
@@ -158,10 +161,11 @@ export function manualChatRequest(input: {
   imagePaths?: string[];
   context?: string;
   skipSystemPrompt?: boolean;
+  chatSurface?: boolean;
   pinnedModeId?: string | null;
   requestId?: string;
 }): IntelligenceRequest & { legacyContext?: string; skipSystemPrompt?: boolean } {
-  const req = normalizeRequest({ source: 'manual_chat', text: input.message, imagePaths: input.imagePaths, pinnedModeId: input.pinnedModeId, requestId: input.requestId });
+  const req = normalizeRequest({ source: 'manual_chat', text: input.message, imagePaths: input.imagePaths, chatSurface: input.chatSurface, pinnedModeId: input.pinnedModeId, requestId: input.requestId });
   return { ...req, legacyContext: input.context, skipSystemPrompt: input.skipSystemPrompt };
 }
 

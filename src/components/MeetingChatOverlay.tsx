@@ -513,6 +513,9 @@ const MeetingChatOverlay: React.FC<MeetingChatOverlayProps> = ({
                         text: question,
                         context: systemPrompt,
                         skipSystemPrompt: true,
+                        // Typed chat: the answer is read in this panel, so the
+                        // scannable chat layout attaches on the caller-owned path.
+                        chatSurface: true,
                     });
                 }
             } else {
@@ -570,6 +573,9 @@ const MeetingChatOverlay: React.FC<MeetingChatOverlayProps> = ({
                     text: question,
                     context: systemPrompt,
                     skipSystemPrompt: true,
+                    // Typed chat: the answer is read in this panel, so the
+                    // scannable chat layout attaches on the caller-owned path.
+                    chatSurface: true,
                 });
             }
 

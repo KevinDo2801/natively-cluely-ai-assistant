@@ -97,6 +97,11 @@ export interface IntelligenceRequest {
   context?: string;
   /** Caller-owned prompt contract (was options.skipSystemPrompt === true && context). */
   skipSystemPrompt?: boolean;
+  /** Typed-chat surface marker (manual_chat only): the answer is READ in the
+   *  chat panel, so the scannable chat layout attaches even on the
+   *  caller-owned path. Set only by the typed-question call sites; quick
+   *  actions and voice/answer-now leave it unset. */
+  chatSurface?: boolean;
 
   // ── auto_transcript (Auto Answer V3) metadata ─────────────────────────────
   questionId?: string;

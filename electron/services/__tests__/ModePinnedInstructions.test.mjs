@@ -216,21 +216,27 @@ describe('W2: caller-owned prompts still carry the Real-time prompt (chat overla
         const anchor = 'const systemPromptOverride: string | undefined = options?.skipSystemPrompt';
         const idx = ipcSource.indexOf(anchor);
         assert.ok(idx >= 0, 'caller-owned branch not found in ipcHandlers.ts');
-        const branch = ipcSource.slice(idx, idx + 700);
+        const branch = ipcSource.slice(idx, idx + 900);
         assert.match(
             branch,
-            /buildCallerOwnedModeInstructionsSystemPrompt\(answerPlan\.answerType, manualActiveMode\)/,
+            /buildCallerOwnedModeInstructionsSystemPrompt\(\s*answerPlan\.answerType,\s*manualActiveMode,/s,
             'caller-owned turns must still inject the active mode\'s Real-time prompt on the SYSTEM channel',
+        );
+        assert.match(
+            branch,
+            /options\?\.chatSurface === true/,
+            'typed-chat caller-owned turns must request the scannable chat layout',
         );
     });
 
     test('the helper pins instructions onto the safety core and no-ops without them', () => {
         const helperStart = ipcSource.indexOf('function buildCallerOwnedModeInstructionsSystemPrompt');
         assert.ok(helperStart >= 0, 'helper not found in ipcHandlers.ts');
-        const helper = ipcSource.slice(helperStart, helperStart + 1800);
+        const helper = ipcSource.slice(helperStart, helperStart + 6000);
         assert.match(helper, /getActiveModePinnedInstructions/, 'must read the mode Real-time prompt');
         assert.match(helper, /appendCustomModeSystemPromptLayer/, 'must reuse the canonical pinned-layer composer');
         assert.match(helper, /baseSystemPrompt: HARD_SYSTEM_PROMPT/, 'must ride on top of the safety core');
+        assert.match(helper, /baseSystemPrompt: CHAT_MODE_PROMPT/, 'typed-chat caller-owned turns use the chat base when v2 is off');
         assert.match(helper, /if \(!pinned\) \{/, 'no instructions → legacy caller-owned prompt, nothing injected');
     });
 });

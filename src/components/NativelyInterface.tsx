@@ -6172,6 +6172,10 @@ Provide only the answer, nothing else.`;
         imagePaths: currentAttachments.length > 0 ? currentAttachments.map((s) => s.path) : undefined,
         context: conversationContextForSubmit,
         ...(useCallerOwnedPrompt ? { skipSystemPrompt: true } : {}),
+        // Typed chat: the answer is read in the chat panel, so the scannable
+        // chat layout applies on BOTH the caller-owned (transcript present)
+        // and non-caller-owned paths.
+        chatSurface: true,
       });
     } catch (err) {
       // R-17: release the claim taken above — see the note at the other call site.

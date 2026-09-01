@@ -94,13 +94,25 @@ function resolveManualChatBasePrompt(
  * a mode instruction like "always answer in Vietnamese" was silently ignored
  * on the chat overlay and answers came back in English.
  *
- * Returns '' when the mode has no pinned instructions — preserving the
- * pre-fix caller-owned prompt byte-for-byte (streamChat falls back to
- * HARD_SYSTEM_PROMPT, the same core this helper appends to).
+ * `chatSurface` (typed chat on the caller-owned path, 2026-10): the user's
+ * TYPED question is read in the chat panel, so the OUTPUT SHAPE must be the
+ * same scannable chat layout the non-caller-owned path uses — not the spoken
+ * shape of HARD_SYSTEM_PROMPT. When set, the caller still owns the persona (no
+ * mode template is stacked), but the v2 answer + chat layout composes with the
+ * pinned instructions riding the system channel; when the v2 prompt system is
+ * OFF it falls back to CHAT_MODE_PROMPT + pinned, keeping the typed-chat shape
+ * on the legacy path too. Quick actions and the voice "answer now" path leave
+ * `chatSurface` unset and keep the pre-existing HARD_SYSTEM_PROMPT behavior.
+ *
+ * Returns '' when the mode has no pinned instructions AND chatSurface is off —
+ * preserving the pre-fix caller-owned prompt byte-for-byte (streamChat falls
+ * back to HARD_SYSTEM_PROMPT, the same core this helper appends to).
  */
 function buildCallerOwnedModeInstructionsSystemPrompt(
   answerType: AnswerType | undefined,
   manualActiveMode: any,
+  chatSurface = false,
+  llmHelper?: { getPromptTier?: () => string } | null,
 ): string {
   try {
     const { ModesManager } = require('./services/ModesManager');
@@ -110,6 +122,36 @@ function buildCallerOwnedModeInstructionsSystemPrompt(
       answerType,
       activeMode?.id ?? undefined,
     );
+
+    if (chatSurface) {
+      // TYPED CHAT with a caller-owned context: the caller owns the persona,
+      // so the mode template stays out — but the answer must be scannable
+      // notes (chat layout), identical in spirit to the non-caller-owned
+      // typed-chat path (resolveManualChatBasePrompt). The pinned "Real-time
+      // prompt" still rides the system channel via customInstructions.
+      try {
+        const { resolveV2SystemPrompt, v2TierForPromptTier } = require('./llm/promptSystemV2');
+        const v2 = resolveV2SystemPrompt({
+          action: 'answer',
+          tier: v2TierForPromptTier(llmHelper?.getPromptTier?.()),
+          // Caller owns the persona — 'general' is the neutral base (same
+          // core + chat layout the non-caller-owned chat path uses).
+          activeMode: null,
+          customInstructions: pinned || undefined,
+          chatSurface: true,
+        });
+        if (v2) return v2;
+      } catch { /* v2 off or errored → legacy typed-chat base below */ }
+      const { appendCustomModeSystemPromptLayer } = require('./llm/documentGroundedPrompt');
+      return appendCustomModeSystemPromptLayer({
+        baseSystemPrompt: CHAT_MODE_PROMPT,
+        modePromptSuffix: undefined,
+        pinnedInstructions: pinned,
+        isActiveCustomMode:
+          activeMode?.isCustom === true || _mm.isCustomMode?.(activeMode),
+      });
+    }
+
     if (!pinned) {
       console.log('[ManualChat] caller-owned mode instructions: NONE injected', {
         modeId: activeMode?.id ?? null,
@@ -876,7 +918,7 @@ export function initializeIpcHandlers(appState: AppState): void {
       message: string,
       imagePaths?: string[],
       context?: string,
-      options?: { skipSystemPrompt?: boolean; ignoreKnowledgeMode?: boolean },
+      options?: { skipSystemPrompt?: boolean; ignoreKnowledgeMode?: boolean; chatSurface?: boolean },
     ): Promise<null> => {
       let myController: AbortController | null = null;
       let myStreamId = 0; // assigned inside try; read by the finally cleanup
@@ -3412,7 +3454,15 @@ export function initializeIpcHandlers(appState: AppState): void {
         // instruction like "always answer in Vietnamese" never reaches the
         // model on the chat overlay and answers come back in English.
         const systemPromptOverride: string | undefined = options?.skipSystemPrompt
-          ? buildCallerOwnedModeInstructionsSystemPrompt(answerPlan.answerType, manualActiveMode)
+          ? buildCallerOwnedModeInstructionsSystemPrompt(
+              answerPlan.answerType,
+              manualActiveMode,
+              // Typed chat on the caller-owned path gets the scannable chat
+              // layout (see the helper's chatSurface contract); quick actions
+              // and voice answer-now leave it unset and keep the spoken shape.
+              options?.chatSurface === true,
+              llmHelper,
+            )
           : resolveManualChatBasePrompt(llmHelper, resolveCodingPromptSignals({
             answerType: answerPlan.answerType,
             question: message,
@@ -5756,7 +5806,7 @@ export function initializeIpcHandlers(appState: AppState): void {
             request.text ?? '',
             request.imagePaths,
             request.context, // rolling-context derivation lives inside the handler when absent
-            { skipSystemPrompt: request.skipSystemPrompt === true },
+            { skipSystemPrompt: request.skipSystemPrompt === true, chatSurface: request.chatSurface === true },
           );
           return {
             started: true,

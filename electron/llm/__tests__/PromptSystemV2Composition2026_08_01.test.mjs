@@ -719,17 +719,20 @@ describe('flag gating — default ON (promoted), env kill-switch preserves legac
 
 // ── Typed-chat layout (chatSurface, 2026-08-02) ──────────────────────────────
 //
-// The chat panel is READ, not spoken — it gets the scannable layout (lead
-// sentence → bold-labeled sections → "Good interview answer:" quotable close)
-// while every spoken surface keeps the 15-30s human shape. Attached only when
-// the caller marks the surface, exactly like codingTask.
+// The chat panel is READ, not spoken — it gets the scannable, adaptive
+// note-style layout (lead answer → bold-labeled sections → inline code for
+// formulas/phrases → optional one-line close) while every spoken surface keeps
+// the 15-30s human shape. Attached only when the caller marks the surface,
+// exactly like codingTask. The layout must never hard-code a single template.
 
 describe('chatSurface — typed-chat layout attachment', () => {
-  test('chatSurface attaches the layout in every mode', () => {
+  test('chatSurface attaches the note-style layout in every mode', () => {
     for (const mode of MODES) {
       const p = v2.buildSystemPromptV2({ mode, action: 'answer', tier: 'cloud', chatSurface: true });
       assert.ok(p.includes('<chat_layout>'), `${mode}: chat layout missing`);
-      assert.ok(p.includes('Good interview answer:'), `${mode}: quotable-close law missing`);
+      assert.ok(p.includes('Aim for smart notes'), `${mode}: note-style layout missing`);
+      // The adaptive style must not force one rigid, article-like close.
+      assert.ok(!p.includes('Good interview answer:'), `${mode}: rigid template close leaked`);
     }
   });
 
@@ -747,8 +750,9 @@ describe('chatSurface — typed-chat layout attachment', () => {
   test('local tier composes the compact layout variant', () => {
     const p = v2.buildSystemPromptV2({ mode: 'general', action: 'answer', tier: 'local', chatSurface: true });
     assert.ok(p.includes('<chat_layout>'));
-    // The tiny variant is one paragraph — it must not carry the numbered laws.
-    assert.ok(!p.includes('5. Stay compact'), 'local tier got the full five-law layout');
+    // The tiny variant is one compact paragraph — it must not carry the
+    // numbered "Shape:" laws of the full cloud layout.
+    assert.ok(!p.includes('Shape:'), 'local tier got the full numbered cloud layout');
   });
 
   test('chatSurface + codingTask co-exist, coding contract FIRST (precedence by position)', () => {

@@ -436,6 +436,12 @@ export interface ElectronAPI {
     confidence?: number
     context?: string
     skipSystemPrompt?: boolean
+    /** Typed-chat surface marker (manual_chat only): the answer is READ in the
+     *  chat panel, so the scannable chat layout attaches even on the
+     *  caller-owned path (`skipSystemPrompt + context`). Set only by the
+     *  typed-question call sites (meeting chat overlay, main chat input);
+     *  quick actions and voice/answer-now leave it unset. */
+    chatSurface?: boolean
   }) => Promise<{ started: boolean; generationId: number | null; streamKey: string | null; answer?: string | null; question?: string | null; error?: string; diagnostics?: Record<string, unknown> }>
 
   // NOTE: onSkillsChanged broadcast subscription was removed. Skills are

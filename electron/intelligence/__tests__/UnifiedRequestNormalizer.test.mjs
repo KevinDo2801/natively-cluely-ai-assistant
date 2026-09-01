@@ -109,6 +109,24 @@ describe('UnifiedRequestNormalizer — request shaping', () => {
     assert.equal(plain.skipSystemPrompt, undefined);
   });
 
+  test('normalizeRequest PRESERVES chatSurface (typed-chat layout on the caller-owned path)', () => {
+    // The typed chat layout must survive the whitelist so the caller-owned
+    // meeting-overlay questions get the scannable chat shape.
+    const req = normalizeRequest({
+      source: 'manual_chat',
+      text: 'giai thich',
+      context: '[TRANSCRIPT]: ...',
+      skipSystemPrompt: true,
+      chatSurface: true,
+    });
+    assert.equal(req.chatSurface, true,
+      'the typed-chat layout flag must survive normalization');
+
+    // Plain typed chat and other surfaces leave it unset.
+    const plain = normalizeRequest({ source: 'manual_chat', text: 'hi' });
+    assert.equal(plain.chatSurface, undefined);
+  });
+
   test('imagePaths are capped at 5 and empty arrays drop to undefined', () => {
     const req = normalizeRequest({ source: 'manual_chat', imagePaths: ['a', 'b', 'c', 'd', 'e', 'f'] });
     assert.equal(req.imagePaths.length, 5);
