@@ -182,6 +182,26 @@ export const ModesSettings: React.FC<ModesSettingsProps> = ({ onClose }) => {
   );
   const locked = isGeneralLocked(selected);
 
+  // Sidebar order (mirrors the backend compareModesForSidebar contract so the
+  // left column can never render in an arbitrary order): the BUILT-IN General
+  // default is ALWAYS pinned to the top; every other mode follows in creation
+  // order — the earlier a mode was added, the higher it sits. The pin is keyed
+  // on isBuiltin, NOT templateType === 'general' (custom modes from "New
+  // Mode"/the gallery carry templateType 'general' too), and the row id
+  // breaks createdAt ties for a fully stable ordering.
+  const sortedModes = useMemo(() => {
+    if (!modes) return null;
+    return [...modes].sort((a, b) => {
+      const ag = a.isBuiltin && a.templateType === 'general' ? 0 : 1;
+      const bg = b.isBuiltin && b.templateType === 'general' ? 0 : 1;
+      if (ag !== bg) return ag - bg;
+      const ta = new Date(a.createdAt).getTime();
+      const tb = new Date(b.createdAt).getTime();
+      if (ta !== tb) return ta - tb;
+      return a.id < b.id ? -1 : a.id > b.id ? 1 : 0;
+    });
+  }, [modes]);
+
   // ── Data loading ────────────────────────────────────────────────────────────
 
   const refresh = useCallback(async (): Promise<ModeSummary[]> => {
@@ -538,10 +558,10 @@ export const ModesSettings: React.FC<ModesSettingsProps> = ({ onClose }) => {
         </button>
 
         <div className="ms-mode-list">
-          {modes === null ? (
+          {sortedModes === null ? (
             <p className="ms-muted ms-loading">{t('Loading modes…')}</p>
           ) : (
-            modes.map((mode) => (
+            sortedModes.map((mode) => (
               <div
                 key={mode.id}
                 className={`ms-mode-item ${mode.id === selected?.id ? 'selected' : ''} ${mode.isActive ? 'active' : ''}`}

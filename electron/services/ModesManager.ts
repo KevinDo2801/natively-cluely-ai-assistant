@@ -409,6 +409,34 @@ function rowToSection(row: any): ModeNoteSection {
     };
 }
 
+/**
+ * Modes Manager sidebar order: the BUILT-IN General default is always pinned
+ * to the very top; every other mode follows in creation order (earliest
+ * first), with the row id as a stable tie-breaker when createdAt ties to the
+ * millisecond.
+ *
+ * The pin is keyed on isBuiltin, NOT `templateType === 'general'`: custom
+ * modes created from "New Mode" / the Templates gallery carry templateType
+ * 'general' too (see isCustomMode), and the built-in default can be re-seeded
+ * with a NEWER createdAt than those (e.g. the old default row was deleted
+ * pre-redesign), so a template-keyed pin would render General BELOW them.
+ *
+ * A strict weak ordering: the group comparison returns 0 for both orders of
+ * the same pair, so the sort is consistent and stable.
+ */
+export function compareModesForSidebar(
+    a: Pick<Mode, 'isBuiltin' | 'templateType' | 'createdAt' | 'id'>,
+    b: Pick<Mode, 'isBuiltin' | 'templateType' | 'createdAt' | 'id'>,
+): number {
+    const ag = a.isBuiltin && a.templateType === 'general' ? 0 : 1;
+    const bg = b.isBuiltin && b.templateType === 'general' ? 0 : 1;
+    if (ag !== bg) return ag - bg;
+    const ta = new Date(a.createdAt).getTime();
+    const tb = new Date(b.createdAt).getTime();
+    if (ta !== tb) return ta - tb;
+    return a.id < b.id ? -1 : a.id > b.id ? 1 : 0;
+}
+
 export class ModesManager {
     private static instance: ModesManager;
     private readonly modeContextRetriever = new ModeContextRetriever();
@@ -460,22 +488,14 @@ export class ModesManager {
             .filter((row: any) => row.template_type !== '__reserved__')
             .map(rowToMode);
 
-        // Always enforce 'general' at the very top of the list.
-        // L1: id is the secondary sort key for stable ordering when two modes
-        // share createdAt to the millisecond.
-        // NOTE: the group comparison must be a strict weak ordering — the old
-        // `if (a.templateType === 'general') return -1` returned -1 whenever `a`
-        // was general, regardless of `b`, so two general modes compared
-        // inconsistently (a<b and b<a) and the resulting order was arbitrary.
-        modes.sort((a, b) => {
-            const ag = a.templateType === 'general' ? 0 : 1;
-            const bg = b.templateType === 'general' ? 0 : 1;
-            if (ag !== bg) return ag - bg;
-            const ta = new Date(a.createdAt).getTime();
-            const tb = new Date(b.createdAt).getTime();
-            if (ta !== tb) return ta - tb;
-            return a.id < b.id ? -1 : a.id > b.id ? 1 : 0;
-        });
+        // Display order for the Modes Manager sidebar: the BUILT-IN General
+        // default is always pinned to the very top of the list; every other
+        // mode follows in creation order (earliest first), with the row id as
+        // a stable tie-breaker when createdAt ties to the millisecond.
+        // Pinning is keyed on isBuiltin — see compareModesForSidebar for why
+        // a `templateType === 'general'` key would put the built-in BELOW
+        // custom general-template modes it was re-seeded after.
+        modes.sort(compareModesForSidebar);
 
         return modes;
     }

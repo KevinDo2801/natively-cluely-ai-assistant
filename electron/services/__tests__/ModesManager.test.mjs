@@ -11,7 +11,7 @@ const promptsPath = path.resolve(__dirname, '../../../dist-electron/electron/llm
 const modesMod = await import(pathToFileURL(modesPath).href);
 const promptsMod = await import(pathToFileURL(promptsPath).href);
 
-const { ModesManager, MODE_TEMPLATES, TEMPLATE_NOTE_SECTIONS } = modesMod;
+const { ModesManager, MODE_TEMPLATES, TEMPLATE_NOTE_SECTIONS, compareModesForSidebar } = modesMod;
 
 const EXPECTED_MODE_TYPES = [
   'general',
@@ -526,4 +526,46 @@ test('context assembly stays within low local latency budget for large active-mo
 
   assert.ok(block.length <= 41_500, `context block should stay near the 40k content cap, got ${block.length}`);
   assert.ok(elapsedMs < 25, `context assembly took ${elapsedMs.toFixed(2)}ms, expected <25ms`);
+});
+
+// ── Sidebar ordering (compareModesForSidebar) ────────────────────────────────
+
+test('compareModesForSidebar pins the BUILT-IN General above a custom general-template mode that is OLDER', () => {
+  // Regression (2026-08-XX): custom modes from "New Mode"/the gallery carry
+  // templateType 'general' too. When the built-in default was re-seeded AFTER
+  // such a mode existed (old default deleted pre-redesign), a template-keyed
+  // pin sorted it BELOW the custom mode — the reported "testing above General"
+  // symptom. The pin must key on isBuiltin so General always wins.
+  const modes = [
+    { id: 'mode_builtin_general', name: 'General', templateType: 'general', isBuiltin: true, createdAt: '2026-08-09T00:00:00.000Z' },
+    { id: 'mode_custom_testing', name: 'testing', templateType: 'general', isBuiltin: false, createdAt: '2026-05-01T00:00:00.000Z' },
+    { id: 'mode_custom_sales', name: 'Sales', templateType: 'sales', isBuiltin: false, createdAt: '2026-06-01T00:00:00.000Z' },
+  ];
+  const sorted = [...modes].sort(compareModesForSidebar);
+  assert.deepEqual(sorted.map(m => m.name), ['General', 'testing', 'Sales']);
+});
+
+test('compareModesForSidebar orders non-built-in modes by createdAt ascending with a stable id tie-break', () => {
+  const modes = [
+    { id: 'b', name: 'B', templateType: 'sales', isBuiltin: false, createdAt: '2026-05-01T00:00:00.000Z' },
+    { id: 'c', name: 'C', templateType: 'recruiting', isBuiltin: false, createdAt: '2026-05-01T00:00:00.000Z' },
+    { id: 'a', name: 'A', templateType: 'lecture', isBuiltin: false, createdAt: '2026-04-01T00:00:00.000Z' },
+  ];
+  const sorted = [...modes].sort(compareModesForSidebar);
+  assert.deepEqual(sorted.map(m => m.id), ['a', 'b', 'c']);
+});
+
+test('compareModesForSidebar is a strict weak ordering (single general pin, consistent both directions)', () => {
+  const modes = [
+    { id: 'g1', name: 'General', templateType: 'general', isBuiltin: true, createdAt: '2026-08-09T00:00:00.000Z' },
+    { id: 'g2', name: 'General', templateType: 'general', isBuiltin: true, createdAt: '2026-08-09T00:00:00.000Z' },
+    { id: 'x', name: 'X', templateType: 'general', isBuiltin: false, createdAt: '2026-08-09T00:00:00.000Z' },
+  ];
+  // Two pinned rows + a custom general row all tie on group/time: the id
+  // tie-break must yield a total order and never throw on inconsistent pairs.
+  const sorted = [...modes].sort(compareModesForSidebar);
+  assert.deepEqual(sorted.map(m => m.id), ['g1', 'g2', 'x']);
+  // Swap-direction sanity: comparator is antisymmetric for the key pair.
+  assert.equal(compareModesForSidebar(modes[0], modes[2]) < 0, true);
+  assert.equal(compareModesForSidebar(modes[2], modes[0]) > 0, true);
 });
