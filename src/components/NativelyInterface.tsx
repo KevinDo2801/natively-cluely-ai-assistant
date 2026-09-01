@@ -5551,6 +5551,10 @@ const NativelyInterface: React.FC<NativelyInterfaceProps> = ({
         imagePaths,
         context: systemPrompt,
         skipSystemPrompt: true,
+        // Quick-action answers (Recap / Clarify / Follow-up Questions) are READ
+        // in the chat panel, so they get the same scannable note layout as
+        // typed questions.
+        chatSurface: true,
       });
     },
     [],
