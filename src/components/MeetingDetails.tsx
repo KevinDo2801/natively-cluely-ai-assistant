@@ -894,6 +894,10 @@ const MeetingDetails: React.FC<MeetingDetailsProps> = ({ meeting: initialMeeting
     // converges on exactly what will be persisted at Stop. Summary/Usage stay
     // placeholders — they are generated only after Stop finalizes the note.
     const isLive = meeting.isLive === true;
+    // Latest-value ref so mount-once IPC listeners can read the CURRENT live
+    // state without re-subscribing on every render.
+    const isLiveRef = useRef(isLive);
+    isLiveRef.current = isLive;
     const [livePreview, setLivePreview] = useState<string | null>(null);
     const liveMainRef = useRef<HTMLElement | null>(null);
     const liveAtBottomRef = useRef(true);
@@ -986,6 +990,21 @@ const MeetingDetails: React.FC<MeetingDetailsProps> = ({ meeting: initialMeeting
     // Clear any in-flight finalize poll when the view unmounts.
     useEffect(() => () => {
         if (finalizeTimerRef.current) clearTimeout(finalizeTimerRef.current);
+    }, []);
+
+    // POST-STOP FINALIZE (v34): after Stop the row lands as a "Processing..."
+    // placeholder; title/summary/usage are generated in the background and
+    // every save broadcasts 'meetings-updated'. Adopt the finalized note in
+    // place so the user does not have to close and reopen the note. Skipped
+    // while live: the DB flush lags the IPC stream, and a wholesale replace
+    // would make the live transcript jump backwards (the v31 poll merges).
+    useEffect(() => {
+        const removeMeetings = window.electronAPI.onMeetingsUpdated(() => {
+            if (isLiveRef.current === true) return;
+            void reloadMeeting();
+        });
+        return removeMeetings;
+    // eslint-disable-next-line react-hooks/exhaustive-deps
     }, []);
 
     // MEETING CONTINUE (v33): re-open recording on THIS note. Reuses the normal
