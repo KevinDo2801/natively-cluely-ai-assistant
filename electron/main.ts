@@ -6902,9 +6902,13 @@ export class AppState {
     const { CredentialsManager } = require('./services/CredentialsManager');
     CredentialsManager.getInstance().setSttLanguage(key);
 
-    // 'auto' is only meaningful for NativelyProSTT — other providers fall back to en-US.
+    // 'auto' is natively handled by the streaming STT providers (Google,
+    // Natively, Soniox, Deepgram, ElevenLabs, OpenAI, NVIDIA NIM, AssemblyAI,
+    // local Whisper) as auto-detection. Only the REST providers (Groq / Azure /
+    // IBM Watson) cannot accept 'auto' — they fall back to en-US.
     const sttProvider = CredentialsManager.getInstance().getSttProvider();
-    const effectiveKey = (key === 'auto' && sttProvider !== 'natively') ? 'english-us' : key;
+    const restOnly = sttProvider === 'groq' || sttProvider === 'azure' || sttProvider === 'ibmwatson';
+    const effectiveKey = (key === 'auto' && restOnly) ? 'english-us' : key;
 
     this.googleSTT?.setRecognitionLanguage(effectiveKey);
     this.googleSTT_User?.setRecognitionLanguage(effectiveKey);
