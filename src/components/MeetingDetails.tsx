@@ -1,4 +1,4 @@
-import React, { useState, useRef, useEffect } from 'react';
+import React, { useState, useRef, useEffect, useMemo } from 'react';
 import { useT } from '../i18n';
 import { useResolvedTheme } from '../hooks/useResolvedTheme';
 import { ArrowLeft, Search, Mail, Link, ChevronDown, Play, ArrowUp, Copy, Check, MoreHorizontal, Settings, ArrowRight, RefreshCw, Info, Eye, EyeOff, History, Pencil, X, ChevronRight, Mic } from 'lucide-react';
@@ -10,11 +10,13 @@ import { registerPrismLanguages } from '../utils/registerPrismLanguages';
 import MeetingChatOverlay from './MeetingChatOverlay';
 import EditableTextBlock from './EditableTextBlock';
 import NativelyLogo from './icon.png';
+import { NativelyLogoMark } from './NativelyLogoMark';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import SyntaxHighlighter from 'react-syntax-highlighter/dist/esm/prism-light';
 import { vividDarkCodeTheme } from '../lib/codeTheme';
 import { splitGistLine } from '../lib/displayMarkup';
+import { analytics } from '../lib/analytics/analytics.service';
 
 registerPrismLanguages();
 
@@ -896,6 +898,33 @@ const MeetingDetails: React.FC<MeetingDetailsProps> = ({ meeting: initialMeeting
     const liveMainRef = useRef<HTMLElement | null>(null);
     const liveAtBottomRef = useRef(true);
 
+    // ─── ACTIVE SESSION (v34) ──────────────────────────────────────────────
+    // While the note is live, the floating footer swaps the "Continue + Ask"
+    // bar for an "Active Session" pill (bottom-left) showing the Natively mark,
+    // a live recording timer, and a stop button. The timer measures from the
+    // recording start — localStorage 'natively_last_meeting_start' is written on
+    // Start/Continue and cleared on Stop — with the row's created_at as fallback.
+    const liveStartMs = useMemo(() => {
+        const stored = localStorage.getItem('natively_last_meeting_start');
+        if (stored) {
+            const n = parseInt(stored, 10);
+            if (Number.isFinite(n) && n > 0) return n;
+        }
+        const parsed = Date.parse(initialMeeting.date);
+        if (!Number.isNaN(parsed)) return parsed;
+        return Date.now();
+        // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, []);
+
+    const [liveElapsedMs, setLiveElapsedMs] = useState(0);
+    useEffect(() => {
+        if (!isLive) return;
+        const tick = () => setLiveElapsedMs(Math.max(0, Date.now() - liveStartMs));
+        tick();
+        const id = setInterval(tick, 1000);
+        return () => clearInterval(id);
+    }, [isLive, liveStartMs]);
+
     // LIVE NOTE (v31): keep the transcript view pinned to the bottom while the
     // user hasn't scrolled up (live mode only).
     useEffect(() => {
@@ -927,6 +956,37 @@ const MeetingDetails: React.FC<MeetingDetailsProps> = ({ meeting: initialMeeting
             }
         } catch { /* swallow */ }
     };
+
+    // ACTIVE SESSION (v34): reconcile with the finalized note after Stop.
+    // The DB row flips is_live=0 only when the background save runs (a few
+    // hundred ms AFTER the `meeting-state-changed:{isActive:false}` broadcast),
+    // so a one-shot reload at that moment reads the still-live row and re-shows
+    // the Active Session pill (the ~3s "slow to switch" symptom). Poll until
+    // getMeetingDetails reports not-live, then adopt the authoritative snapshot.
+    const finalizePollingRef = useRef(false);
+    const finalizeTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+    const reloadAfterFinalize = () => {
+        if (finalizePollingRef.current) return;
+        finalizePollingRef.current = true;
+        let attempts = 0;
+        const poll = async () => {
+            if (attempts++ >= 30) { finalizePollingRef.current = false; return; }
+            try {
+                const fresh = await window.electronAPI?.getMeetingDetails?.(meeting.id);
+                if (fresh && (fresh as Meeting).isLive !== true) {
+                    setMeeting(fresh as Meeting);
+                    finalizePollingRef.current = false;
+                    return;
+                }
+            } catch { /* swallow */ }
+            finalizeTimerRef.current = setTimeout(poll, 1000);
+        };
+        void poll();
+    };
+    // Clear any in-flight finalize poll when the view unmounts.
+    useEffect(() => () => {
+        if (finalizeTimerRef.current) clearTimeout(finalizeTimerRef.current);
+    }, []);
 
     // MEETING CONTINUE (v33): re-open recording on THIS note. Reuses the normal
     // start-meeting IPC with metadata.continueMeetingId — main adopts the same
@@ -969,6 +1029,36 @@ const MeetingDetails: React.FC<MeetingDetailsProps> = ({ meeting: initialMeeting
         } finally {
             setIsContinuing(false);
         }
+    };
+
+    // ACTIVE SESSION (v34): stop the live recording from the details view.
+    // Mirrors App.tsx handleEndMeeting's local bookkeeping, then fires the
+    // endMeeting IPC. isLive is flipped optimistically FIRST so the pill swaps
+    // back to the Continue + Ask bar instantly — endMeeting's teardown and the
+    // meeting-state-changed broadcast can lag by seconds.
+    const handleStopSession = () => {
+        setLivePreview(null);
+        setMeeting(prev => ({ ...prev, isLive: false }));
+
+        analytics.trackMeetingEnded();
+        const startStr = localStorage.getItem('natively_last_meeting_start');
+        if (startStr) {
+            const duration = Date.now() - parseInt(startStr, 10);
+            const threshold = import.meta.env.DEV ? 10000 : 180000;
+            if (duration >= threshold) {
+                localStorage.setItem('natively_show_profile_toaster', 'true');
+            }
+            localStorage.removeItem('natively_last_meeting_start');
+        }
+        window.electronAPI.endMeeting().catch((err) => {
+            console.error('Failed to end meeting:', err);
+            // Belt-and-suspenders: if the IPC itself rejected, request the
+            // launcher swap manually so the user isn't stranded.
+            window.electronAPI.setWindowMode('launcher');
+        });
+
+        // Fetch the finalized note once the background save flips is_live=0.
+        reloadAfterFinalize();
     };
 
     const handleRegenerate = async (templateType?: string) => {
@@ -1032,14 +1122,15 @@ const MeetingDetails: React.FC<MeetingDetailsProps> = ({ meeting: initialMeeting
         });
 
         // Meeting ended (Stop clicked anywhere): leave live mode immediately and
-        // show the finalized note once the background save lands (reloadMeeting
-        // refetches title/summary/usage from the DB).
+        // show the finalized note once the background save lands. reloadAfterFinalize
+        // polls the DB until is_live=0 (the finalize save), instead of the naive
+        // one-shot reload that re-reads a still-live row and re-shows the pill.
         const removeState = window.electronAPI.onMeetingStateChanged(({ isActive }) => {
             if (stopped || isActive) return;
             stopped = true;
             setLivePreview(null);
             setMeeting(prev => ({ ...prev, isLive: false }));
-            void reloadMeeting();
+            reloadAfterFinalize();
         });
 
         // LIVE NOTE (v31): the 5s poll must NOT blindly replace the in-memory
@@ -2118,10 +2209,30 @@ ${meeting.detailedSummary.keyPoints?.map(item => `- ${item}`).join('\n') || 'Non
                 </motion.div>
             </main>
 
-            {/* Floating Footer (Continue + Ask Bar) */}
-            <div className={`absolute bottom-0 left-0 right-0 p-6 flex justify-center pointer-events-none ${isChatOpen ? 'z-50' : 'z-20'}`}>
-                <div className="w-full max-w-[560px] flex items-center gap-2 pointer-events-auto">
-                    {!isLive && (
+            {/* Floating Footer (Continue + Ask Bar / Active Session) */}
+            <div className={`absolute bottom-0 left-0 right-0 p-6 flex pointer-events-none ${isLive ? 'justify-start' : 'justify-center'} ${isChatOpen ? 'z-50' : 'z-20'}`}>
+                {isLive ? (
+                    /* ACTIVE SESSION (v34): bottom-left pill while recording. */
+                    <div className="pointer-events-auto flex items-center gap-3 pl-3 pr-1.5 py-1.5 rounded-full backdrop-blur-[24px] backdrop-saturate-[140%] shadow-[0_8px_30px_rgb(0,0,0,0.12)] border border-white/20 bg-transparent">
+                        <NativelyLogoMark size={18} className="text-blue-500 shrink-0" />
+                        <div className="flex flex-col min-w-0">
+                            <span className="text-sm font-medium text-text-primary leading-tight whitespace-nowrap">{t('Active Session')}</span>
+                            <span className="text-xs text-text-tertiary flex items-center gap-1.5 whitespace-nowrap">
+                                <span className="w-1.5 h-1.5 rounded-full bg-red-500 animate-pulse" />
+                                {t('Recording')} • {formatDuration(liveElapsedMs)}
+                            </span>
+                        </div>
+                        <button
+                            onClick={handleStopSession}
+                            title={t('Stop recording')}
+                            aria-label={t('Stop recording')}
+                            className="shrink-0 w-10 h-10 rounded-full flex items-center justify-center border border-white/20 bg-white/[0.06] hover:bg-red-500/15 hover:border-red-500/30 transition-all duration-200 active:scale-95"
+                        >
+                            <span className="w-3 h-3 rounded-[3px] bg-red-500" />
+                        </button>
+                    </div>
+                ) : (
+                    <div className="w-full max-w-[560px] flex items-center gap-2 pointer-events-auto">
                         <button
                             onClick={handleContinueSession}
                             disabled={isContinuing}
@@ -2131,26 +2242,26 @@ ${meeting.detailedSummary.keyPoints?.map(item => `- ${item}`).join('\n') || 'Non
                             <Mic size={15} />
                             {isContinuing ? t('Continuing…') : t('Continue this session')}
                         </button>
-                    )}
-                    <div className="flex-1 min-w-0 relative group">
-                        {/* Dark Glass Effect Input (Matching Reference) */}
-                        <input
-                            type="text"
-                            value={query}
-                            onChange={(e) => setQuery(e.target.value)}
-                            onKeyDown={handleInputKeyDown}
-                            placeholder={t("Ask about this meeting...")}
-                            className="w-full pl-5 pr-12 py-3 bg-transparent backdrop-blur-[24px] backdrop-saturate-[140%] shadow-[0_8px_30px_rgb(0,0,0,0.12)] border border-white/20 rounded-full text-sm text-text-primary placeholder-text-tertiary/70 focus:outline-none transition-shadow duration-200"
-                        />
-                        <button
-                            onClick={handleSubmitQuestion}
-                            className={`absolute right-2 top-1/2 -translate-y-1/2 p-1.5 rounded-full transition-all duration-200 border border-white/5 ${query.trim() ? 'bg-text-primary text-bg-primary hover:scale-105' : 'bg-bg-item-active text-text-primary hover:bg-bg-item-hover'
-                                }`}
-                        >
-                            <ArrowUp size={16} className="transform rotate-45" />
-                        </button>
+                        <div className="flex-1 min-w-0 relative group">
+                            {/* Dark Glass Effect Input (Matching Reference) */}
+                            <input
+                                type="text"
+                                value={query}
+                                onChange={(e) => setQuery(e.target.value)}
+                                onKeyDown={handleInputKeyDown}
+                                placeholder={t("Ask about this meeting...")}
+                                className="w-full pl-5 pr-12 py-3 bg-transparent backdrop-blur-[24px] backdrop-saturate-[140%] shadow-[0_8px_30px_rgb(0,0,0,0.12)] border border-white/20 rounded-full text-sm text-text-primary placeholder-text-tertiary/70 focus:outline-none transition-shadow duration-200"
+                            />
+                            <button
+                                onClick={handleSubmitQuestion}
+                                className={`absolute right-2 top-1/2 -translate-y-1/2 p-1.5 rounded-full transition-all duration-200 border border-white/5 ${query.trim() ? 'bg-text-primary text-bg-primary hover:scale-105' : 'bg-bg-item-active text-text-primary hover:bg-bg-item-hover'
+                                    }`}
+                            >
+                                <ArrowUp size={16} className="transform rotate-45" />
+                            </button>
+                        </div>
                     </div>
-                </div>
+                )}
             </div>
 
             {/* Chat Overlay */}

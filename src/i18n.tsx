@@ -177,6 +177,11 @@ const RU: Record<string, string> = {
     'Summary will be generated after the meeting ends': 'Резюме будет сформировано после завершения встречи',
     'Usage will appear after the meeting ends': 'История использования появится после завершения встречи',
 
+    // ── Active Session (v34) ──
+    'Active Session': 'Активная сессия',
+    'Recording': 'Запись',
+    'Stop recording': 'Остановить запись',
+
     // ── Other settings tabs ──
     'Process Disguise': 'Маскировка процесса',
     'Keyboard shortcuts': 'Горячие клавиши',
@@ -306,6 +311,10 @@ const ZH: Record<string, string> = {
     'Live meeting in progress': '会议进行中',
     'Summary will be generated after the meeting ends': '摘要将在会议结束后生成',
     'Usage will appear after the meeting ends': '用量将在会议结束后显示',
+    // ── Active Session (v34) ──
+    'Active Session': '活动会话',
+    'Recording': '录制中',
+    'Stop recording': '停止录制',
     'Keep overlay closed when a meeting starts': '会议开始时保持悬浮窗关闭',
     'Do not auto-open the meeting overlay on Start; open it from the launcher when you need it':
         '开始会议时不要自动打开悬浮窗；需要时从启动器打开',
@@ -331,6 +340,10 @@ const JA: Record<string, string> = {
     'Live meeting in progress': '会議が進行中です',
     'Summary will be generated after the meeting ends': '要約は会議終了後に生成されます',
     'Usage will appear after the meeting ends': '利用履歴は会議終了後に表示されます',
+    // ── Active Session (v34) ──
+    'Active Session': 'アクティブセッション',
+    'Recording': '録音中',
+    'Stop recording': '録音を停止',
     'Keep overlay closed when a meeting starts': '会議開始時にオーバーレイを開かない',
     'Do not auto-open the meeting overlay on Start; open it from the launcher when you need it':
         '開始時に会議オーバーレイを自動的に開きません。必要なときにランチャーから開きます',
@@ -355,6 +368,10 @@ const ES: Record<string, string> = {
     'Live meeting in progress': 'Reunión en curso',
     'Summary will be generated after the meeting ends': 'El resumen se generará cuando termine la reunión',
     'Usage will appear after the meeting ends': 'El uso aparecerá cuando termine la reunión',
+    // ── Active Session (v34) ──
+    'Active Session': 'Sesión activa',
+    'Recording': 'Grabando',
+    'Stop recording': 'Detener grabación',
     'Keep overlay closed when a meeting starts': 'Mantener la superposición cerrada al iniciar la reunión',
     'Do not auto-open the meeting overlay on Start; open it from the launcher when you need it':
         'No abrir automáticamente la superposición de la reunión al iniciar; ábrala desde el lanzador cuando la necesite',
