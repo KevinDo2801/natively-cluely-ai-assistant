@@ -1420,6 +1420,14 @@ export class AppState {
   // the "never" retention delete so a resumed note is never destroyed.
   private _liveMeetingIsResumed: boolean = false;
   private static readonly LIVE_NOTE_FLUSH_MS = 5000;
+  // STOP-CYCLE HARDENING (v34): the meeting lifecycle queue serializes every
+  // Start/Stop, so a SINGLE hung promise inside a transition wedges the whole
+  // queue forever — every later Continue/Stop hangs and the app appears
+  // frozen after repeated continue↔stop cycles. Bound the two awaits that can
+  // hang async (an in-flight audio init on Stop; the post-meeting RAG embed in
+  // the BG teardown) so a stuck promise can never deadlock the lifecycle.
+  private static readonly AUDIO_INIT_STOP_TIMEOUT_MS = 15000;
+  private static readonly MEETING_RAG_TIMEOUT_MS = 20000;
   // MEETING FOLDERS (v32): the folder currently open in the launcher window.
   // Any meeting start path (launcher CTA, pill mic button, global shortcut,
   // calendar auto-start) without an explicit folderId lands here; null = root
@@ -6441,7 +6449,19 @@ export class AppState {
     // is unaffected.
     this._audioInitController?.abort();
     try {
-      await this._audioInitPromise;
+      // Bound the wait so a hung (never-resolving) audio init cannot wedge the
+      // meeting lifecycle forever — every later Start/Stop serializes behind
+      // this transition, so one stuck promise freezes all meeting UI after
+      // repeated continue↔stop cycles. Safe to proceed on timeout: the abort
+      // above flipped the init's isCurrentMeeting() guards false, so a
+      // late-resuming init tears down only what it owns (abortStaleAudioInit)
+      // and never constructs a capture that could race this teardown.
+      await Promise.race([
+        this._audioInitPromise ?? Promise.resolve(),
+        new Promise<void>((resolve) => {
+          setTimeout(resolve, AppState.AUDIO_INIT_STOP_TIMEOUT_MS);
+        }),
+      ]);
     } catch {
       // The init body may reject with the `audio_init_aborted` sentinel on abort — expected.
     }
@@ -6638,7 +6658,21 @@ export class AppState {
       // per chunk.
       this.ragManager.deleteMeetingData(meetingId, { keepRows: true });
 
-      const result = await this.ragManager.processMeeting(meeting.id, segments, summary);
+      // Bound the embed so a hung embedding pipeline (e.g. a cloud embedder
+      // without its own timeout) cannot wedge `_pendingTeardown` — the next
+      // Continue awaits that promise before booting, so one stuck embed
+      // freezes the whole meeting lifecycle after rapid continue↔stop cycles.
+      // RAG is best-effort: skipping it for one meeting loses recall only,
+      // never the note itself.
+      const result = await Promise.race([
+        this.ragManager.processMeeting(meeting.id, segments, summary),
+        new Promise<{ chunkCount: number }>((resolve) => {
+          setTimeout(() => {
+            console.warn(`[AppState] RAG processing timed out for ${meeting.id} — skipping.`);
+            resolve({ chunkCount: 0 });
+          }, AppState.MEETING_RAG_TIMEOUT_MS);
+        }),
+      ]);
       console.log(`[AppState] RAG processed meeting ${meeting.id}: ${result.chunkCount} chunks`);
 
     } catch (error) {

@@ -96,7 +96,10 @@ test('audio init body has a finally that clears _audioInitController', () => {
 
 test('endMeeting aborts and awaits this._audioInitPromise BEFORE touching captures', () => {
   const abortIdx = endMeetingBody.search(/this\._audioInitController[\s\S]{0,40}\.abort\s*\(\s*\)/);
-  const awaitIdx = endMeetingBody.search(/await\s+this\._audioInitPromise/);
+  // The await is bounded via Promise.race (stop-cycle hardening: a hung init
+  // must not wedge the lifecycle queue forever) — accept both the direct
+  // `await this._audioInitPromise` and the `await Promise.race([this._audioInitPromise, ...])` shape.
+  const awaitIdx = endMeetingBody.search(/await\s+(?:Promise\.race\(\s*\[\s*)?this\._audioInitPromise/);
   const disarmIdx = endMeetingBody.search(/__disarmStuckWatchdog/);
   // Capture teardown is now a snapshot-then-destroy: the live wrapper is
   // nulled synchronously and torn down via destroy() (see the second-meeting
@@ -124,10 +127,10 @@ test('endMeeting aborts and awaits this._audioInitPromise BEFORE touching captur
 });
 
 test('endMeeting clears this._audioInitPromise after awaiting it', () => {
-  // Look for: `await this._audioInitPromise` followed (later in the
-  // method) by `this._audioInitPromise = null`. Allow the comment block
-  // about expected abort errors between them.
-  const awaitIdx = endMeetingBody.search(/await\s+this\._audioInitPromise/);
+  // Look for: `await this._audioInitPromise` (or the bounded Promise.race
+  // shape) followed (later in the method) by `this._audioInitPromise = null`.
+  // Allow the comment block about expected abort errors between them.
+  const awaitIdx = endMeetingBody.search(/await\s+(?:Promise\.race\(\s*\[\s*)?this\._audioInitPromise/);
   const nullIdx  = endMeetingBody.search(/this\._audioInitPromise\s*=\s*null/);
   assert.ok(awaitIdx >= 0, 'sanity: endMeeting awaits this._audioInitPromise');
   assert.ok(

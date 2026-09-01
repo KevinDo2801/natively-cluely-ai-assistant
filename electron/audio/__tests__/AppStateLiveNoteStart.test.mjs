@@ -145,7 +145,10 @@ describe('endMeetingTransition hands the live row id to stopMeeting (v31)', () =
   });
 
   test('passes the live id into stopMeeting (finalize in place)', () => {
-    assert.match(scrubbed, /stopMeeting\(liveMeetingId\)/,
+    // v33 "continue" passes `{ isResumed: liveMeetingIsResumed }` as the second
+    // arg — the load-bearing part is that the live row id is handed to
+    // stopMeeting so the placeholder + final save reuse it.
+    assert.match(scrubbed, /stopMeeting\(liveMeetingId/,
       'the placeholder + final save must reuse the live row id');
   });
 });
