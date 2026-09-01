@@ -5586,7 +5586,10 @@ const NativelyInterface: React.FC<NativelyInterfaceProps> = ({
       } catch { /* non-fatal */ }
       await runQuickActionThroughChat(
         'Recap what has actually been discussed in this meeting so far, based ONLY on the transcript below. ' +
-        'Tell a short flowing narrative of the conversation: what topic was covered, what you said, and what the interviewer asked. ' +
+        'Recap it as scannable notes: one short lead line stating the topic, then the main points as short bullets — ' +
+        'what topic was covered, what you said, and what the interviewer asked. Use the chat note style: bold for ' +
+        'key terms, a short labeled section per part (e.g. **Nội dung:**, **Bạn:**, **Người hỏi:**) only if it helps, ' +
+        'and avoid long paragraphs. ' +
         'Answer the question "what have we been talking about up to now?" — do NOT suggest what to say next, ' +
         'do NOT summarize the resume or any documents, and do NOT include previous AI suggestions. ' +
         'Use the same language as the conversation. If the transcript is empty, say there is nothing to recap yet.',
