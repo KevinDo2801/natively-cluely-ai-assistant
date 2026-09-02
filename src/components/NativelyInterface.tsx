@@ -329,7 +329,7 @@ import {
 import type { DynamicActionPayload } from '../types/electron';
 import { getCodexCliModelDisplayName, litellmModelLabel } from '../utils/modelUtils';
 import { getModifierSymbol, isMac, isWindows } from '../utils/platformUtils';
-import { fetchChatOverlayContext } from '../lib/chatOverlayContext';
+import { fetchChatOverlayContext, buildReaderLanguageHint } from '../lib/chatOverlayContext';
 import { DynamicActionBar } from './dynamic-actions/DynamicActionBar';
 import GlassEffectLayer from './ui/GlassEffectLayer';
 import { OverlayBanner, OverlayBannerButton } from './ui/OverlayBanner';
@@ -1591,6 +1591,9 @@ const NativelyInterface: React.FC<NativelyInterfaceProps> = ({
   /** Blocks concurrent typed submits (double-click / key repeat) before React state updates. */
   const manualSubmitInFlightRef = useRef(false);
   const lastManualSubmitRef = useRef<{ text: string; atMs: number } | null>(null);
+  /** Most recent genuinely typed chat text — the reader-language anchor quick
+   *  actions use so their answers follow the user's language. */
+  const lastTypedUserTextRef = useRef('');
   /** Blocks duplicate quick-action LLM calls (Clarify, Follow-up, Brainstorm, Answer). */
   const overlayActionInFlightRef = useRef(new Set<string>());
   const lastOverlayActionRef = useRef<{ key: string; atMs: number } | null>(null);
@@ -5523,7 +5526,7 @@ const NativelyInterface: React.FC<NativelyInterfaceProps> = ({
   // context (see getRecapContext) so the summary reflects what actually
   // happened in the meeting, not previous AI suggestions.
   const runQuickActionThroughChat = useCallback(
-    async (instruction: string, imagePaths?: string[], contextOverride?: string) => {
+    async (instruction: string, imagePaths?: string[], contextOverride?: string, languageSurface: 'reader' | 'speak' = 'reader') => {
       // `contextOverride !== undefined` (not truthiness): the Recap button
       // passes an EMPTY recapContext when there is no transcript, and that
       // must NOT fall back to the rolling window — a recap with no transcript
@@ -5544,10 +5547,22 @@ const NativelyInterface: React.FC<NativelyInterfaceProps> = ({
       const systemPrompt = `You are a helpful assistant.${
         meetingCtx ? `\n\nUse the following meeting context when it is relevant to the request:\n${meetingCtx}` : ''
       }`;
+      // Reader-language anchor (2026-10): the instruction text below is an
+      // ENGLISH app label, so under the 'auto' language rule the model would
+      // answer English even though the user types Vietnamese. Quote the last
+      // genuinely typed message so the answer follows the user's language.
+      // SKIPPED for 'speak' actions (Follow-up Questions the user will ask the
+      // teacher): those must match the language being spoken in the class, not
+      // the language the user types.
+      let finalInstruction = instruction;
+      if (languageSurface !== 'speak') {
+        const langHint = buildReaderLanguageHint(lastTypedUserTextRef.current);
+        if (langHint) finalInstruction = `${instruction}${langHint}`;
+      }
       // UNIFIED PIPELINE (C4): caller-owned prompt on the single entry point.
       await window.electronAPI?.runIntelligence({
         source: 'manual_chat',
-        text: instruction,
+        text: finalInstruction,
         imagePaths,
         context: systemPrompt,
         skipSystemPrompt: true,
@@ -5555,6 +5570,7 @@ const NativelyInterface: React.FC<NativelyInterfaceProps> = ({
         // in the chat panel, so they get the same scannable note layout as
         // typed questions.
         chatSurface: true,
+        ...(languageSurface === 'speak' ? { languageSurface: 'speak' as const } : {}),
       });
     },
     [],
@@ -5592,7 +5608,8 @@ const NativelyInterface: React.FC<NativelyInterfaceProps> = ({
         'and avoid long paragraphs. ' +
         'Answer the question "what have we been talking about up to now?" — do NOT suggest what to say next, ' +
         'do NOT summarize the resume or any documents, and do NOT include previous AI suggestions. ' +
-        'Use the same language as the conversation. If the transcript is empty, say there is nothing to recap yet.',
+        'Use the same language as the conversation. If the transcript is empty, say there is nothing to recap yet. ' +
+        'Keep the whole recap under ~150 words — lead line + key points only, no filler.',
         undefined,
         recapCtx,
       );
@@ -5625,7 +5642,15 @@ const NativelyInterface: React.FC<NativelyInterfaceProps> = ({
     analytics.trackCommandExecuted('suggest_questions');
 
     try {
-      await runQuickActionThroughChat('Suggest 3-5 strategic follow-up questions based on the conversation.');
+      // Follow-up questions are asked to the teacher in class → 'speak'
+      // surface: they match the language being spoken (English lecture →
+      // English questions), never the language the user typed in the chat.
+      await runQuickActionThroughChat(
+        'Suggest 3-5 strategic follow-up questions based on the conversation, phrased as questions the student would ask the speaker.',
+        undefined,
+        undefined,
+        'speak',
+      );
     } catch (err) {
       chatStreamIdRef.current = null;
       chatStreamSourceRef.current = null;
@@ -6080,7 +6105,9 @@ Provide only the answer, nothing else.`;
     let conversationContextForSubmit = chatHistoryContext;
     let useCallerOwnedPrompt = false;
     try {
-      const composed = await fetchChatOverlayContext(chatHistoryContext, window.electronAPI as any);
+      // Pass the question so the composer can bound vague asks ("giải thích",
+      // "anh ấy nói gì") to the MOST RECENT transcript content + a short cap.
+      const composed = await fetchChatOverlayContext(chatHistoryContext, window.electronAPI as any, userText);
       if (composed) {
         conversationContextForSubmit = composed.context;
         useCallerOwnedPrompt = true;
@@ -6122,6 +6149,15 @@ Provide only the answer, nothing else.`;
         screenshotPreviews: currentAttachments.map((a) => a.preview).filter(Boolean),
       },
     ]);
+
+    // Reader-language anchor for quick actions (2026-10): Recap/Clarify/
+    // Follow-up ride manual_chat with an ENGLISH app instruction, so they
+    // cannot see the user's own language. Remember the last genuinely typed
+    // text (not an image-only fallback) so runQuickActionThroughChat can quote
+    // it and force the answer into the user's reading language.
+    if (userText.trim()) {
+      lastTypedUserTextRef.current = userText;
+    }
 
     // Scroll to bottom when user sends message
     setTimeout(() => {

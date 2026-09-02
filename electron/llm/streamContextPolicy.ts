@@ -59,6 +59,17 @@ export interface StreamRouteOptions {
    */
   pinnedModeId?: string | null;
   /**
+   * Answer-surface language policy (2026-10): typed/read surfaces
+   * ('reader' — manual chat and quick actions whose answers are READ in the
+   * chat panel) follow the language the human USER types in, ignoring the
+   * language of app-generated action labels (Recap/Clarify/etc.). Speak-aloud
+   * surfaces ('speak' — What-to-Answer suggestions the user says into the
+   * conversation) follow the language currently being spoken/discussed.
+   * Absent → the reader-aware default instruction text (legacy behavior is
+   * preserved for surfaces whose turns carry no user-typed signal).
+   */
+  languageSurface?: 'reader' | 'speak';
+  /**
    * Context Intelligence V3 (2026-07-31): this stream's prompts were composed
    * END-TO-END by the V3 decision layer — one frozen TurnDecision, scope/
    * version/claim-authority-filtered evidence, one composed prompt. When true,

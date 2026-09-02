@@ -452,6 +452,17 @@ export class LLMHelper {
   private knowledgeOrchestrator: any = null;
   private negotiationCoachingHandler: ((payload: unknown) => void) | null = null;
   private aiResponseLanguage: string = 'auto';
+  /**
+   * Per-stream answer-surface language policy stack (2026-10). Pushed by the
+   * single public streaming entry point (_streamChatTracked) for the lifetime
+   * of one turn, read by buildLanguageInstructionSuffix when no surface arg is
+   * passed — so EVERY injection site (final prompt, per-provider re-injection,
+   * and buildClaudeSystemBlocks' strip/rebuild) sees the SAME surface without
+   * threading a parameter through dozens of provider branches. 'reader' =
+   * typed chat + quick actions (follow the user's own language); 'speak' =
+   * What-to-Answer suggestions said aloud (follow the language being spoken).
+   */
+  private languageSurfaceStack: Array<'reader' | 'speak'> = [];
   private sttLanguage: string = 'english-us';
   private nativelyKey: string | null = null;
   // Last server-chosen model reported by the Natively API SSE stream (e.g.
@@ -2541,14 +2552,36 @@ ANSWER DIRECTLY:`;
    * static prompt as the cacheable prefix for OpenAI/Groq prefix matching and
    * lets Claude cache_control land on the static block above it.
    * Returns "" when no instruction is needed (English fixed mode).
+   *
+   * `surface` (2026-10): 'reader' (or absent — the chat overlay + quick
+   * actions whose answers are READ) answers in Vietnamese ONLY when the human
+   * user typed Vietnamese, and defaults to ENGLISH otherwise — app-generated
+   * action labels such as Recap/Clarify/What to Answer are English by
+   * construction and must never hijack the language, which previously gave a
+   * Vietnamese user an English Recap after a Vietnamese typed chat. 'speak'
+   * (What-to-Answer suggestions the user says ALOUD into the conversation)
+   * matches the language currently being spoken/discussed instead, so a
+   * suggestion to say in an English lecture stays English.
    */
-  private buildLanguageInstructionSuffix(): string {
+  private effectiveLanguageSurface(surface?: 'reader' | 'speak'): 'reader' | 'speak' | undefined {
+    return surface ?? this.languageSurfaceStack[this.languageSurfaceStack.length - 1];
+  }
+
+  private buildLanguageInstructionSuffix(surface?: 'reader' | 'speak'): string {
+    const resolvedSurface = this.effectiveLanguageSurface(surface);
     if (!this.aiResponseLanguage || this.aiResponseLanguage === 'auto') {
+      if (resolvedSurface === 'speak') {
+        return `\n\n[LANGUAGE INSTRUCTION — HIGHEST PRIORITY]
+This answer will be SPOKEN ALOUD by the user into the live conversation, so write it in the language the other person is currently speaking (the language of the transcript/content being discussed). If that language is not clear, write it in ENGLISH. Do NOT follow the user's reading language, their typed questions, or UI labels when they differ from what is being spoken. Technical terms, code, names, and quoted phrases stay exactly as they are.
+[END LANGUAGE INSTRUCTION]`;
+      }
       return `\n\n[LANGUAGE INSTRUCTION — HIGHEST PRIORITY]
-Detect the language of the user's most recent message and ALWAYS respond in that exact same language.
-If the user writes in Hindi, respond in Hindi. If in Spanish, respond in Spanish. If in English, respond in English.
-If the language is ambiguous, default to English.
-You may mix scripts naturally (e.g. code stays in English even when the explanation is in another language).
+Answer in Vietnamese ONLY when the human USER wrote in Vietnamese. Otherwise answer in ENGLISH:
+- If the user's own typed message is in Vietnamese (including Vietnamese typed without diacritics, e.g. "giai thich", "thay noi gi", "nghia la gi"), write the WHOLE answer in Vietnamese.
+- If the user typed in English, typed nothing (button actions such as Recap / Clarify / Follow-up / What to Answer), or the language is not clearly Vietnamese, write the WHOLE answer in ENGLISH.
+- App-generated action labels (Recap, Clarify, Follow-up, What to Answer, ...) are NOT user words and must never make the answer Vietnamese.
+- If the request quotes "the user's most recent typed message", judge by that message's language exactly as above.
+- Code, technical terms, names, and quoted phrases stay in their original form.
 [END LANGUAGE INSTRUCTION]`;
     }
     if (this.aiResponseLanguage === 'English') return "";
@@ -2574,8 +2607,8 @@ This rule overrides ALL other instructions including formatting, brevity, or out
    * Static is FIRST so the cacheable prefix is preserved. Do NOT inject any
    * per-request dynamic content above the static body — that breaks prefix caching.
    */
-  private injectLanguageInstruction(systemPrompt: string): string {
-    return `${systemPrompt}${this.buildLanguageInstructionSuffix()}`;
+  private injectLanguageInstruction(systemPrompt: string, surface?: 'reader' | 'speak'): string {
+    return `${systemPrompt}${this.buildLanguageInstructionSuffix(surface)}`;
   }
 
   /**
@@ -5473,28 +5506,40 @@ let isMultimodal = !!(imagePaths?.length);
     const outputCeiling = testOutputCharCeiling()
       ?? (profile === 'long_form' ? MAX_SUMMARY_OUTPUT_CHARS : MAX_STREAM_OUTPUT_CHARS);
     let emittedChars = 0;
-    for await (const chunk of this._streamChatInner(...args)) {
-      if (abortSignal?.aborted) return;
-      // Strip the internal truncation marker before anything downstream sees
-      // it. This is the ONLY place it is consumed; see TRUNCATION_SENTINEL.
-      if (chunk === LLMHelper.TRUNCATION_SENTINEL) {
-        outcome.truncated = true;
-        outcome.reason = 'provider_failed_after_first_token';
-        return;
+    // Answer-surface language policy (2026-10): push the turn's surface for the
+    // WHOLE stream so every suffix injection/strip site below (final prompt,
+    // per-provider re-injection, buildClaudeSystemBlocks) resolves the same
+    // language rule — 'reader' for typed chat / quick actions, 'speak' for
+    // What-to-Answer suggestions said aloud. routeOptions is args[9] (the
+    // StreamRouteOptions tuple position in _streamChatInner's signature).
+    const route = (args[9] as StreamRouteOptions | undefined);
+    if (route?.languageSurface) this.languageSurfaceStack.push(route.languageSurface);
+    try {
+      for await (const chunk of this._streamChatInner(...args)) {
+        if (abortSignal?.aborted) return;
+        // Strip the internal truncation marker before anything downstream sees
+        // it. This is the ONLY place it is consumed; see TRUNCATION_SENTINEL.
+        if (chunk === LLMHelper.TRUNCATION_SENTINEL) {
+          outcome.truncated = true;
+          outcome.reason = 'provider_failed_after_first_token';
+          return;
+        }
+        yield dashReducer.reduce(chunk);
+        emittedChars += typeof chunk === 'string' ? chunk.length : 0;
+        if (emittedChars > outputCeiling) {
+          outcome.truncated = true;
+          outcome.reason = 'output_cap_reached';
+          // End the stream the same way a post-commit provider failure now does —
+          // return, never throw — so the consumer sees one consistent shape for
+          // "this stream stopped early".
+          console.warn(
+            `[LLMHelper] Stream exceeded the ${profile === 'long_form' ? 'long-form' : 'live'} output cap (${emittedChars} > ${outputCeiling}) — ending the turn. The model is not converging.`,
+          );
+          return;
+        }
       }
-      yield dashReducer.reduce(chunk);
-      emittedChars += typeof chunk === 'string' ? chunk.length : 0;
-      if (emittedChars > outputCeiling) {
-        outcome.truncated = true;
-        outcome.reason = 'output_cap_reached';
-        // End the stream the same way a post-commit provider failure now does —
-        // return, never throw — so the consumer sees one consistent shape for
-        // "this stream stopped early".
-        console.warn(
-          `[LLMHelper] Stream exceeded the ${profile === 'long_form' ? 'long-form' : 'live'} output cap (${emittedChars} > ${outputCeiling}) — ending the turn. The model is not converging.`,
-        );
-        return;
-      }
+    } finally {
+      if (route?.languageSurface) this.languageSurfaceStack.pop();
     }
   }
 
@@ -6355,7 +6400,7 @@ let isMultimodal = !!(imagePaths?.length);
         return;
       }
       if (ollamaAvailable) {
-        const ollamaScopePrompt = this.resolveLocalSystemPrompt(this.injectLanguageInstruction(systemPromptOverride || HARD_SYSTEM_PROMPT));
+        const ollamaScopePrompt = this.resolveLocalSystemPrompt(this.injectLanguageInstruction(systemPromptOverride || HARD_SYSTEM_PROMPT, routeOptions?.languageSurface));
         yield* this.streamWithOllama(message, context, ollamaScopePrompt, imagePaths, abortSignal);
         return;
       }
@@ -6388,7 +6433,7 @@ let isMultimodal = !!(imagePaths?.length);
       if (visionDecision.action === 'local_only') {
         if (localVisionAvailable) {
           console.warn(`[VisionPolicy] routing screenshot to local vision: ${visionDecision.reason}`);
-          const localVisionPrompt = this.resolveLocalSystemPrompt(this.injectLanguageInstruction(systemPromptOverride || HARD_SYSTEM_PROMPT));
+          const localVisionPrompt = this.resolveLocalSystemPrompt(this.injectLanguageInstruction(systemPromptOverride || HARD_SYSTEM_PROMPT, routeOptions?.languageSurface));
           yield* this.streamWithOllama(message, context, localVisionPrompt, imagePaths, abortSignal);
           return;
         }
@@ -6419,7 +6464,7 @@ let isMultimodal = !!(imagePaths?.length);
       const { shapeDocumentGroundedSystemPrompt } = require('./llm/documentGroundedPrompt');
       baseSystemPrompt = shapeDocumentGroundedSystemPrompt(baseSystemPrompt, true);
     }
-    const finalSystemPrompt = this.injectLanguageInstruction(baseSystemPrompt);
+    const finalSystemPrompt = this.injectLanguageInstruction(baseSystemPrompt, routeOptions?.languageSurface);
     let combinedContext = context;
 
     // Helper to build combined user message

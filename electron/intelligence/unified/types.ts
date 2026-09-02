@@ -102,6 +102,12 @@ export interface IntelligenceRequest {
    *  caller-owned path. Set only by the typed-question call sites; quick
    *  actions and voice/answer-now leave it unset. */
   chatSurface?: boolean;
+  /** Answer-surface language policy (manual_chat only, 2026-10): 'speak'
+   *  marks questions the user will ASK/Say in the live conversation (e.g.
+   *  Follow-up Questions put to the teacher) — they match the language being
+   *  spoken, NOT the language the user typed. Absent/'reader' → user's own
+   *  typed language (default). */
+  languageSurface?: 'reader' | 'speak';
 
   // ── auto_transcript (Auto Answer V3) metadata ─────────────────────────────
   questionId?: string;

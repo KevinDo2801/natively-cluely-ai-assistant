@@ -24,6 +24,7 @@ import type { ActiveModeDocumentGroundingInfo } from "../services/ModesManager";
 import type { ModeRetrievalOptions } from "../services/ModeContextRetriever";
 import { isCodeVerificationEnabled } from "./codeVerification/verificationEnabled";
 import type { WhatToAnswerRequestSnapshot } from "./whatToAnswerRequestSnapshot";
+import type { StreamRouteOptions } from "./streamContextPolicy";
 
 // Wall-clock budget for the pre-stream mode-context HYBRID retrieval await.
 // The hybrid retriever embeds the live query, and the embedder's own hard
@@ -981,7 +982,7 @@ The user triggered this action with a coding problem on screen and NO new questi
                     ? (governedEvidencePack ?? governedWtaContextOs.evidencePack ?? null)
                     : null
             );
-            const wtaRouteOptions = resolvedGovernedPack && governedWtaContextOs
+            const wtaRouteOptions: StreamRouteOptions = resolvedGovernedPack && governedWtaContextOs
                 ? {
                     answerType: answerPlan?.answerType,
                     contextOsGeneration: governedWtaContextOs,
@@ -991,10 +992,17 @@ The user triggered this action with a coding problem on screen and NO new questi
                     // against. Without this, a mid-request mode switch could
                     // leak a different mode's documents into the answer.
                     pinnedModeId: requestSnapshot?.modeUniqueId ?? null,
+                    // Answer-surface language policy (2026-10): What-to-Answer
+                    // suggestions are SPOKEN ALOUD by the user — match the
+                    // language currently being spoken/discussed, never the
+                    // reader's language or the app label language.
+                    languageSurface: 'speak',
                 }
                 : {
                     answerType: answerPlan?.answerType,
                     pinnedModeId: requestSnapshot?.modeUniqueId ?? null,
+                    // See the speak-surface note above (governed branch).
+                    languageSurface: 'speak',
                 };
             // CONTEXT INTELLIGENCE V3 (Phase 6) — prompt substitution, transport intact.
             //

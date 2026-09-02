@@ -918,7 +918,7 @@ export function initializeIpcHandlers(appState: AppState): void {
       message: string,
       imagePaths?: string[],
       context?: string,
-      options?: { skipSystemPrompt?: boolean; ignoreKnowledgeMode?: boolean; chatSurface?: boolean },
+      options?: { skipSystemPrompt?: boolean; ignoreKnowledgeMode?: boolean; chatSurface?: boolean; languageSurface?: 'reader' | 'speak' },
     ): Promise<null> => {
       let myController: AbortController | null = null;
       let myStreamId = 0; // assigned inside try; read by the finally cleanup
@@ -3560,6 +3560,14 @@ export function initializeIpcHandlers(appState: AppState): void {
               // every mode read inside streamChat after an await resolved the
               // LIVE singleton instead.
               pinnedModeId: manualActiveMode?.id ?? null,
+              // Answer-surface language policy (2026-10): typed chat + read
+              // quick actions (Recap/Clarify) follow the language the USER
+              // types in, never the language of the English app-generated
+              // action label that rides `message`. Questions the user will
+              // ASK/Say in the live conversation (Follow-up Questions → the
+              // teacher) instead opt into `languageSurface: 'speak'` via the
+              // request, which matches the language being spoken.
+              languageSurface: options?.languageSurface ?? 'reader',
               // Surface-scoped (Phase 9, 2026-07-14): the referent hint must come
               // from THIS manual-chat conversation's own last answer, never a
               // WTA/phone-mirror turn that happened to write the shared
@@ -5806,7 +5814,7 @@ export function initializeIpcHandlers(appState: AppState): void {
             request.text ?? '',
             request.imagePaths,
             request.context, // rolling-context derivation lives inside the handler when absent
-            { skipSystemPrompt: request.skipSystemPrompt === true, chatSurface: request.chatSurface === true },
+            { skipSystemPrompt: request.skipSystemPrompt === true, chatSurface: request.chatSurface === true, languageSurface: request.languageSurface === 'speak' ? 'speak' : 'reader' },
           );
           return {
             started: true,

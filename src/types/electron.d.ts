@@ -442,6 +442,12 @@ export interface ElectronAPI {
      *  typed-question call sites (meeting chat overlay, main chat input);
      *  quick actions and voice/answer-now leave it unset. */
     chatSurface?: boolean
+    /** Answer-surface language policy (manual_chat only, 2026-10): 'speak'
+     *  marks questions the user will ASK/Say in the live conversation (e.g.
+     *  Follow-up Questions put to the teacher), which must match the language
+     *  being spoken — NOT the language the user typed. Absent/'reader' → the
+     *  user's own typed language (default). */
+    languageSurface?: 'reader' | 'speak'
   }) => Promise<{ started: boolean; generationId: number | null; streamKey: string | null; answer?: string | null; question?: string | null; error?: string; diagnostics?: Record<string, unknown> }>
 
   // NOTE: onSkillsChanged broadcast subscription was removed. Skills are
