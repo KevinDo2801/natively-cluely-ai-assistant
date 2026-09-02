@@ -43,8 +43,22 @@ export class MeetingPersistence {
         // MEETING CONTINUE (v33): a resumed session reports (original + continued)
         // duration and keeps the original start_time on the timeline.
         const resumedBaseline = this.session.getResumedBaseline();
-        const startTime = resumedBaseline?.startTime ?? this.session.getSessionStartTime();
-        const durationMs = (resumedBaseline?.durationMs ?? 0) + Math.max(0, Date.now() - this.session.getSessionStartTime());
+        // START-TIME FIX: for a brand-new meeting the persisted live-note
+        // start_time (minted at the Start click) is the source of truth — the
+        // in-memory session clock reflects app boot / the previous stop and
+        // would shift the timeline backwards (and inflate the duration).
+        // Resumed sessions keep their original start via the baseline.
+        let persistedStart: number | null = null;
+        if (liveMeetingId) {
+            try {
+                const timing = DatabaseManager.getInstance().getMeetingTiming(liveMeetingId);
+                if (timing && timing.startTime > 0) persistedStart = timing.startTime;
+            } catch { /* non-fatal — fall back to the session clock */ }
+        }
+        const startTime = resumedBaseline?.startTime ?? persistedStart ?? this.session.getSessionStartTime();
+        const durationMs = resumedBaseline
+            ? resumedBaseline.durationMs + Math.max(0, Date.now() - this.session.getSessionStartTime())
+            : Math.max(0, Date.now() - startTime);
         if (durationMs < 1000) {
             console.log("Meeting too short, ignoring.");
             // Live meeting note (v31): the row created at Start must not be left
@@ -255,7 +269,10 @@ export class MeetingPersistence {
             const finalMeeting: Meeting = {
                 id: meetingId,
                 title: metadata?.title || 'Chat session',
-                date: new Date().toISOString(),
+                // START-TIME FIX: `date` becomes the DB created_at. It must be
+                // the meeting START, not the moment this async finalize runs —
+                // otherwise the launcher shows the END time as the start time.
+                date: new Date(data.startTime).toISOString(),
                 duration: `${mins}:${Number(secs) < 10 ? '0' : ''}${secs}`,
                 summary: '',
                 detailedSummary: { actionItems: [], keyPoints: [] },
@@ -721,7 +738,11 @@ Return ONLY valid JSON (no markdown code blocks):
             const meetingData: Meeting = {
                 id: meetingId,
                 title: title,
-                date: new Date().toISOString(),
+                // START-TIME FIX: same as the zero-eligible path — the persisted
+                // created_at must be the meeting START (data.startTime), never
+                // the async finalize wall-clock, or the launcher shows the END
+                // time as the meeting's start time.
+                date: new Date(data.startTime).toISOString(),
                 duration: durationStr,
                 summary: "See detailed summary",
                 detailedSummary: summaryData,

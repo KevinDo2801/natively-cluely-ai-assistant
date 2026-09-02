@@ -5976,6 +5976,11 @@ export class AppState {
     if (continueMeetingId) {
       this.resumeLiveMeetingNote(metadata, continueMeetingId);
     } else {
+      // START-TIME FIX: anchor the session clock at the Start click. Without
+      // this, sessionStartTime reflects app boot / the previous stop, which
+      // shifts a brand-new meeting's persisted start_time and duration backwards
+      // (e.g. transcript begins at 11:41 but the note claims 11:37).
+      this.intelligenceManager.anchorSessionStartTime();
       this.startLiveMeetingNote(metadata);
     }
 

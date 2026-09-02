@@ -20,7 +20,7 @@ import { emitOrchestratorEvent, setUserState as setOrchestratorUserState } from 
 interface Meeting {
     id: string;
     title: string;
-    date: string;
+    date: string; // ISO — the meeting START time (start_time; created_at fallback for legacy rows)
     duration: string;
     summary: string;
     detailedSummary?: {

@@ -204,6 +204,11 @@ export class IntelligenceManager extends EventEmitter {
         this.session.seedResumedMeeting(startTime, durationMs);
     }
 
+    /** Anchor the session clock at the Start click for a brand-new meeting. */
+    anchorSessionStartTime(): void {
+        this.session.anchorSessionStartTime();
+    }
+
     logUsage(type: string, question: string, answer: string): void {
         this.session.logUsage(type, question, answer);
     }

@@ -262,6 +262,21 @@ export class SessionTracker {
         };
     }
 
+    /**
+     * Anchor the session clock at the moment a brand-new meeting starts (not a
+     * resume). Without this, sessionStartTime reflects app boot or the previous
+     * stop, so a fresh meeting's persisted start_time and duration would both be
+     * shifted backwards (e.g. transcript begins 11:41 but the note claims 11:37).
+     * Also clears any stale resume baseline so a later stop is not misread as a
+     * continued session.
+     */
+    public anchorSessionStartTime(ts: number = Date.now()): void {
+        this.sessionStartTime = ts;
+        this.resumedBaselineStartTime = null;
+        this.resumedBaselineDurationMs = 0;
+        this.resumedBaselineTranscript = [];
+    }
+
     // ============================================
     // Coding Question Tracking
     // ============================================

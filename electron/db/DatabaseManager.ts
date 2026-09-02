@@ -12,7 +12,7 @@ import type { ActionItem, DecisionItem, FollowUpDraft, MeetingSummaryGenerationM
 export interface Meeting {
     id: string;
     title: string;
-    date: string; // ISO string
+    date: string; // ISO string — the meeting START time (from start_time; created_at fallback for legacy rows)
     duration: string;
     summary: string;
     detailedSummary?: {
@@ -1635,7 +1635,7 @@ export class DatabaseManager {
         // was created inside a folder (live-note flush, final save, RAG
         // re-save) must NOT drop the folder assignment — the folder_id of the
         // existing row wins unless the caller explicitly supplies one.
-        const readUserTitle = this.db.prepare(`SELECT title, COALESCE(user_titled, 0) AS user_titled, folder_id FROM meetings WHERE id = ?`);
+        const readUserTitle = this.db.prepare(`SELECT title, COALESCE(user_titled, 0) AS user_titled, folder_id, created_at FROM meetings WHERE id = ?`);
 
         const summaryJson = JSON.stringify({
             legacySummary: meeting.summary,
@@ -1644,20 +1644,30 @@ export class DatabaseManager {
 
         const runTransaction = this.db.transaction(() => {
             // 1. Insert Meeting (a user-renamed row keeps its title — RC-7)
-            const existing = readUserTitle.get(meeting.id) as { title: string; user_titled: number; folder_id: string | null } | undefined;
+            const existing = readUserTitle.get(meeting.id) as { title: string; user_titled: number; folder_id: string | null; created_at: string | null } | undefined;
             const userTitled = existing?.user_titled === 1;
             // Folders (v32): an explicit folderId on the incoming Meeting wins;
             // otherwise preserve the row's existing assignment so idempotent
             // re-saves (live-note flush → final save → RAG re-save) never orphan
             // a meeting out of its folder.
             const folderId = meeting.folderId !== undefined ? meeting.folderId : (existing?.folder_id ?? null);
+            // START-TIME FIX: created_at is the meeting's START time (the live
+            // note is created at Start with date = start time). INSERT OR
+            // REPLACE rewrites the whole row, and the old final-save path
+            // stamped `new Date()` (the END time) into meeting.date, which
+            // moved created_at forward and made the launcher show the end time
+            // as the start time. Preserve the existing created_at on every
+            // re-save (live note → final save → RAG re-save) exactly like the
+            // RC-7 title/folder preservation above; new rows keep meeting.date
+            // (all callers set it to the start time).
+            const createdAt = existing?.created_at ?? meeting.date;
             insertMeeting.run(
                 meeting.id,
                 userTitled && existing?.title ? existing.title : meeting.title,
                 startTimeMs,
                 durationMs,
                 summaryJson,
-                meeting.date, // Using the ISO string as created_at for sorting simply
+                createdAt, // ISO string — meeting START time, preserved across re-saves
                 meeting.calendarEventId || null,
                 meeting.source || 'manual',
                 meeting.isProcessed ? 1 : 0,
@@ -1881,8 +1891,11 @@ export class DatabaseManager {
             sql += ` AND folder_id = ?`;
             params.push(folderId);
         }
+        // START-TIME FIX: order by the meeting's actual start (start_time), not
+        // created_at — created_at was historically overwritten with the END
+        // time by the final save, which also misordered the history list.
         sql += `
-            ORDER BY created_at DESC
+            ORDER BY COALESCE(start_time, 0) DESC
             LIMIT ?
         `;
         params.push(limit);
@@ -1903,7 +1916,11 @@ export class DatabaseManager {
             return {
                 id: row.id,
                 title: row.title,
-                date: row.created_at, // Use the stored ISO string
+                // START-TIME FIX: report the meeting START (start_time), with
+                // created_at as fallback for legacy rows lacking start_time.
+                // created_at itself historically held the END time (the final
+                // save stamped `new Date()` into it via INSERT OR REPLACE).
+                date: row.start_time ? new Date(row.start_time).toISOString() : row.created_at,
                 duration: durationStr,
                 summary: summaryData.legacySummary || '',
                 detailedSummary: summaryData.detailedSummary,
@@ -1977,7 +1994,9 @@ export class DatabaseManager {
         return {
             id: meetingRow.id,
             title: meetingRow.title,
-            date: meetingRow.created_at,
+            // START-TIME FIX: same as getRecentMeetings — the meeting START
+            // (start_time), created_at fallback for legacy rows.
+            date: meetingRow.start_time ? new Date(meetingRow.start_time).toISOString() : meetingRow.created_at,
             duration: durationStr,
             summary: summaryData.legacySummary || '',
             detailedSummary: summaryData.detailedSummary,
