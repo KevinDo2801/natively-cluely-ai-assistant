@@ -5,6 +5,7 @@ import fs from 'fs';
 import path from 'path';
 import { EventEmitter } from 'events';
 import { TRIAL_SENTINEL_KEY } from '../config/constants';
+import { getGoogleClientId, getGoogleClientSecret } from './googleCalendarConfig';
 
 // Configuration
 // GOOGLE_CLIENT_SECRET is intentionally NOT referenced in the DEFAULT path —
@@ -14,7 +15,7 @@ import { TRIAL_SENTINEL_KEY } from '../config/constants';
 // (NATIVELY_CALENDAR_DIRECT=1) where the app exchanges codes/tokens straight
 // with Google using the secret from env/.env — never enable that in a build
 // that is distributed.
-const GOOGLE_CLIENT_ID = process.env.GOOGLE_CLIENT_ID || "YOUR_CLIENT_ID_HERE";
+const GOOGLE_CLIENT_ID = getGoogleClientId() || "YOUR_CLIENT_ID_HERE";
 const REDIRECT_URI = "http://localhost:11111/auth/callback";
 const SCOPES = ["https://www.googleapis.com/auth/calendar.readonly"];
 const TOKEN_PATH = path.join(app.getPath('userData'), 'calendar_tokens.enc');
@@ -38,7 +39,7 @@ console.log(`[CalendarManager] Calendar token proxy: ${CALENDAR_API_URL}`);
 // the client secret then lives in the app process. NEVER enable it in a build
 // that gets distributed — the secret can be extracted from the binary, which
 // is exactly why the proxied path exists as the default.
-const GOOGLE_CLIENT_SECRET = process.env.GOOGLE_CLIENT_SECRET || '';
+const GOOGLE_CLIENT_SECRET = getGoogleClientSecret() || '';
 const CALENDAR_DIRECT_MODE =
     process.env.NATIVELY_CALENDAR_DIRECT === '1' &&
     !!GOOGLE_CLIENT_SECRET &&

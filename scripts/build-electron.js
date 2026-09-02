@@ -35,6 +35,29 @@ if (!bakedSupabaseUrl || !bakedSupabaseAnonKey) {
   );
 }
 
+// ── GOOGLE CALENDAR CONFIG BAKE ──────────────────────────────────────────────
+// Packaged builds load no `.env` (main.ts only does in dev) and inherit no shell
+// env, so CalendarManager would read an unset GOOGLE_CLIENT_* and DIRECT mode
+// could not link a Google Calendar on the install machine. Bake the client ID
+// (public by design) AND — ONLY for a single-operator/private build — the client
+// secret into the bundle as __NATIVELY_GOOGLE_*__; googleCalendarConfig.ts
+// prefers a live process.env override (dev) and falls back to these baked
+// values (packaged).
+//
+// ⚠️ Never point a DISTRIBUTED build at NATIVELY_CALENDAR_DIRECT with the secret
+// baked — the secret will be extractable from the binary. Baking the secret here
+// is only acceptable for a private/self-hosted release (one operator), where the
+// .exe is never redistributed publicly.
+const bakedGoogleClientId = process.env.GOOGLE_CLIENT_ID || parsedEnv.GOOGLE_CLIENT_ID || '';
+const bakedGoogleClientSecret = process.env.GOOGLE_CLIENT_SECRET || parsedEnv.GOOGLE_CLIENT_SECRET || '';
+if (!bakedGoogleClientId) {
+  console.warn(
+    '[build-electron] GOOGLE_CLIENT_ID not found in env or .env — ' +
+      'packaged builds will not be able to link a Google Calendar. ' +
+      '(Set GOOGLE_CLIENT_ID as a repo variable in GitHub Actions.)'
+  );
+}
+
 const rootDir = path.resolve(__dirname, '..');
 const outDir = path.resolve(rootDir, 'dist-electron');
 
@@ -115,6 +138,8 @@ const buildOptions = {
   define: {
     __NATIVELY_SUPABASE_URL__: JSON.stringify(bakedSupabaseUrl),
     __NATIVELY_SUPABASE_ANON_KEY__: JSON.stringify(bakedSupabaseAnonKey),
+    __NATIVELY_GOOGLE_CLIENT_ID__: JSON.stringify(bakedGoogleClientId),
+    __NATIVELY_GOOGLE_CLIENT_SECRET__: JSON.stringify(bakedGoogleClientSecret),
   },
   loader: {
     '.ts': 'ts',

@@ -50,6 +50,21 @@ jobs:
       # if you keep them under Secrets instead, swap `vars.` for `secrets.`.
       SUPABASE_URL: ${{ vars.SUPABASE_URL }}
       SUPABASE_ANON_KEY: ${{ vars.SUPABASE_ANON_KEY }}
+      # Google Calendar linking for the packaged app (DIRECT mode). The client
+      # ID is public — keep it as a repo VARIABLE (Settings → Secrets →
+      # Actions → Variables). The client SECRET is private — keep it as a repo
+      # SECRET. Both are read by scripts/build-electron.js and baked into the
+      # bundle for packaged builds, together with NATIVELY_CALENDAR_DIRECT=1,
+      # so an installed .exe can link a Google Calendar with no `.env`.
+      #
+      # ⚠️ PRIVATE/self-hosted release only: baking the secret means anyone who
+      # obtains the .exe can extract it. Only set these for a release you never
+      # redistribute publicly (single operator). For a public/distributed build
+      # remove GOOGLE_CLIENT_SECRET + NATIVELY_CALENDAR_DIRECT and use the
+      # proxy/exchange backend path instead.
+      GOOGLE_CLIENT_ID: ${{ vars.GOOGLE_CLIENT_ID }}
+      GOOGLE_CLIENT_SECRET: ${{ secrets.GOOGLE_CLIENT_SECRET }}
+      NATIVELY_CALENDAR_DIRECT: '1'
     steps:
       - name: Checkout
         uses: actions/checkout@v4
