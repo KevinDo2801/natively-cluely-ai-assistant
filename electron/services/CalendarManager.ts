@@ -4,18 +4,48 @@ import url from 'url';
 import fs from 'fs';
 import path from 'path';
 import { EventEmitter } from 'events';
+import { TRIAL_SENTINEL_KEY } from '../config/constants';
 
 // Configuration
-// GOOGLE_CLIENT_SECRET is intentionally NOT referenced here — the desktop app
-// only needs the (non-secret) client ID to construct the auth URL. Token
-// exchange and refresh are proxied through natively-api, which holds the secret.
+// GOOGLE_CLIENT_SECRET is intentionally NOT referenced in the DEFAULT path —
+// the desktop app only needs the (non-secret) client ID to construct the auth
+// URL, and token exchange/refresh are proxied through natively-api, which holds
+// the secret. EXCEPTION: single-user dev boxes can opt into DIRECT mode
+// (NATIVELY_CALENDAR_DIRECT=1) where the app exchanges codes/tokens straight
+// with Google using the secret from env/.env — never enable that in a build
+// that is distributed.
 const GOOGLE_CLIENT_ID = process.env.GOOGLE_CLIENT_ID || "YOUR_CLIENT_ID_HERE";
 const REDIRECT_URI = "http://localhost:11111/auth/callback";
 const SCOPES = ["https://www.googleapis.com/auth/calendar.readonly"];
 const TOKEN_PATH = path.join(app.getPath('userData'), 'calendar_tokens.enc');
-// Base URL for the natively-api proxy. Override with NATIVELY_API_URL for local dev
-// (e.g. http://localhost:3000). Trailing slash is stripped to keep route concat clean.
-const NATIVELY_API_URL = (process.env.NATIVELY_API_URL || 'https://api.natively.software').replace(/\/+$/, '');
+// Base URL for the calendar token proxy. Defaults to the same natively-api host
+// the rest of the app uses (NATIVELY_API_URL), but can be pointed at a LOCAL
+// proxy via NATIVELY_CALENDAR_API_URL (e.g. http://localhost:3000) so calendar
+// linking works without a Natively account — a local proxy holds
+// GOOGLE_CLIENT_SECRET and talks to Google directly. It MUST stay a separate
+// env var from NATIVELY_API_URL, because that one also routes /v1/chat,
+// reviews and usage telemetry, which must keep hitting the real backend.
+const CALENDAR_API_URL = (process.env.NATIVELY_CALENDAR_API_URL || process.env.NATIVELY_API_URL || 'https://api.natively.software').replace(/\/+$/, '');
+
+// Startup breadcrumb — makes a misconfigured proxy URL instantly visible in
+// natively_debug.log when calendar linking fails (a 401 auth_required always
+// means this resolved to api.natively.software instead of a local proxy).
+console.log(`[CalendarManager] Calendar token proxy: ${CALENDAR_API_URL}`);
+
+// PERSONAL/DEV DIRECT MODE — set NATIVELY_CALENDAR_DIRECT=1 (with a real
+// GOOGLE_CLIENT_SECRET in env/.env) to skip the token proxy entirely and talk
+// straight to Google from the app. Intended for single-user dev boxes only:
+// the client secret then lives in the app process. NEVER enable it in a build
+// that gets distributed — the secret can be extracted from the binary, which
+// is exactly why the proxied path exists as the default.
+const GOOGLE_CLIENT_SECRET = process.env.GOOGLE_CLIENT_SECRET || '';
+const CALENDAR_DIRECT_MODE =
+    process.env.NATIVELY_CALENDAR_DIRECT === '1' &&
+    !!GOOGLE_CLIENT_SECRET &&
+    GOOGLE_CLIENT_SECRET !== 'your_google_client_secret_here';
+if (CALENDAR_DIRECT_MODE) {
+    console.log('[CalendarManager] DIRECT token exchange mode — no proxy, calling Google directly');
+}
 
 if (GOOGLE_CLIENT_ID === "YOUR_CLIENT_ID_HERE") {
     console.warn('[CalendarManager] GOOGLE_CLIENT_ID is using the default placeholder. Calendar features will not work until a valid client ID is provided via env var or build config.');
@@ -99,12 +129,17 @@ export class CalendarManager extends EventEmitter {
                         }
 
                         if (code) {
-                            res.end('Authentication successful! You can close this window and return to Natively.');
-                            // Exchange code for tokens. If this throws, still finish so the server closes.
+                            // Exchange the code BEFORE telling the user it worked — the old
+                            // code ended the response first, so the browser always showed
+                            // "Authentication successful!" even when the backend rejected the
+                            // exchange (e.g. 401 auth_required) and no tokens were ever saved.
                             try {
                                 await this.exchangeCodeForToken(code);
+                                res.end('Authentication successful! You can close this window and return to Natively.');
                                 finish(() => resolve());
                             } catch (err) {
+                                const reason = err instanceof Error ? err.message : String(err);
+                                res.end(`Authentication failed (${reason}). You can close this window and try again from Natively.`);
                                 finish(() => reject(err));
                             }
                         }
@@ -163,15 +198,67 @@ export class CalendarManager extends EventEmitter {
         return `https://accounts.google.com/o/oauth2/v2/auth?${params.toString()}`;
     }
 
+    /**
+     * Auth headers for the natively-api proxy. Calendar token exchange/refresh
+     * is proxied through the backend, which authenticates callers exactly like
+     * every other /api and /v1 route: `x-natively-key` for key holders and
+     * `x-trial-token` for trial users (the TRIAL_SENTINEL_KEY stored in
+     * CredentialsManager is a routing marker and must never be sent as-is —
+     * same rule as LLMHelper). Without one of these the backend answers
+     * `401 auth_required`, which is exactly what broke calendar linking
+     * (see exchange_failed status=401 auth_required in natively_debug.log).
+     */
+    private getProxyAuthHeaders(): Record<string, string> {
+        const { CredentialsManager } = require('./CredentialsManager');
+        const nativelyKey = CredentialsManager.getInstance().getNativelyApiKey();
+        if (nativelyKey && nativelyKey !== TRIAL_SENTINEL_KEY) {
+            return { 'x-natively-key': nativelyKey };
+        }
+        if (nativelyKey === TRIAL_SENTINEL_KEY) {
+            const trialToken = CredentialsManager.getInstance().getTrialToken();
+            if (trialToken) return { 'x-trial-token': trialToken };
+        }
+        return {};
+    }
+
+    /** POST form-encoded params to a URL and parse the JSON response. */
+    private async postForm(url: string, params: Record<string, string>): Promise<{ ok: boolean; status: number; data: any }> {
+        const response = await fetch(url, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+            body: new URLSearchParams(params).toString(),
+            signal: AbortSignal.timeout(15_000),
+        });
+        const data = await response.json().catch(() => ({} as any));
+        return { ok: response.ok, status: response.status, data };
+    }
+
     private async exchangeCodeForToken(code: string) {
         try {
+            if (CALENDAR_DIRECT_MODE) {
+                // Direct Google call — code + client secret straight to Google's
+                // token endpoint (personal/dev mode; see CALENDAR_DIRECT_MODE).
+                const { ok, status, data } = await this.postForm('https://oauth2.googleapis.com/token', {
+                    code,
+                    client_id: GOOGLE_CLIENT_ID,
+                    client_secret: GOOGLE_CLIENT_SECRET,
+                    redirect_uri: REDIRECT_URI,
+                    grant_type: 'authorization_code',
+                });
+                if (!ok) {
+                    throw new Error(`exchange_failed status=${status} ${(data as any)?.error || ''}`.trim());
+                }
+                this.handleTokenResponse(data);
+                return;
+            }
+
             // Proxied through natively-api so GOOGLE_CLIENT_SECRET never ships in the desktop app.
             // Fetch (vs. axios) so this call shares the global keep-alive pool with every other
             // request to api.natively.software and exposes the same error shape (res.ok / res.status)
-            // as the rest of the codebase.
-            const response = await fetch(`${NATIVELY_API_URL}/api/calendar/exchange`, {
+            // as the rest of the codebase. Auth headers are required by the backend (401 auth_required).
+            const response = await fetch(`${CALENDAR_API_URL}/api/calendar/exchange`, {
                 method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
+                headers: { 'Content-Type': 'application/json', ...this.getProxyAuthHeaders() },
                 body: JSON.stringify({ code, redirect_uri: REDIRECT_URI }),
                 signal: AbortSignal.timeout(15_000),
             });
@@ -235,10 +322,27 @@ export class CalendarManager extends EventEmitter {
         }
 
         try {
+            if (CALENDAR_DIRECT_MODE) {
+                // Direct Google call — refresh token + client secret straight to
+                // Google (personal/dev mode; see CALENDAR_DIRECT_MODE).
+                const { ok, status, data } = await this.postForm('https://oauth2.googleapis.com/token', {
+                    refresh_token: this.refreshToken,
+                    client_id: GOOGLE_CLIENT_ID,
+                    client_secret: GOOGLE_CLIENT_SECRET,
+                    grant_type: 'refresh_token',
+                });
+                if (!ok) {
+                    throw new Error(`refresh_failed status=${status} ${(data as any)?.error || ''}`.trim());
+                }
+                this.handleTokenResponse(data);
+                return;
+            }
+
             // Proxied through natively-api so GOOGLE_CLIENT_SECRET never ships in the desktop app.
-            const response = await fetch(`${NATIVELY_API_URL}/api/calendar/refresh`, {
+            // Auth headers required by the backend (same rule as the exchange call above).
+            const response = await fetch(`${CALENDAR_API_URL}/api/calendar/refresh`, {
                 method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
+                headers: { 'Content-Type': 'application/json', ...this.getProxyAuthHeaders() },
                 body: JSON.stringify({ refresh_token: this.refreshToken }),
                 signal: AbortSignal.timeout(15_000),
             });

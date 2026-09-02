@@ -2111,6 +2111,13 @@ contextBridge.exposeInMainWorld('electronAPI', {
   getCalendarStatus: () => ipcRenderer.invoke('get-calendar-status'),
   getUpcomingEvents: () => ipcRenderer.invoke('get-upcoming-events'),
   calendarRefresh: () => ipcRenderer.invoke('calendar-refresh'),
+  onCalendarConnectionChanged: (callback: (connected: boolean) => void) => {
+    const subscription = (_: any, connected: boolean) => callback(connected);
+    ipcRenderer.on('calendar-connection-changed', subscription);
+    return () => {
+      ipcRenderer.removeListener('calendar-connection-changed', subscription);
+    };
+  },
 
   // Auto-Update
   onUpdateAvailable: (callback: (info: any) => void) => {

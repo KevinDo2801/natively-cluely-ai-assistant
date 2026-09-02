@@ -322,6 +322,19 @@ const Launcher: React.FC<LauncherProps> = ({ onStartMeeting, onOpenSettings, onO
                 .catch(() => {});
         }
 
+        // Listen for live connection changes (user connects/disconnects from
+        // Settings while the Launcher is open) — swap the prompt for the card
+        // immediately instead of waiting for the next app launch. On connect,
+        // pull the upcoming events right away so the peek stack isn't empty.
+        let removeCalendarListener: (() => void) | undefined;
+        if (window.electronAPI?.onCalendarConnectionChanged) {
+            removeCalendarListener = window.electronAPI.onCalendarConnectionChanged((connected) => {
+                if (!mounted) return;
+                setIsCalendarConnected(connected);
+                if (connected) fetchEvents();
+            });
+        }
+
         // Sync initial meeting active state — guarded so unmounted component isn't written to
         if (window.electronAPI?.getMeetingActive) {
             window.electronAPI.getMeetingActive()
@@ -389,6 +402,7 @@ const Launcher: React.FC<LauncherProps> = ({ onStartMeeting, onOpenSettings, onO
             if (removeMeetingsListener) removeMeetingsListener();
             if (removeUndetectableListener) removeUndetectableListener();
             if (removeMeetingStateListener) removeMeetingStateListener();
+            if (removeCalendarListener) removeCalendarListener();
             clearInterval(interval);
             window.removeEventListener('focus', onFocus);
             window.removeEventListener('blur', onBlur);

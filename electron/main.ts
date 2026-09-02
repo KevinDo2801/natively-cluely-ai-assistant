@@ -8991,6 +8991,14 @@ if (process.env.THINKING_MATRIX === '1') {
     const calMgr = CalendarManager.getInstance();
     calMgr.init();
 
+    // Forward connection changes to the renderer so the Launcher can swap the
+    // "Link your calendar" prompt for the Upcoming Calendar card live (the
+    // Launcher only checks getCalendarStatus on mount, so without this it would
+    // stay stale until the next app launch).
+    calMgr.on('connection-changed', (connected: boolean) => {
+      appState.broadcast('calendar-connection-changed', connected);
+    });
+
     calMgr.on('start-meeting-requested', (event: any) => {
       console.log('[Main] Start meeting requested from calendar notification', event);
       appState.centerAndShowWindow();

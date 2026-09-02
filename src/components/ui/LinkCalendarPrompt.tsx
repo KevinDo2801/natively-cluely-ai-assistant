@@ -29,6 +29,7 @@ const LinkCalendarPrompt: React.FC<LinkCalendarPromptProps> = ({ onConnected }) 
     const isLight = useResolvedTheme() === 'light';
     const [visible, setVisible] = useState(false);
     const [loading, setLoading] = useState(false);
+    const [error, setError] = useState<string | null>(null);
 
     useEffect(() => {
         let mounted = true;
@@ -43,6 +44,7 @@ const LinkCalendarPrompt: React.FC<LinkCalendarPromptProps> = ({ onConnected }) 
     const handleConnect = async () => {
         if (loading || !window.electronAPI?.calendarConnect) return;
         setLoading(true);
+        setError(null);
         try {
             const res = await window.electronAPI.calendarConnect();
             if (res.success) {
@@ -50,10 +52,15 @@ const LinkCalendarPrompt: React.FC<LinkCalendarPromptProps> = ({ onConnected }) 
                 setVisible(false);
                 onConnected?.();
             } else if (res.error) {
+                // Show the reason inline — calendarConnect can reject even after the
+                // browser page said "Authentication successful" (the exchange runs
+                // after that page is rendered).
                 console.error('[LinkCalendarPrompt] Calendar connect failed:', res.error);
+                setError(res.error);
             }
         } catch (err) {
             console.error('[LinkCalendarPrompt] Calendar connect failed:', err);
+            setError(err instanceof Error ? err.message : String(err));
         } finally {
             setLoading(false);
         }
@@ -62,28 +69,35 @@ const LinkCalendarPrompt: React.FC<LinkCalendarPromptProps> = ({ onConnected }) 
     if (!visible) return null;
 
     return (
-        <p className="text-[14px] leading-snug">
-            {loading ? (
-                <span className="inline-flex items-center gap-2 text-text-secondary">
-                    <Loader size={13} className="animate-spin shrink-0" />
-                    {t('Connecting...')}
-                </span>
-            ) : (
-                <>
-                    <button
-                        type="button"
-                        onClick={handleConnect}
-                        className="font-medium hover:underline underline-offset-2 transition-colors cursor-pointer"
-                        style={{ color: isLight ? '#0E8C9C' : '#5BC0CE' }}
-                    >
-                        {t('Link your calendar')}
-                    </button>
-                    <span className="text-text-secondary">
-                        {' '}{t('to get notifications for upcoming meetings.')}
+        <div className="flex flex-col gap-1">
+            <p className="text-[14px] leading-snug">
+                {loading ? (
+                    <span className="inline-flex items-center gap-2 text-text-secondary">
+                        <Loader size={13} className="animate-spin shrink-0" />
+                        {t('Connecting...')}
                     </span>
-                </>
+                ) : (
+                    <>
+                        <button
+                            type="button"
+                            onClick={handleConnect}
+                            className="font-medium hover:underline underline-offset-2 transition-colors cursor-pointer"
+                            style={{ color: isLight ? '#0E8C9C' : '#5BC0CE' }}
+                        >
+                            {t('Link your calendar')}
+                        </button>
+                        <span className="text-text-secondary">
+                            {' '}{t('to get notifications for upcoming meetings.')}
+                        </span>
+                    </>
+                )}
+            </p>
+            {error && !loading && (
+                <p className="text-[12px] text-red-400/90 leading-snug break-words max-w-[520px]">
+                    {error}
+                </p>
             )}
-        </p>
+        </div>
     );
 };
 

@@ -566,6 +566,8 @@ export interface ElectronAPI {
   getCalendarStatus: () => Promise<{ connected: boolean; email?: string }>
   getUpcomingEvents: () => Promise<Array<{ id: string; title: string; startTime: string; endTime: string; link?: string; source: 'google'; attendees?: Array<{ email: string; name?: string; photoUrl?: string; response?: 'accepted' | 'declined' | 'tentative' | 'needsAction' }> }>>
   calendarRefresh: () => Promise<{ success: boolean; error?: string }>
+  /** Fired by the main process when the Google Calendar connection toggles (connect/disconnect). */
+  onCalendarConnectionChanged: (callback: (connected: boolean) => void) => () => void
 
   // Auto-Update
   onUpdateAvailable: (callback: (info: any) => void) => () => void

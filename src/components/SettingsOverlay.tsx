@@ -1514,6 +1514,7 @@ const SettingsOverlay: React.FC<SettingsOverlayProps> = ({
     const [isCalendarsLoading, setIsCalendarsLoading] = useState(false);
     const [calendarEvents, setCalendarEvents] = useState<Array<{ id: string; title: string; startTime: string; endTime: string; link?: string }>>([]);
     const [isCalendarRefreshing, setIsCalendarRefreshing] = useState(false);
+    const [calendarError, setCalendarError] = useState<string | null>(null);
 
 
     // Load stored credentials on mount
@@ -3790,14 +3791,22 @@ const SettingsOverlay: React.FC<SettingsOverlayProps> = ({
                                                 <button
                                                     onClick={async () => {
                                                         setIsCalendarsLoading(true);
+                                                        setCalendarError(null);
                                                         try {
                                                             const res = await window.electronAPI.calendarConnect();
                                                             if (res.success) {
                                                                 const status = await window.electronAPI.getCalendarStatus();
                                                                 setCalendarStatus(status);
+                                                            } else {
+                                                                // Surface the failure instead of silently doing nothing —
+                                                                // calendarConnect can reject even though the browser
+                                                                // showed "Authentication successful" (exchange happens
+                                                                // after that page renders).
+                                                                setCalendarError(res.error || t('Calendar connection failed'));
                                                             }
-                                                        } catch (e) {
+                                                        } catch (e: any) {
                                                             console.error(e);
+                                                            setCalendarError(e?.message || String(e));
                                                         } finally {
                                                             setIsCalendarsLoading(false);
                                                         }
@@ -3815,6 +3824,11 @@ const SettingsOverlay: React.FC<SettingsOverlayProps> = ({
                                                     </svg>
                                                     {isCalendarsLoading ? t('Connecting...') : t('Connect Google')}
                                                 </button>
+                                                {calendarError && (
+                                                    <p className="mt-2.5 text-xs text-red-400/90 leading-snug break-words max-w-[320px]">
+                                                        {calendarError}
+                                                    </p>
+                                                )}
                                             </div>
                                         )}
                                     </div>
