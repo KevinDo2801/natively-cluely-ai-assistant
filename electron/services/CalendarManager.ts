@@ -61,6 +61,7 @@ export interface CalendarAttendee {
 export interface CalendarEvent {
     id: string;
     title: string;
+    description?: string; // Plain-text description, URLs/join boilerplate stripped
     startTime: string; // ISO
     endTime: string; // ISO
     link?: string;
@@ -536,6 +537,7 @@ export class CalendarManager extends EventEmitter {
                 .map((item: any) => ({
                     id: item.id,
                     title: item.summary || '(No Title)',
+                    description: this.cleanDescription(item.description),
                     startTime: item.start.dateTime,
                     endTime: item.end.dateTime,
                     link: this.resolveMeetingLink(item),
@@ -587,6 +589,37 @@ export class CalendarManager extends EventEmitter {
         // ... avoided to prevent picking up random links like "docs.google.com"
 
         return undefined;
+    }
+
+    /**
+     * Best-effort plain-text description for the UI: drops join/meeting
+     * boilerplate lines and URLs (the actual meeting link is exposed via
+     * `link`, so re-printing it here would be noise), collapses line breaks,
+     * and caps the length so the launcher card payload stays small.
+     */
+    private cleanDescription(raw: string | undefined | null): string | undefined {
+        if (!raw) return undefined;
+
+        const lines = raw
+            .split(/\r?\n/)
+            .map((line) => line.trim())
+            .filter((line) => line.length > 0 &&
+                !/^(join|add to calendar|about this event|google meet joining info|more information|view all event details|conference details)/i.test(line));
+
+        if (lines.length === 0) return undefined;
+
+        let text = lines
+            .join(' ')
+            .replace(/(?:https?:\/\/|www\.)\S+/gi, '')   // Bare URLs
+            .replace(/<[^>]+>/g, '')                     // Stray HTML tags
+            .replace(/\s{2,}/g, ' ')
+            .trim();
+
+        if (text.length > 300) {
+            text = text.slice(0, 297).replace(/\s+\S*$/, '') + '…';
+        }
+
+        return text || undefined;
     }
 
     // Background fetcher could go here if needed

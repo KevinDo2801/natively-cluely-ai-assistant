@@ -65,6 +65,9 @@ const RU: Record<string, string> = {
     'Link your calendar to': 'Подключите календарь, чтобы',
     'see upcoming events': 'видеть предстоящие события',
     'Connect calendar': 'Подключить календарь',
+    'Join meeting': 'Присоединиться к встрече',
+    'People in this call': 'Участники звонка',
+    'No attendees found.': 'Участники не найдены.',
 
     // ── Meeting folders (v32) ──
     'Folders': 'Папки',
@@ -305,6 +308,9 @@ const ZH: Record<string, string> = {
     'Settings': '设置',
     'General': '通用',
     'Close': '关闭',
+    'Join meeting': '加入会议',
+    'People in this call': '通话中的人',
+    'No attendees found.': '未找到与会者。',
 
     // ── Live meeting note (v31) ──
     'Live': '直播',
@@ -334,6 +340,9 @@ const JA: Record<string, string> = {
     'Settings': '設定',
     'General': '一般',
     'Close': '閉じる',
+    'Join meeting': '会議に参加',
+    'People in this call': 'この通話の参加者',
+    'No attendees found.': '参加者が見つかりません。',
 
     // ── Live meeting note (v31) ──
     'Live': 'ライブ',
@@ -362,6 +371,9 @@ const ES: Record<string, string> = {
     'Settings': 'Ajustes',
     'General': 'General',
     'Close': 'Cerrar',
+    'Join meeting': 'Unirse a la reunión',
+    'People in this call': 'Personas en esta llamada',
+    'No attendees found.': 'No se encontraron asistentes.',
 
     // ── Live meeting note (v31) ──
     'Live': 'En vivo',

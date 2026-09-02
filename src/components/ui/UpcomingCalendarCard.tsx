@@ -1,6 +1,7 @@
 import React from 'react';
 import { useT } from '../../i18n';
-import calender from './calender.png';
+import { useResolvedTheme } from '../../hooks/useResolvedTheme';
+import { ArrowRight, Video } from 'lucide-react';
 import ConnectCalendarButton from './ConnectCalendarButton';
 
 export interface CalendarAttendee {
@@ -12,6 +13,9 @@ export interface CalendarMeeting {
     id: string;
     title: string;
     startTime: string;
+    endTime?: string;
+    description?: string;
+    link?: string;
     attendees?: CalendarAttendee[];
 }
 
@@ -20,10 +24,15 @@ interface UpcomingCalendarCardProps {
     isConnected: boolean;
     /** Called once the connect flow succeeds (or to optimistically flip state). */
     onConnect?: () => void;
-    /** Upcoming meetings, soonest-first. Only the first 3 are ever shown. */
+    /**
+     * Upcoming meetings, soonest-first. The first meeting becomes the hero on
+     * the left; the next up to 3 render as compact rows in the right column.
+     */
     meetings?: CalendarMeeting[];
-    /** Total upcoming meeting count, for the "+N more" pill. Defaults to meetings.length. */
+    /** Total upcoming meeting count (may exceed meetings.length) — drives the "+N more" hint. Defaults to meetings.length. */
     totalCount?: number;
+    /** Called when the user clicks an event (hero or a side row) to open its detail page. */
+    onSelectEvent?: (event: CalendarMeeting) => void;
     className?: string;
 }
 
@@ -38,167 +47,172 @@ const formatTimeLabel = (startTime: string) => {
         : isTomorrow ? `Tomorrow at ${time}`
         : `${start.toLocaleDateString([], { weekday: 'short' })} at ${time}`;
 };
+export { formatTimeLabel };
 
-// Front-most (soonest) meeting sits highest at rest; hover bumps past all of these (see hover:z-40).
-const STACK_Z_CLASSES = ['z-30', 'z-20', 'z-10'];
-
-// Deterministic avatar palette from email/name
-const avatarPalette = [
-    'bg-rose-300/90 text-rose-900',
-    'bg-amber-200/90 text-amber-900',
-    'bg-emerald-200/90 text-emerald-900',
-    'bg-sky-200/90 text-sky-900',
-    'bg-violet-200/90 text-violet-900',
-    'bg-teal-200/90 text-teal-900',
-];
-
-const initialsFor = (a: CalendarAttendee) => {
-    const src = (a.name || a.email || '').trim();
-    if (!src) return '?';
-    const parts = src.split(/[\s._-]+/).filter(Boolean);
-    if (parts.length >= 2) return (parts[0][0] + parts[1][0]).toUpperCase();
-    return src.slice(0, 2).toUpperCase();
-};
-
-const colorFor = (key: string) => {
-    let h = 0;
-    for (let i = 0; i < key.length; i++) h = (h * 31 + key.charCodeAt(i)) | 0;
-    return avatarPalette[Math.abs(h) % avatarPalette.length];
-};
+// Subtle fractal-noise grain (same recipe the rest of the launcher uses).
+const GRAIN_BG = "url(\"data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='160' height='160'><filter id='n'><feTurbulence type='fractalNoise' baseFrequency='0.9' numOctaves='2' stitchTiles='stitch'/></filter><rect width='100%' height='100%' filter='url(%23n)' opacity='0.55'/></svg>\")";
 
 /**
- * "Link your calendar to see upcoming events" hero card — accent-tinted
- * calendar backdrop, connect CTA when disconnected, stacked peek of the
- * next few meetings once connected. Pixel-matched to the Launcher card,
- * but self-contained so it can be dropped anywhere real meeting data needs
- * to be shown (props-driven, no Launcher-specific state/hooks).
+ * Launcher "Upcoming events" panel — a meeting-focused layout inspired by the
+ * classic Calendar "now + next" card: the soonest meeting becomes the hero on
+ * the left (accent bar, time, big title, optional Join button + description),
+ * and the following meetings stack as compact rows on the right. Theme-aware
+ * (light/dark via semantic tokens), props-driven, no Launcher state/hooks.
  */
 const UpcomingCalendarCard: React.FC<UpcomingCalendarCardProps> = ({
     isConnected,
     onConnect,
     meetings = [],
     totalCount,
+    onSelectEvent,
     className = '',
 }) => {
     const t = useT();
+    const isLight = useResolvedTheme() === 'light';
 
-    const visibleMeetings = meetings.slice(0, 3);
-    const moreMeetingsCount = Math.max(0, (totalCount ?? meetings.length) - visibleMeetings.length);
+    const mainMeeting = meetings[0] ?? null;
 
-    const CARD_HEIGHT = 56;
-    const CARD_OFFSET = 16;
-    const stackHeight = visibleMeetings.length > 0
-        ? (visibleMeetings.length - 1) * CARD_OFFSET + CARD_HEIGHT
-        : 0;
+    // Side column: up to 3 following events. When more exist beyond what was
+    // passed in, keep room for the "+N more" hint row instead of a 3rd event.
+    const sideAll = meetings.slice(1);
+    const extraCount = Math.max(0, (totalCount ?? meetings.length) - meetings.length);
+    const sideRows = extraCount > 0 ? sideAll.slice(0, 2) : sideAll.slice(0, 3);
+    const hiddenCount = extraCount + Math.max(0, sideAll.length - sideRows.length);
+    const hasSide = sideRows.length > 0 || hiddenCount > 0;
+
+    const openLink = (url?: string) => {
+        if (url) window.electronAPI?.openExternal?.(url);
+    };
 
     return (
-        <div className={`rounded-xl overflow-hidden bg-bg-elevated relative flex flex-col shadow-[inset_0_1px_1px_rgba(255,255,255,0.08)] ${className}`}>
-            {/* Backdrop image with accent tint mask */}
-            <div className="absolute inset-0">
-                <img
-                    src={calender}
-                    alt=""
-                    className="w-full h-full object-cover scale-105 translate-y-[1px]"
-                />
-                {/* Accent tint mask — only when connected, washes the calendar image into the brand accent */}
-                {isConnected && (
+        <div className={`relative flex flex-col overflow-hidden rounded-xl h-full ${className}`}>
+            {/* ── Ambient backdrop (no photo — flat canvas like the reference card) ── */}
+            <div className="absolute inset-0 pointer-events-none" aria-hidden="true">
+                {/* Base wash — semantic token bg-bg-secondary both themes
+                    (light #F5F5F5 / dark #050505), no hardcoded hex */}
+                <div className="absolute inset-0 bg-bg-secondary" />
+                {/* Top hairline highlight (dark only) */}
+                {!isLight && (
+                    <div className="absolute inset-x-0 top-0 h-px bg-gradient-to-r from-transparent via-white/10 to-transparent" />
+                )}
+                {/* Soft brand glows (dark only — light stays a clean flat canvas) */}
+                {!isLight && (
                     <>
-                        <div className="absolute inset-0 bg-[#6b4574]/55 mix-blend-multiply" />
-                        <div className="absolute inset-0 bg-gradient-to-b from-[#9a5fa8]/25 via-[#7a4f8a]/20 to-[#3d2245]/35" />
-                        {/* Soft top-glow */}
-                        <div className="absolute -top-16 left-1/2 -translate-x-1/2 w-[260px] h-[200px] bg-[#e0b3e6]/20 blur-[80px] pointer-events-none" />
+                        <div className="absolute -top-16 -left-16 w-56 h-56 rounded-full bg-[#9a5fa8]/[0.13] blur-[90px]" />
+                        <div className="absolute -bottom-20 -right-10 w-64 h-56 rounded-full bg-sky-500/[0.07] blur-[90px]" />
                     </>
                 )}
-                {/* Subtle grain */}
-                <div
-                    className="absolute inset-0 opacity-[0.05] mix-blend-overlay pointer-events-none"
-                    style={{ backgroundImage: "url(\"data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='160' height='160'><filter id='n'><feTurbulence type='fractalNoise' baseFrequency='0.9' numOctaves='2' stitchTiles='stitch'/></filter><rect width='100%' height='100%' filter='url(%23n)' opacity='0.55'/></svg>\")" }}
-                />
+                {/* Grain (dark only) */}
+                {!isLight && (
+                    <div className="absolute inset-0 opacity-[0.035] mix-blend-overlay" style={{ backgroundImage: GRAIN_BG }} />
+                )}
             </div>
 
-            {/* Content Layer */}
             {isConnected ? (
-                <div className="relative z-10 w-full flex flex-col h-full px-3.5 pt-3.5 pb-3">
-                    {/* Header — simple label replacing the old title + "Calendar Connected" pill */}
-                    <div className="flex items-center justify-between px-0.5">
-                        <h3 className="text-[12.5px] font-semibold text-white/75 uppercase tracking-wider">
-                            {t('Upcoming events')}
-                        </h3>
-                        {moreMeetingsCount > 0 && (
-                            <span className="text-[10.5px] font-semibold text-white/45 tabular-nums">
-                                +{moreMeetingsCount} {t('more')}
-                            </span>
+                mainMeeting ? (
+                    <div className="relative z-10 flex-1 flex min-h-0 px-4 py-3">
+                        {/* ── LEFT: hero meeting ── */}
+                        <div
+                            className="relative flex-1 min-w-0 flex flex-col justify-center pl-[14px] cursor-pointer"
+                            onClick={() => onSelectEvent?.(mainMeeting)}
+                            role="button"
+                            tabIndex={0}
+                            onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); onSelectEvent?.(mainMeeting); } }}
+                        >
+                            {/* Accent timeline bar */}
+                            <div
+                                className={`absolute left-0 top-[6px] bottom-[6px] w-[3px] rounded-full bg-gradient-to-b ${
+                                    isLight ? 'from-sky-400 to-sky-600' : 'from-sky-300/90 to-sky-500/25'
+                                }`}
+                            />
+
+                            <div className="flex items-start justify-between gap-3">
+                                <div className="min-w-0">
+                                    <span className={`block text-[11px] font-medium leading-4 tabular-nums ${isLight ? 'text-text-secondary' : 'text-sky-200/75'}`}>
+                                        {formatTimeLabel(mainMeeting.startTime)}
+                                    </span>
+                                    <h3
+                                        className={`mt-[3px] text-[18px] font-semibold leading-[22px] tracking-[-0.01em] truncate ${isLight ? 'text-text-primary' : 'text-white'}`}
+                                        title={mainMeeting.title}
+                                    >
+                                        {mainMeeting.title}
+                                    </h3>
+                                </div>
+
+                                {mainMeeting.link && (
+                                    <button
+                                        type="button"
+                                        onClick={(e) => { e.stopPropagation(); openLink(mainMeeting.link); }}
+                                        className={`inline-flex items-center gap-1.5 shrink-0 h-[26px] px-3 rounded-full text-[11.5px] font-semibold transition-colors duration-200 mt-0.5 cursor-pointer ${
+                                            isLight
+                                                ? 'bg-[#caecfc] text-[#0785cb] hover:bg-[#b6e2fa]'
+                                                : 'bg-sky-400/15 text-sky-200 ring-1 ring-sky-300/20 hover:bg-sky-400/25'
+                                        }`}
+                                    >
+                                        <Video size={12} strokeWidth={2.5} />
+                                        <span>{t('Join meeting')}</span>
+                                        <ArrowRight size={12} strokeWidth={2.5} />
+                                    </button>
+                                )}
+                            </div>
+
+                            {mainMeeting.description && (
+                                <p className={`mt-2 text-[12.5px] leading-[17px] line-clamp-3 max-w-[560px] ${isLight ? 'text-text-secondary' : 'text-white/55'}`}>
+                                    {mainMeeting.description}
+                                </p>
+                            )}
+                        </div>
+
+                        {/* ── RIGHT: following meetings ── */}
+                        {hasSide && (
+                            <aside
+                                className={`w-[238px] shrink-0 border-l pl-4 flex flex-col justify-center min-h-0 gap-[7px] ${
+                                    isLight ? 'border-black/[0.07]' : 'border-white/[0.08]'
+                                }`}
+                            >
+                                {sideRows.map((m) => (
+                                    <button
+                                        key={m.id}
+                                        type="button"
+                                        onClick={() => (onSelectEvent ? onSelectEvent(m) : openLink(m.link))}
+                                        title={m.title}
+                                        className={`w-full text-left rounded-[11px] px-3 py-[7px] ring-1 transition-all duration-200 flex flex-col justify-center min-h-[46px] ${
+                                            isLight
+                                                ? 'bg-[linear-gradient(110deg,#ffffff_0%,#fbfdff_53%,#dff5ff_100%)] ring-black/[0.06] shadow-[0_1px_2px_rgba(0,0,0,0.04)] hover:ring-black/[0.13] hover:shadow-[0_4px_12px_-3px_rgba(0,0,0,0.10)]'
+                                                : 'bg-white/[0.05] ring-white/[0.08] hover:bg-white/[0.1] hover:ring-white/[0.17]'
+                                        } ${(onSelectEvent || m.link) ? 'cursor-pointer' : 'cursor-default'}`}
+                                    >
+                                        <span className={`text-[12.5px] font-semibold leading-[15px] truncate ${isLight ? 'text-text-primary' : 'text-white/90'}`}>
+                                            {m.title}
+                                        </span>
+                                        <span className={`mt-[2px] text-[10.5px] leading-[13px] tabular-nums truncate ${isLight ? 'text-text-secondary' : 'text-white/40'}`}>
+                                            {formatTimeLabel(m.startTime)}
+                                        </span>
+                                    </button>
+                                ))}
+
+                                {hiddenCount > 0 && (
+                                    <div className={`text-[10.5px] font-semibold text-center leading-4 px-2 ${isLight ? 'text-text-tertiary' : 'text-white/35'}`}>
+                                        +{hiddenCount} {t('more')}
+                                    </div>
+                                )}
+                            </aside>
                         )}
                     </div>
-
-                    {/* Stacked meeting cards — hover an individual card to lift it and reveal its name */}
-                    {visibleMeetings.length > 0 ? (
-                        <div className="relative mt-auto" style={{ height: stackHeight }}>
-                            {visibleMeetings.map((m, i) => {
-                                const attendees = (m.attendees || []).slice(0, 3);
-                                const remainingAttendees = Math.max(0, (m.attendees?.length || 0) - attendees.length);
-                                // Static stacking order via Tailwind classes (NOT inline style — an inline
-                                // `zIndex` would win the cascade over `hover:z-40` and the hover lift would
-                                // never actually rise above its neighbors).
-                                const zIndexClass = STACK_Z_CLASSES[i] || 'z-0';
-                                return (
-                                    <div
-                                        key={m.id}
-                                        className={`group absolute inset-x-0 rounded-[14px] bg-white/[0.07] ring-1 ring-white/[0.1] backdrop-blur-md px-3.5 py-2.5 shadow-[inset_0_1px_0_rgba(255,255,255,0.1),0_8px_20px_-10px_rgba(0,0,0,0.55)] transition-all duration-300 ease-out hover:z-40 hover:-translate-y-2 hover:bg-white/[0.13] hover:ring-white/[0.18] ${zIndexClass}`}
-                                        style={{ top: i * CARD_OFFSET, height: CARD_HEIGHT }}
-                                    >
-                                        <div className="flex items-center justify-between gap-2">
-                                            <span className="text-[11px] text-cyan-200/80 font-medium tabular-nums">
-                                                {formatTimeLabel(m.startTime)}
-                                            </span>
-                                            {attendees.length > 0 && (
-                                                <div className="flex -space-x-1.5 opacity-70 transition-opacity duration-300 group-hover:opacity-100">
-                                                    {attendees.map((a, ai) => {
-                                                        const attendeeIdentity = (a.email || a.name || '').trim();
-                                                        const attendeeKey = a.email ? `email:${a.email}` : `${attendeeIdentity || 'attendee'}:${ai}`;
-                                                        return (
-                                                            <span
-                                                                key={attendeeKey}
-                                                                title={a.name || a.email}
-                                                                className={`inline-flex items-center justify-center w-[16px] h-[16px] rounded-full ring-[1.5px] ring-[#2b1a33] text-[7.5px] font-bold ${colorFor(attendeeIdentity || String(ai))}`}
-                                                            >
-                                                                {initialsFor(a)}
-                                                            </span>
-                                                        );
-                                                    })}
-                                                    {remainingAttendees > 0 && (
-                                                        <span className="inline-flex items-center justify-center w-[16px] h-[16px] rounded-full ring-[1.5px] ring-[#2b1a33] bg-white/15 text-[7.5px] font-bold text-white/85 tabular-nums">
-                                                            +{remainingAttendees}
-                                                        </span>
-                                                    )}
-                                                </div>
-                                            )}
-                                        </div>
-                                        {/* Name is hidden until this specific card is hovered — it then lifts and reveals its title */}
-                                        <h4 className="text-[13px] font-semibold text-white leading-tight tracking-[-0.01em] line-clamp-1 mt-1 opacity-0 -translate-y-0.5 transition-all duration-300 ease-out group-hover:opacity-100 group-hover:translate-y-0">
-                                            {m.title}
-                                        </h4>
-                                    </div>
-                                );
-                            })}
-                        </div>
-                    ) : (
-                        <div className="flex-1 flex items-center justify-center">
-                            <span className="text-[13px] text-white/50 font-medium">{t('No upcoming events')}</span>
-                        </div>
-                    )}
-                </div>
+                ) : (
+                    <div className="relative z-10 flex-1 flex items-center justify-center">
+                        <span className={`text-[13px] font-medium ${isLight ? 'text-text-secondary' : 'text-white/45'}`}>
+                            {t('No upcoming events')}
+                        </span>
+                    </div>
+                )
             ) : (
-                <div className="relative z-10 w-full flex flex-col items-center h-full pt-6 text-center">
-                    <h3 className="text-[19px] leading-tight mb-4 tracking-[-0.01em]">
-                        <span className="block font-semibold text-white">{t('Link your calendar to')}</span>
-                        <span className="block font-medium text-white/60 text-[0.95em]">{t('see upcoming events')}</span>
+                <div className="relative z-10 flex-1 flex flex-col items-center justify-center gap-3 text-center px-6">
+                    <h3 className="text-[17px] leading-tight tracking-[-0.01em]">
+                        <span className="block font-semibold text-text-primary">{t('Link your calendar to')}</span>
+                        <span className="mt-1 block font-medium text-text-secondary text-[0.95em]">{t('see upcoming events')}</span>
                     </h3>
-
-                    <ConnectCalendarButton
-                        className="-translate-x-0.5"
-                        onConnect={onConnect}
-                    />
+                    <ConnectCalendarButton className="mt-1" onConnect={onConnect} />
                 </div>
             )}
         </div>

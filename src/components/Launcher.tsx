@@ -4,7 +4,8 @@ import { ToggleLeft, ToggleRight, Search, Calendar, ArrowRight, ArrowLeft, MoreH
 import { generateMeetingPDF } from '../utils/pdfGenerator';
 import icon from "./icon.png";
 import LinkCalendarPrompt from './ui/LinkCalendarPrompt';
-import UpcomingCalendarCard from './ui/UpcomingCalendarCard';
+import UpcomingCalendarCard, { type CalendarMeeting } from './ui/UpcomingCalendarCard';
+import CalendarEventDetail from './ui/CalendarEventDetail';
 import { useToggleInit } from './settings/useToggleInit';
 import MeetingDetails from './MeetingDetails';
 import TopSearchPill from './TopSearchPill';
@@ -95,6 +96,7 @@ const Launcher: React.FC<LauncherProps> = ({ onStartMeeting, onOpenSettings, onO
     const [isDetectable, setIsDetectable] = useState(false);
     const [isMeetingActive, setIsMeetingActive] = useState(false);
     const [selectedMeeting, setSelectedMeeting] = useState<Meeting | null>(null);
+    const [selectedCalendarEvent, setSelectedCalendarEvent] = useState<CalendarMeeting | null>(null);
     // Tab to open MeetingDetails with. Set by handleOpenMeeting so the
     // launcher can auto-open a meeting's Transcript tab (meeting start/stop).
     const [detailsInitialTab, setDetailsInitialTab] = useState<'summary' | 'transcript' | 'usage'>('summary');
@@ -442,12 +444,12 @@ const Launcher: React.FC<LauncherProps> = ({ onStartMeeting, onOpenSettings, onO
     const detectableToggleInit = useToggleInit();
 
     // Upcoming meetings (in-progress up to 5 min ago, or any future event in the API's 7-day
-    // window), sorted soonest-first. Cap at 3 for the Upcoming Calendar card peek stack.
+    // window), sorted soonest-first. Feed up to 4 to the calendar card (main event + up to 3
+    // side rows); `totalCount` still reflects every upcoming event for the "+N more" hint.
     const upcomingMeetings = upcomingEvents
         .filter(e => new Date(e.startTime).getTime() - Date.now() > -5 * 60000)
         .sort((a, b) => new Date(a.startTime).getTime() - new Date(b.startTime).getTime());
-    const visibleMeetings = upcomingMeetings.slice(0, 3);
-    const moreMeetingsCount = Math.max(0, upcomingMeetings.length - visibleMeetings.length);
+    const visibleMeetings = upcomingMeetings.slice(0, 4);
 
     if (!window.electronAPI) {
         return <div className="text-white p-10">Error: Electron API not initialized. Check preload script.</div>;
@@ -504,7 +506,7 @@ const Launcher: React.FC<LauncherProps> = ({ onStartMeeting, onOpenSettings, onO
     // Notify parent if we are on the main launcher list view; also feed the
     // orchestrator's homepage-mounted clock.
     useEffect(() => {
-        const isMain = !selectedMeeting && !isGlobalChatOpen;
+        const isMain = !selectedMeeting && !selectedCalendarEvent && !isGlobalChatOpen;
         if (onPageChange) onPageChange(isMain);
         if (isMain) {
             emitOrchestratorEvent({ type: 'launcher:mounted' });
@@ -513,7 +515,7 @@ const Launcher: React.FC<LauncherProps> = ({ onStartMeeting, onOpenSettings, onO
         }
         // Cleanup on unmount: ensure unmount is fired
         return () => emitOrchestratorEvent({ type: 'launcher:unmounted' });
-    }, [selectedMeeting, isGlobalChatOpen, onPageChange]);
+    }, [selectedMeeting, selectedCalendarEvent, isGlobalChatOpen, onPageChange]);
 
     const handleOpenMeeting = async (meeting: Meeting, tab: 'summary' | 'transcript' | 'usage' = 'summary') => {
         setForwardMeeting(null); // Clear forward history on new navigation
@@ -546,6 +548,10 @@ const Launcher: React.FC<LauncherProps> = ({ onStartMeeting, onOpenSettings, onO
     const handleBack = () => {
         setForwardMeeting(selectedMeeting);
         setSelectedMeeting(null);
+    };
+
+    const handleCalendarEventBack = () => {
+        setSelectedCalendarEvent(null);
     };
 
     const handleForward = () => {
@@ -752,11 +758,11 @@ const Launcher: React.FC<LauncherProps> = ({ onStartMeeting, onOpenSettings, onO
                     {/* Back Button — closes meeting details, or (folders v32)
                         steps up from an open folder back to the root view */}
                     <button
-                        onClick={selectedMeeting ? handleBack : (currentFolderId ? handleGoToRoot : undefined)}
-                        disabled={!selectedMeeting && !currentFolderId}
+                        onClick={selectedMeeting ? handleBack : (selectedCalendarEvent ? handleCalendarEventBack : (currentFolderId ? handleGoToRoot : undefined))}
+                        disabled={!selectedMeeting && !selectedCalendarEvent && !currentFolderId}
                         className={`
                             transition-all duration-300 p-1 flex items-center justify-center mt-1 ml-2
-                            ${selectedMeeting || currentFolderId
+                            ${selectedMeeting || selectedCalendarEvent || currentFolderId
                                 ? `text-text-secondary hover:text-text-primary ${isLight ? 'hover:drop-shadow-[0_0_6px_rgba(0,0,0,0.25)]' : 'hover:drop-shadow-[0_0_8px_rgba(255,255,255,0.5)]'}`
                                 : 'text-text-tertiary opacity-50 cursor-default'}
                         `}
@@ -1073,6 +1079,21 @@ const Launcher: React.FC<LauncherProps> = ({ onStartMeeting, onOpenSettings, onO
                                 initialTab={detailsInitialTab}
                             />
                         </motion.div>
+                    ) : selectedCalendarEvent ? (
+                        <motion.div
+                            key="calendar-details"
+                            className="flex-1 overflow-hidden"
+                            initial={{ opacity: 0 }}
+                            animate={{ opacity: 1 }}
+                            exit={{ opacity: 0 }}
+                            transition={{ duration: 0.15 }}
+                        >
+                            <CalendarEventDetail
+                                key={selectedCalendarEvent.id}
+                                event={selectedCalendarEvent}
+                                onBack={handleCalendarEventBack}
+                            />
+                        </motion.div>
                     ) : (
                         <motion.div
                             key="launcher"
@@ -1320,6 +1341,7 @@ const Launcher: React.FC<LauncherProps> = ({ onStartMeeting, onOpenSettings, onO
                                                 onConnect={() => setIsCalendarConnected(true)}
                                                 meetings={visibleMeetings}
                                                 totalCount={upcomingMeetings.length}
+                                                onSelectEvent={(ev) => setSelectedCalendarEvent(ev)}
                                             />
                                         </div>
                                     ) : (
