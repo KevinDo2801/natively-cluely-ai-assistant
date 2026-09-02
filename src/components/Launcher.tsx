@@ -14,8 +14,11 @@ import { motion, AnimatePresence } from 'framer-motion';
 import { analytics } from '../lib/analytics/analytics.service'; // Added analytics import
 import { useShortcuts } from '../hooks/useShortcuts';
 import { useResolvedTheme } from '../hooks/useResolvedTheme';
+import { useLiveSessionTimer } from '../hooks/useLiveSessionTimer';
 import { isMac } from '../utils/platformUtils';
+import { LIVE_SESSION_START_KEY } from '../utils/liveSessionStart';
 import WindowControls from './WindowControls';
+import { NativelyLogoMark } from './NativelyLogoMark';
 import { emitOrchestratorEvent, setUserState as setOrchestratorUserState } from './onboarding/OrchestratedToasterHost';
 
 interface Meeting {
@@ -88,6 +91,13 @@ const formatTime = (dateStr: string) => {
     if (dateStr === "Today") return "Just now"; // Legacy
     const date = new Date(dateStr);
     return date.toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit', hour12: true }).toLowerCase();
+};
+
+// mm:ss / mmm:ss for the live "Active Session" recording timer.
+const formatDuration = (ms: number) => {
+    const minutes = Math.floor(ms / 60000);
+    const seconds = ((ms % 60000) / 1000).toFixed(0);
+    return `${minutes}:${Number(seconds) < 10 ? '0' : ''}${seconds}`;
 };
 
 const Launcher: React.FC<LauncherProps> = ({ onStartMeeting, onOpenSettings, onOpenProfile, onOpenModes, onPageChange, ollamaPullStatus = 'idle', ollamaPullPercent = 0, ollamaPullMessage = '' }) => {
@@ -451,6 +461,18 @@ const Launcher: React.FC<LauncherProps> = ({ onStartMeeting, onOpenSettings, onO
         .sort((a, b) => new Date(a.startTime).getTime() - new Date(b.startTime).getTime());
     const visibleMeetings = upcomingMeetings.slice(0, 4);
 
+    // ── ACTIVE SESSION (global pill) ─────────────────────────────────────
+    // The live meeting row (is_live=1) exists while a meeting records. The
+    // global list is authoritative — a live meeting can sit in a folder other
+    // than the one currently open, so search allMeetings first. One pill is
+    // rendered across EVERY launcher view (home, folders, calendar detail,
+    // meeting details): click the pill body → open the live note; click the red
+    // square → stop the recording. The timer anchor is resolved with
+    // stale-anchor protection (src/utils/liveSessionStart.ts) so it can never
+    // show a phantom 800+ minute count at the start of a meeting.
+    const liveMeeting = allMeetings.find(m => m.isLive) ?? meetings.find(m => m.isLive) ?? null;
+    const livePillElapsedMs = useLiveSessionTimer(isMeetingActive && !!liveMeeting, liveMeeting?.date ?? null);
+
     if (!window.electronAPI) {
         return <div className="text-white p-10">Error: Electron API not initialized. Check preload script.</div>;
     }
@@ -543,6 +565,31 @@ const Launcher: React.FC<LauncherProps> = ({ onStartMeeting, onOpenSettings, onO
         }
         // Fallback to list-view data if fetch fails
         setSelectedMeeting(meeting);
+    };
+
+    // ACTIVE SESSION (global pill): stop the recording from any launcher view.
+    // Mirrors App.tsx handleEndMeeting's local bookkeeping (profile-toaster
+    // threshold + session-anchor cleanup), then fires the endMeeting IPC. If a
+    // live note is on screen, MeetingDetails self-transitions to the finalized
+    // note on the broadcast; otherwise the launcher re-opens the finalized note
+    // via the tracked-live-id machinery (see resolvePendingTranscriptOpen).
+    const handleStopLivePill = () => {
+        analytics.trackMeetingEnded();
+        const startStr = localStorage.getItem(LIVE_SESSION_START_KEY);
+        if (startStr) {
+            const duration = Date.now() - parseInt(startStr, 10);
+            const threshold = import.meta.env.DEV ? 10000 : 180000;
+            if (duration >= threshold) {
+                localStorage.setItem('natively_show_profile_toaster', 'true');
+            }
+            localStorage.removeItem(LIVE_SESSION_START_KEY);
+        }
+        window.electronAPI.endMeeting().catch((err) => {
+            console.error('Failed to end meeting:', err);
+            // Belt-and-suspenders: if the IPC itself rejected, request the
+            // launcher swap manually so the user isn't stranded.
+            window.electronAPI.setWindowMode('launcher');
+        });
     };
 
     const handleBack = () => {
@@ -1722,6 +1769,50 @@ const Launcher: React.FC<LauncherProps> = ({ onStartMeeting, onOpenSettings, onO
                         </motion.div>
                     )}
                 </AnimatePresence>
+
+                {/* ACTIVE SESSION (global): ONE floating pill across every
+                    launcher view while a meeting records — home, folders,
+                    calendar detail, and meeting details all get it. Clicking
+                    the pill body opens the live note (Transcript tab); the red
+                    square stops the recording. Hidden when no live note exists
+                    (e.g. retention "never" creates none) or the meeting ended. */}
+                {liveMeeting && isMeetingActive && (
+                    <div className="absolute bottom-6 left-6 z-50 pointer-events-auto">
+                        <div
+                            role="button"
+                            tabIndex={0}
+                            title={t('Active Session')}
+                            aria-label={t('Active Session')}
+                            onClick={() => {
+                                if (selectedMeeting?.id === liveMeeting.id) return; // already open
+                                void handleOpenMeeting(liveMeeting, 'transcript');
+                            }}
+                            onKeyDown={(e) => {
+                                if (e.key === 'Enter' && selectedMeeting?.id !== liveMeeting.id) {
+                                    void handleOpenMeeting(liveMeeting, 'transcript');
+                                }
+                            }}
+                            className="pointer-events-auto group flex items-center gap-3 pl-3 pr-1.5 py-1.5 rounded-full backdrop-blur-[24px] backdrop-saturate-[140%] shadow-[0_8px_30px_rgb(0,0,0,0.12)] border border-white/20 bg-transparent cursor-pointer select-none transition-colors hover:bg-white/[0.05] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-500/40"
+                        >
+                            <NativelyLogoMark size={18} className="text-blue-500 shrink-0" />
+                            <div className="flex flex-col min-w-0">
+                                <span className="text-sm font-medium text-text-primary leading-tight whitespace-nowrap">{t('Active Session')}</span>
+                                <span className="text-xs text-text-tertiary flex items-center gap-1.5 whitespace-nowrap">
+                                    <span className="w-1.5 h-1.5 rounded-full bg-red-500 animate-pulse" />
+                                    {t('Recording')} • {formatDuration(livePillElapsedMs)}
+                                </span>
+                            </div>
+                            <button
+                                onClick={(e) => { e.stopPropagation(); handleStopLivePill(); }}
+                                title={t('Stop recording')}
+                                aria-label={t('Stop recording')}
+                                className="shrink-0 w-10 h-10 rounded-full flex items-center justify-center border border-white/20 bg-white/[0.06] hover:bg-red-500/15 hover:border-red-500/30 transition-all duration-200 active:scale-95"
+                            >
+                                <span className="w-3 h-3 rounded-[3px] bg-red-500" />
+                            </button>
+                        </div>
+                    </div>
+                )}
             </div>
 
 
