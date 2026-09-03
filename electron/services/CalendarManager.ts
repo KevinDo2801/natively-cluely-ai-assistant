@@ -5,7 +5,7 @@ import fs from 'fs';
 import path from 'path';
 import { EventEmitter } from 'events';
 import { TRIAL_SENTINEL_KEY } from '../config/constants';
-import { getGoogleClientId, getGoogleClientSecret } from './googleCalendarConfig';
+import { getGoogleClientId, getGoogleClientSecret, getCalendarDirectFlag } from './googleCalendarConfig';
 
 // Configuration
 // GOOGLE_CLIENT_SECRET is intentionally NOT referenced in the DEFAULT path —
@@ -39,9 +39,15 @@ console.log(`[CalendarManager] Calendar token proxy: ${CALENDAR_API_URL}`);
 // the client secret then lives in the app process. NEVER enable it in a build
 // that gets distributed — the secret can be extracted from the binary, which
 // is exactly why the proxied path exists as the default.
+//
+// The flag resolves via getCalendarDirectFlag(): runtime process.env wins
+// (dev .env), then the value baked by scripts/build-electron.js. Baking is what
+// lets a PRIVATE/self-hosted packaged build (which has no process.env) run in
+// DIRECT mode with no Natively account and no `.env` on the install machine —
+// release-windows.yml sets NATIVELY_CALENDAR_DIRECT=1 for exactly that.
 const GOOGLE_CLIENT_SECRET = getGoogleClientSecret() || '';
 const CALENDAR_DIRECT_MODE =
-    process.env.NATIVELY_CALENDAR_DIRECT === '1' &&
+    getCalendarDirectFlag() &&
     !!GOOGLE_CLIENT_SECRET &&
     GOOGLE_CLIENT_SECRET !== 'your_google_client_secret_here';
 if (CALENDAR_DIRECT_MODE) {

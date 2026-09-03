@@ -58,6 +58,27 @@ if (!bakedGoogleClientId) {
   );
 }
 
+// ── GOOGLE CALENDAR DIRECT-MODE BAKE ─────────────────────────────────────────
+// NATIVELY_CALENDAR_DIRECT only reaches the app through a live process.env in
+// DEV (main.ts loads .env). A packaged build has no shell env and loads no
+// `.env`, so CalendarManager's runtime gate `process.env.NATIVELY_CALENDAR_DIRECT
+// === '1'` is NEVER true on an installed .exe. That silently forced a baked
+// private build back onto the api.natively.software proxy, which answered
+// `401 auth_required` (no x-natively-key / x-trial-token) and broke Google
+// Calendar linking even though GOOGLE_CLIENT_ID/SECRET were baked. Bake the flag
+// as __NATIVELY_CALENDAR_DIRECT__ so a PRIVATE/self-hosted build can link in
+// DIRECT mode with no Natively account. Default OFF: it only becomes true when
+// the build environment sets NATIVELY_CALENDAR_DIRECT=1 (release-windows.yml
+// does this for its private build; leave it unset for a distributed build).
+const bakedCalendarDirect =
+  process.env.NATIVELY_CALENDAR_DIRECT === '1' || parsedEnv.NATIVELY_CALENDAR_DIRECT === '1';
+if (bakedCalendarDirect && !bakedGoogleClientSecret) {
+  console.warn(
+    '[build-electron] NATIVELY_CALENDAR_DIRECT=1 but no GOOGLE_CLIENT_SECRET baked — ' +
+      'DIRECT mode will still be disabled at runtime (a real secret is required).'
+  );
+}
+
 const rootDir = path.resolve(__dirname, '..');
 const outDir = path.resolve(rootDir, 'dist-electron');
 
@@ -140,6 +161,7 @@ const buildOptions = {
     __NATIVELY_SUPABASE_ANON_KEY__: JSON.stringify(bakedSupabaseAnonKey),
     __NATIVELY_GOOGLE_CLIENT_ID__: JSON.stringify(bakedGoogleClientId),
     __NATIVELY_GOOGLE_CLIENT_SECRET__: JSON.stringify(bakedGoogleClientSecret),
+    __NATIVELY_CALENDAR_DIRECT__: JSON.stringify(bakedCalendarDirect),
   },
   loader: {
     '.ts': 'ts',

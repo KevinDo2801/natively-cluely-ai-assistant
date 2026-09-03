@@ -17,7 +17,8 @@
  * exchange (secret held server-side) as the default for anything distributed;
  * only enable DIRECT mode when you know who will run the binary.
  *
- * The full DIRECT mode is additionally gated on NATIVELY_CALENDAR_DIRECT=1 in
+ * The full DIRECT mode is additionally gated on the direct flag resolved by
+ * `getCalendarDirectFlag()` (runtime env, then build-time bake) in
  * CalendarManager — see the placeholder guards there.
  */
 
@@ -27,6 +28,12 @@
 // fallback returns undefined — mirroring the pre-bake behavior.
 declare const __NATIVELY_GOOGLE_CLIENT_ID__: string | undefined;
 declare const __NATIVELY_GOOGLE_CLIENT_SECRET__: string | undefined;
+// Baked at build time by scripts/build-electron.js from NATIVELY_CALENDAR_DIRECT
+// (see the DIRECT-MODE BAKE comment there). Resolves whether the app is allowed
+// to exchange Google tokens DIRECTLY (secret held in this process) instead of
+// via the api.natively.software proxy. Packaged builds have no process.env, so
+// this baked boolean is what lets a private/self-hosted .exe use DIRECT mode.
+declare const __NATIVELY_CALENDAR_DIRECT__: boolean | undefined;
 
 export function getGoogleClientId(): string | undefined {
   if (process.env.GOOGLE_CLIENT_ID) return process.env.GOOGLE_CLIENT_ID;
@@ -40,4 +47,16 @@ export function getGoogleClientSecret(): string | undefined {
   return typeof __NATIVELY_GOOGLE_CLIENT_SECRET__ === 'string' && __NATIVELY_GOOGLE_CLIENT_SECRET__
     ? __NATIVELY_GOOGLE_CLIENT_SECRET__
     : undefined;
+}
+
+/**
+ * Whether DIRECT (in-process) Google token exchange is enabled. Runtime env
+ * wins (dev: main.ts loads `.env`); otherwise falls back to the value baked by
+ * scripts/build-electron.js so a packaged build that opted in can link a
+ * Google Calendar without a Natively account and without `.env` on the install
+ * machine. The secret guard lives in CalendarManager.
+ */
+export function getCalendarDirectFlag(): boolean {
+  if (process.env.NATIVELY_CALENDAR_DIRECT === '1') return true;
+  return typeof __NATIVELY_CALENDAR_DIRECT__ === 'boolean' && __NATIVELY_CALENDAR_DIRECT__ === true;
 }
