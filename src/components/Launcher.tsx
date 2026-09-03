@@ -282,6 +282,97 @@ const Launcher: React.FC<LauncherProps> = ({ onStartMeeting, onOpenSettings, onO
     // Keybinds
     const { isShortcutPressed } = useShortcuts();
     const isLight = useResolvedTheme() === 'light';
+
+    // ── Hero panel vertical resize (drag the bottom edge to expand/collapse) ──
+    // `heroHeight === null` → the panel is sized naturally by its content (fully
+    // open). Once the user drags the grip, we pin an explicit pixel height and
+    // clip overflow so the calendar card recedes; at the minimum only the header
+    // row remains. Clamping always targets the CURRENT natural content size so
+    // the panel never leaves blank space above the list.
+    const heroContentRef = useRef<HTMLDivElement | null>(null); // inner content → natural full height
+    const heroHeaderRef = useRef<HTMLDivElement | null>(null);  // header row    → natural collapsed height
+    const heroBoundsRef = useRef<{ full: number; min: number }>({ full: 0, min: 0 });
+    const heroResizeRef = useRef<{ startY: number; startH: number } | null>(null);
+    const [heroHeight, setHeroHeight] = useState<number | null>(null);
+    const [heroDragging, setHeroDragging] = useState(false);
+    const [heroHover, setHeroHover] = useState(false);
+
+    // pt-6 (24) + pb-8 (32) + 1px border-bottom on the section.
+    const HERO_V_PAD = 24 + 32 + 1;
+    // How close (px) a drag must land to snap to the open / collapsed ends.
+    const HERO_SNAP = 28;
+
+    const measureHeroBounds = (): { full: number; min: number } => {
+        const content = heroContentRef.current;
+        const header = heroHeaderRef.current;
+        if (!content || !header) return { full: 0, min: 0 };
+        // content keeps its natural height regardless of the section's clipped
+        // height, so this stays valid while the panel is pinned shorter.
+        const full = content.offsetHeight + HERO_V_PAD;
+        const min = 24 + header.offsetHeight + 4; // top padding + header row + a little air
+        return { full, min };
+    };
+
+    const startHeroResize = (e: React.PointerEvent<HTMLDivElement>) => {
+        e.preventDefault();
+        const bounds = measureHeroBounds();
+        heroBoundsRef.current = bounds;
+        // First drag starts from the fully-open position if nothing was pinned yet.
+        const startH = heroHeight === null ? bounds.full : heroHeight;
+        heroResizeRef.current = { startY: e.clientY, startH };
+        setHeroDragging(true);
+        document.body.classList.add('select-none', 'cursor-ns-resize');
+        (e.currentTarget as HTMLElement).setPointerCapture?.(e.pointerId);
+    };
+
+    const onHeroResize = (e: React.PointerEvent<HTMLDivElement>) => {
+        const d = heroResizeRef.current;
+        if (!d) return;
+        const b = measureHeroBounds();
+        heroBoundsRef.current = b;
+        const full = Math.max(1, b.full);
+        const min = Math.max(1, Math.min(b.min, full));
+        // Physical direction: pulling the bottom edge DOWN grows the panel,
+        // pulling it UP collapses it (not the inverse).
+        let v = d.startH + (e.clientY - d.startY);
+        v = Math.max(min, Math.min(full, v));
+        // Snap to the two clean resting states so collapse looks intentional.
+        if (v > full - HERO_SNAP) v = full;
+        else if (v < min + HERO_SNAP) v = min;
+        setHeroHeight(v);
+    };
+
+    const endHeroResize = (e: React.PointerEvent<HTMLDivElement>) => {
+        const d = heroResizeRef.current;
+        if (!d) return;
+        heroResizeRef.current = null;
+        setHeroDragging(false);
+        document.body.classList.remove('select-none', 'cursor-ns-resize');
+        (e.currentTarget as HTMLElement).releasePointerCapture?.(e.pointerId);
+    };
+
+    // Keep the natural bounds in sync whenever content that changes panel height
+    // mounts/updates (calendar connection, meeting rows, event count), and clamp
+    // a user-pinned height so it can't outgrow freshly measured content.
+    useEffect(() => {
+        heroBoundsRef.current = measureHeroBounds();
+        const { full } = heroBoundsRef.current;
+        if (heroHeight !== null && full > 0) {
+            setHeroHeight((h) => (h === null || h <= full ? h : full));
+        }
+        // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, [isCalendarConnected, meetings.length, upcomingEvents.length]);
+
+    useEffect(() => {
+        // Bail out of any in-flight drag if this screen unmounts.
+        return () => {
+            if (heroResizeRef.current) {
+                document.body.classList.remove('select-none', 'cursor-ns-resize');
+                heroResizeRef.current = null;
+            }
+        };
+    }, []);
+
     useEffect(() => {
         let mounted = true;
         console.log("Launcher mounted");
@@ -1155,10 +1246,13 @@ const Launcher: React.FC<LauncherProps> = ({ onStartMeeting, onOpenSettings, onO
                             {/* Top Section is now effectively static due to parent flex col */}
 
                             {/* TOP SECTION: Grey Background (Scrolls with content) */}
-                            <section className={`${isLight ? 'bg-bg-secondary' : 'bg-bg-elevated'} px-8 pt-6 pb-8 border-b border-border-subtle shrink-0`}>
-                                <div className="max-w-4xl mx-auto space-y-6">
+                            <section
+                                className={`${isLight ? 'bg-bg-secondary' : 'bg-bg-elevated'} px-8 pt-6 border-b border-border-subtle shrink-0 transition-[padding] duration-150 ${heroHeight !== null && heroHeight < (heroBoundsRef.current.min || 0) + 60 ? 'pb-3' : 'pb-8'}`}
+                                style={heroHeight !== null ? { height: heroHeight, overflow: 'hidden' } : undefined}
+                            >
+                                <div ref={heroContentRef} className="max-w-4xl mx-auto space-y-6">
                                     {/* 1.5. Hero Header (Title + Controls + CTA) */}
-                                    <div className="flex items-center justify-between">
+                                    <div ref={heroHeaderRef} className="flex items-center justify-between">
                                         <div className="flex items-center gap-4">
                                             <h1 className="text-3xl font-celeb-light font-medium text-text-primary tracking-wide drop-shadow-sm">{t('My Natively')}</h1>
 
@@ -1396,6 +1490,37 @@ const Launcher: React.FC<LauncherProps> = ({ onStartMeeting, onOpenSettings, onO
                                     )}
                                 </div>
                             </section>
+
+                            {/* Resize grip — drag the divider vertically to expand /
+                                collapse the hero panel above (see hero resize logic). */}
+                            <div
+                                role="separator"
+                                aria-orientation="horizontal"
+                                aria-label={t('Drag to resize the calendar panel')}
+                                title={t('Drag to resize the calendar panel')}
+                                className="shrink-0 relative h-[10px] z-[5] cursor-ns-resize touch-none select-none"
+                                onMouseEnter={() => setHeroHover(true)}
+                                onMouseLeave={() => setHeroHover(false)}
+                                onPointerDown={startHeroResize}
+                                onPointerMove={onHeroResize}
+                                onPointerUp={endHeroResize}
+                                onPointerCancel={endHeroResize}
+                            >
+                                {/* Hover / active highlight across the full width */}
+                                <div
+                                    className={`pointer-events-none absolute inset-0 transition-opacity duration-150 ${heroDragging || heroHover ? 'opacity-100' : 'opacity-0'}`}
+                                >
+                                    <div className={`absolute inset-x-0 top-1/2 -translate-y-1/2 h-[4px] ${isLight ? 'bg-black/[0.05]' : 'bg-white/[0.07]'}`} />
+                                </div>
+                                {/* Centered grip dots */}
+                                <div
+                                    className={`pointer-events-none absolute left-1/2 top-1/2 -translate-x-1/2 -translate-y-1/2 flex items-center gap-[3px] px-2 py-[4px] rounded-full border shadow-sm transition-opacity duration-150 ${heroDragging || heroHover ? 'opacity-100' : 'opacity-0'} ${isLight ? 'bg-white/90 border-black/10' : 'bg-black/60 border-white/15'}`}
+                                >
+                                    {[0, 1, 2].map((i) => (
+                                        <span key={i} className={`w-[3px] h-[3px] rounded-full ${isLight ? 'bg-black/30' : 'bg-white/40'}`} />
+                                    ))}
+                                </div>
+                            </div>
 
                             {/* BOTTOM SECTION: Black Background (Scrollable content) */}
                             <main className="flex-1 overflow-y-auto custom-scrollbar bg-bg-primary">
