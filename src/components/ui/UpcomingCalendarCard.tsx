@@ -85,7 +85,11 @@ const UpcomingCalendarCard: React.FC<UpcomingCalendarCardProps> = ({
     };
 
     return (
-        <div className={`relative flex flex-col overflow-hidden rounded-xl h-full ${className}`}>
+        // `.cc-card` turns the card into a size query container (see index.css):
+        // the card's own height — which the launcher divider drag feeds down as a
+        // real flex leftover, never a crop — drives every vertical rhythm below
+        // through cqh units and the @container "shed content" cascade.
+        <div className={`cc-card relative flex flex-col overflow-hidden rounded-xl h-full ${className}`}>
             {/* ── Ambient backdrop (no photo — flat canvas like the reference card) ── */}
             <div className="absolute inset-0 pointer-events-none" aria-hidden="true">
                 {/* Base wash — semantic token bg-bg-secondary both themes
@@ -110,7 +114,7 @@ const UpcomingCalendarCard: React.FC<UpcomingCalendarCardProps> = ({
 
             {isConnected ? (
                 mainMeeting ? (
-                    <div className="relative z-10 flex-1 flex min-h-0 px-4 py-3">
+                    <div className="cc-body relative z-10 flex-1 flex min-h-0 px-4 py-[clamp(8px,6cqh,12px)]">
                         {/* ── LEFT: hero meeting ── */}
                         <div
                             className="relative flex-1 min-w-0 flex flex-col justify-center pl-[14px] cursor-pointer"
@@ -121,7 +125,7 @@ const UpcomingCalendarCard: React.FC<UpcomingCalendarCardProps> = ({
                         >
                             {/* Accent timeline bar */}
                             <div
-                                className={`absolute left-0 top-[6px] bottom-[6px] w-[3px] rounded-full bg-gradient-to-b ${
+                                className={`absolute left-0 top-[clamp(4px,3cqh,6px)] bottom-[clamp(4px,3cqh,6px)] w-[3px] rounded-full bg-gradient-to-b ${
                                     isLight ? 'from-sky-400 to-sky-600' : 'from-sky-300/90 to-sky-500/25'
                                 }`}
                             />
@@ -132,7 +136,7 @@ const UpcomingCalendarCard: React.FC<UpcomingCalendarCardProps> = ({
                                         {formatTimeLabel(mainMeeting.startTime)}
                                     </span>
                                     <h3
-                                        className={`mt-[3px] text-[18px] font-semibold leading-[22px] tracking-[-0.01em] truncate ${isLight ? 'text-text-primary' : 'text-white'}`}
+                                        className={`cc-title mt-[clamp(2px,1.5cqh,3px)] text-[18px] font-semibold leading-[22px] tracking-[-0.01em] truncate ${isLight ? 'text-text-primary' : 'text-white'}`}
                                         title={mainMeeting.title}
                                     >
                                         {mainMeeting.title}
@@ -143,7 +147,7 @@ const UpcomingCalendarCard: React.FC<UpcomingCalendarCardProps> = ({
                                     <button
                                         type="button"
                                         onClick={(e) => { e.stopPropagation(); openLink(mainMeeting.link); }}
-                                        className={`inline-flex items-center gap-1.5 shrink-0 h-[26px] px-3 rounded-full text-[11.5px] font-semibold transition-colors duration-200 mt-0.5 cursor-pointer ${
+                                        className={`cc-join inline-flex items-center gap-1.5 shrink-0 h-[26px] px-3 rounded-full text-[11.5px] font-semibold transition-colors duration-200 mt-0.5 cursor-pointer ${
                                             isLight
                                                 ? 'bg-[#caecfc] text-[#0785cb] hover:bg-[#b6e2fa]'
                                                 : 'bg-sky-400/15 text-sky-200 ring-1 ring-sky-300/20 hover:bg-sky-400/25'
@@ -157,7 +161,7 @@ const UpcomingCalendarCard: React.FC<UpcomingCalendarCardProps> = ({
                             </div>
 
                             {mainMeeting.description && (
-                                <p className={`mt-2 text-[12.5px] leading-[17px] line-clamp-3 max-w-[560px] ${isLight ? 'text-text-secondary' : 'text-white/55'}`}>
+                                <p className={`cc-desc mt-[clamp(4px,4cqh,8px)] text-[12.5px] leading-[17px] line-clamp-3 max-w-[560px] ${isLight ? 'text-text-secondary' : 'text-white/55'}`}>
                                     {mainMeeting.description}
                                 </p>
                             )}
@@ -166,17 +170,17 @@ const UpcomingCalendarCard: React.FC<UpcomingCalendarCardProps> = ({
                         {/* ── RIGHT: following meetings ── */}
                         {hasSide && (
                             <aside
-                                className={`w-[238px] shrink-0 border-l pl-4 flex flex-col justify-center min-h-0 gap-[7px] ${
+                                className={`cc-aside w-[238px] shrink-0 border-l pl-4 flex flex-col justify-center min-h-0 gap-[clamp(4px,3.5cqh,7px)] ${
                                     isLight ? 'border-black/[0.07]' : 'border-white/[0.08]'
                                 }`}
                             >
-                                {sideRows.map((m) => (
+                                {sideRows.map((m, i) => (
                                     <button
                                         key={m.id}
                                         type="button"
                                         onClick={() => (onSelectEvent ? onSelectEvent(m) : openLink(m.link))}
                                         title={m.title}
-                                        className={`w-full text-left rounded-[11px] px-3 py-[7px] ring-1 transition-all duration-200 flex flex-col justify-center min-h-[46px] ${
+                                        className={`cc-row ${i === 2 ? 'cc-row-3' : ''} w-full text-left rounded-[11px] px-3 py-[clamp(4px,3.5cqh,7px)] ring-1 transition-all duration-200 flex flex-col justify-center min-h-[clamp(36px,23cqh,46px)] ${
                                             isLight
                                                 ? 'bg-[linear-gradient(110deg,#ffffff_0%,#fbfdff_53%,#dff5ff_100%)] ring-black/[0.06] shadow-[0_1px_2px_rgba(0,0,0,0.04)] hover:ring-black/[0.13] hover:shadow-[0_4px_12px_-3px_rgba(0,0,0,0.10)]'
                                                 : 'bg-white/[0.05] ring-white/[0.08] hover:bg-white/[0.1] hover:ring-white/[0.17]'
@@ -192,7 +196,7 @@ const UpcomingCalendarCard: React.FC<UpcomingCalendarCardProps> = ({
                                 ))}
 
                                 {hiddenCount > 0 && (
-                                    <div className={`text-[10.5px] font-semibold text-center leading-4 px-2 ${isLight ? 'text-text-tertiary' : 'text-white/35'}`}>
+                                    <div className={`cc-hint text-[10.5px] font-semibold text-center leading-4 px-2 ${isLight ? 'text-text-tertiary' : 'text-white/35'}`}>
                                         +{hiddenCount} {t('more')}
                                     </div>
                                 )}
@@ -200,7 +204,7 @@ const UpcomingCalendarCard: React.FC<UpcomingCalendarCardProps> = ({
                         )}
                     </div>
                 ) : (
-                    <div className="relative z-10 flex-1 flex items-center justify-center">
+                    <div className="cc-empty relative z-10 flex-1 flex items-center justify-center">
                         <span className={`text-[13px] font-medium ${isLight ? 'text-text-secondary' : 'text-white/45'}`}>
                             {t('No upcoming events')}
                         </span>

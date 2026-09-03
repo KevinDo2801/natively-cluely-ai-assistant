@@ -232,9 +232,13 @@ const Launcher: React.FC<LauncherProps> = ({ onStartMeeting, onOpenSettings, onO
 
     // ── Hero panel vertical resize (drag the bottom edge to expand/collapse) ──
     // `heroHeight === null` → the panel is sized naturally by its content (fully
-    // open). Once the user drags the grip, we pin an explicit pixel height and
-    // clip overflow so the calendar card recedes; at the minimum only the header
-    // row remains. Clamping always targets the CURRENT natural content size so
+    // open). Once the user drags the grip we pin an explicit pixel height. When a
+    // calendar is connected, the hero content flips to a bounded flex column and
+    // the calendar block (flex-1 min-h-0) receives the REAL leftover height — the
+    // Upcoming card then reflows fluidly (its internal paddings/margins track its
+    // own height via container-query units) instead of being cropped. Cropping
+    // stays as the fallback below the card's readable floor and while
+    // disconnected. Clamping always targets the CURRENT natural content size so
     // the panel never leaves blank space above the list.
     const heroContentRef = useRef<HTMLDivElement | null>(null); // inner content → natural full height
     const heroHeaderRef = useRef<HTMLDivElement | null>(null);  // header row    → natural collapsed height
@@ -250,13 +254,20 @@ const Launcher: React.FC<LauncherProps> = ({ onStartMeeting, onOpenSettings, onO
     const HERO_SNAP = 28;
 
     const measureHeroBounds = (): { full: number; min: number } => {
-        const content = heroContentRef.current;
         const header = heroHeaderRef.current;
-        if (!content || !header) return { full: 0, min: 0 };
-        // content keeps its natural height regardless of the section's clipped
-        // height, so this stays valid while the panel is pinned shorter.
-        const full = content.offsetHeight + HERO_V_PAD;
-        const min = 24 + header.offsetHeight + 4; // top padding + header row + a little air
+        if (!header) return { full: 0, min: 0 };
+        const headerH = header.offsetHeight;
+        const min = 24 + headerH + 4; // top padding + header row + a little air
+        // Connected: the card wrapper is a designed 198px block whose natural
+        // height is constant, so the panel's natural full height is a constant
+        // too — it must NOT be read from the DOM while pinned, because the pinned
+        // wrapper reports its shrunken flex leftover, which would feed a moving
+        // target back into the clamp (runaway collapse). Disconnected: heroContent
+        // is never force-sized (the flex handoff only activates when connected),
+        // so its natural offsetHeight stays valid in every state.
+        const full = isCalendarConnected
+            ? headerH + 24 + 198 + HERO_V_PAD
+            : (heroContentRef.current?.offsetHeight ?? headerH) + HERO_V_PAD;
         return { full, min };
     };
 
@@ -1197,9 +1208,9 @@ const Launcher: React.FC<LauncherProps> = ({ onStartMeeting, onOpenSettings, onO
                                 className={`${isLight ? 'bg-bg-secondary' : 'bg-bg-elevated'} px-8 pt-6 border-b border-border-subtle shrink-0 transition-[padding] duration-150 ${heroHeight !== null && heroHeight < (heroBoundsRef.current.min || 0) + 60 ? 'pb-3' : 'pb-8'}`}
                                 style={heroHeight !== null ? { height: heroHeight, overflow: 'hidden' } : undefined}
                             >
-                                <div ref={heroContentRef} className="max-w-4xl mx-auto space-y-6">
+                                <div ref={heroContentRef} className={`max-w-4xl mx-auto space-y-6 ${heroHeight !== null && isCalendarConnected ? 'h-full flex flex-col min-h-0' : ''}`}>
                                     {/* 1.5. Hero Header (Title + Controls + CTA) */}
-                                    <div ref={heroHeaderRef} className="flex items-center justify-between">
+                                    <div ref={heroHeaderRef} className="flex items-center justify-between shrink-0">
                                         <div className="flex items-center gap-4">
                                             <h1 className="text-3xl font-celeb-light font-medium text-text-primary tracking-wide drop-shadow-sm">{t('My Natively')}</h1>
 
@@ -1388,7 +1399,7 @@ const Launcher: React.FC<LauncherProps> = ({ onStartMeeting, onOpenSettings, onO
                                         the Upcoming Calendar card (peek stack) takes over. Calendar "Up Next"
                                         also lives in Settings → Calendar. */}
                                     {isCalendarConnected ? (
-                                        <div className="h-[198px]">
+                                        <div className={heroHeight !== null ? 'flex-1 min-h-0' : 'h-[198px]'}>
                                             <UpcomingCalendarCard
                                                 className="h-full"
                                                 isConnected={isCalendarConnected}

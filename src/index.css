@@ -8461,3 +8461,65 @@ html[data-platform="linux"] body {
 @media (prefers-reduced-motion: reduce) {
   .t-tabs-pill, .t-tab { transition: none !important; }
 }
+
+/* ── UpcomingCalendarCard: fluid density driven by the card's own height ─────
+   The launcher hero panel is vertically resizable (drag the divider under the
+   calendar card — see Launcher.tsx heroHeight). While a calendar is connected
+   the card wrapper is handed the REAL leftover height (flex-1 min-h-0), so the
+   card is never cropped — it reflows. Making the card root a size query
+   container lets every vertical rhythm value inside it be expressed in cqh
+   units (1cqh = 1% of the card's current height): at the designed 198px open
+   state these reproduce the original Tailwind spacing almost exactly
+   (6cqh ≈ py-3's 12px, 3.5cqh ≈ gap-[7px], 23cqh ≈ min-h-[46px], …), and they
+   compress continuously as the panel shrinks.
+
+   The @container rules below shed optional content as the card gets shorter so
+   nothing ever overflows/clips. Each threshold sits just BELOW where that block
+   still fits with fully-compressed spacing, so the drag first reads as "spacing
+   tightening" and only then as content shedding. Rules are unlayered, so they
+   win over Tailwind's layered utilities (display: none correctly beats the
+   `flex` utility on the same element). */
+
+.cc-card {
+  container-type: size;
+}
+
+/* Third side row (3-row peek, no "+N more" hint) — three rows need ~150px. */
+@container (max-height: 150px) {
+  .cc-card .cc-row-3 { display: none; }
+}
+
+/* "+N more" hint (only shown with 1-2 side rows) — needs ~122px. */
+@container (max-height: 122px) {
+  .cc-card .cc-hint { display: none; }
+}
+
+/* Description (3-line clamp) — needs ~116px. */
+@container (max-height: 116px) {
+  .cc-card .cc-desc { display: none; }
+}
+
+/* Side column — two compressed rows need ~100px; below that hero-only. */
+@container (max-height: 100px) {
+  .cc-card .cc-aside { display: none; }
+}
+
+/* Join-meeting pill — drop the CTA before the event's identity. */
+@container (max-height: 92px) {
+  .cc-card .cc-join { display: none; }
+}
+
+/* Title — below ~64px keep just the time label. */
+@container (max-height: 64px) {
+  .cc-card .cc-title { display: none; }
+}
+
+/* Whole meeting body — below ~52px collapse to an intentionally empty card. */
+@container (max-height: 52px) {
+  .cc-card .cc-body { display: none; }
+}
+
+/* Empty ("No upcoming events") state reads better than a cropped label. */
+@container (max-height: 60px) {
+  .cc-card .cc-empty { display: none; }
+}
