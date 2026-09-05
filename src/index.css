@@ -2789,7 +2789,7 @@ body {
    DOM focus on Windows (WS_EX_NOACTIVATE — see windowsFocusPolicy.ts), and on
    both platforms the stealth tap deliberately blocks focus, so the native
    blinking caret never renders. This element mirrors the typed text with the
-   exact same font metrics (Tailwind preflight makes <input> inherit the app
+   exact same font metrics (Tailwind preflight makes <textarea> inherit the app
    font, so a sibling span with the same text classes matches 1:1) and blinks a
    real caret at the end of it, so a clicked-and-typing input reads as focused
    everywhere. Rendered only while the stealth tap is active (the only time the
@@ -2797,7 +2797,8 @@ body {
 .overlay-synthetic-caret {
   display: inline-block;
   width: 2px;
-  height: 14px;
+  height: 0.85em;
+  vertical-align: -0.08em;
   margin-left: 1px;
   border-radius: 1px;
   background: var(--overlay-text-primary);

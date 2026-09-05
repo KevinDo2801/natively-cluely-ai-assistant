@@ -28,7 +28,7 @@ test.describe('Aurora meeting-input focus effect', () => {
       }
 
       await page.evaluate((selectedTheme) => {
-        const inputEl = document.querySelector<HTMLInputElement>(
+        const inputEl = document.querySelector<HTMLTextAreaElement>(
           '[data-testid="overlay-chat-input"]',
         );
         const themeHost = inputEl?.closest<HTMLElement>('[data-interface-theme]');

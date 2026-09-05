@@ -1544,7 +1544,7 @@ const NativelyInterface: React.FC<NativelyInterfaceProps> = ({
   const pinAnswerPanelRef = useRef<() => void>(() => {});
   const [voiceInput, setVoiceInput] = useState(''); // Accumulated user voice input
   const voiceInputRef = useRef<string>(''); // Ref for capturing in async handlers
-  const textInputRef = useRef<HTMLInputElement>(null); // Ref for input focus
+  const textInputRef = useRef<HTMLTextAreaElement>(null); // Ref for input focus
   const isStealthRef = useRef<boolean>(false); // Tracks if the next expansion should be stealthy
   // Startup-flicker guards (restored from 2de1b62, reverted by 18b139b):
   //  - isExpandedEffectInitializedRef: skip the FIRST run of the visibility-sync
@@ -7657,13 +7657,13 @@ Provide only the answer, nothing else.`;
   // ── Input-click DOM-focus block ──
   //
   // When the user clicks the chat input, the browser tries to focus the
-  // <input> element. That focus promotes the NSPanel to key window —
+  // <textarea> element. That focus promotes the NSPanel to key window —
   // which fires window.onblur on whatever app was previously focused
   // (Zoom, browser, IDE). preventDefault() on mousedown blocks the focus
   // attempt entirely. The above mousedown listener has already fired
   // stealthTapStart() in capture phase, so by the time we get here, the
   // tap is engaging and DOM focus is no longer the typing path.
-  const blockInputFocus = useCallback((e: React.MouseEvent<HTMLInputElement>) => {
+  const blockInputFocus = useCallback((e: React.MouseEvent<HTMLTextAreaElement>) => {
     if (
       !shouldBlockStealthFocus({
         stealthAutoEngageOk: stealthAutoEngageOkRef.current,
@@ -8814,10 +8814,11 @@ Provide only the answer, nothing else.`;
                                     tap and break inputs in Settings/Model
                                     Selector windows. */}
                 <div className="relative group" data-stealth-engage="true">
-                  <input
+                  <textarea
                     ref={textInputRef}
                     data-testid="overlay-chat-input"
-                    type="text"
+                    rows={1}
+                    wrap="soft"
                     value={inputValue}
                     onChange={(e) => { setInputValue(e.target.value); setSkillPickerIndex(0); }}
                     onKeyDown={(e) => {
@@ -8884,7 +8885,7 @@ Provide only the answer, nothing else.`;
                     // since every click there engages the stealth hook. Drive
                     // the same aurora glow with a class instead, and drop the
                     // green, so both platforms look identical on click.
-                    className={`w-full border rounded-xl pl-3 pr-10 py-2.5 text-[13px] leading-relaxed ${inputClass} ${stealthTapActive && isWindows ? 'aurora-focus-active' : ''} ${stealthTapActive && !isWindows ? 'ring-2 ring-emerald-400/30 border-emerald-400/40 shadow-[0_0_12px_rgba(52,211,153,0.15)]' : ''}`}
+                    className={`w-full min-h-[42px] max-h-[120px] resize-none overflow-y-auto whitespace-pre-wrap break-words [field-sizing:content] border rounded-xl pl-3 pr-10 py-2.5 text-[13px] leading-relaxed ${inputClass} ${stealthTapActive && isWindows ? 'aurora-focus-active' : ''} ${stealthTapActive && !isWindows ? 'ring-2 ring-emerald-400/30 border-emerald-400/40 shadow-[0_0_12px_rgba(52,211,153,0.15)]' : ''}`}
                     style={appearance.inputStyle}
                   />
 
@@ -8898,10 +8899,9 @@ Provide only the answer, nothing else.`;
                   {stealthTapActive && (
                     <div
                       aria-hidden="true"
-                      className="absolute left-3 top-1/2 -translate-y-1/2 flex items-center pointer-events-none select-none overflow-hidden"
-                      style={{ maxWidth: 'calc(100% - 52px)' }}
+                      className="absolute left-3 right-10 top-2.5 pointer-events-none select-none overflow-hidden whitespace-pre-wrap break-words text-[13px] leading-relaxed"
                     >
-                      <span className="invisible whitespace-pre text-[13px] leading-relaxed">{inputValue}</span>
+                      <span className="invisible">{inputValue}</span>
                       <span className="overlay-synthetic-caret" />
                     </div>
                   )}
