@@ -34,6 +34,17 @@ import ReviewModal from "./ReviewModal"
 const FIRST_CHECK_DELAY_MS = 15_000
 const SUBSEQUENT_CHECK_DELAY_MS = 60_000  // re-check every minute in case the user lingers
 
+// ===== REVIEW PROMPT KILL-SWITCH ============================================
+// The "How is Natively treating you?" rating popup is disabled product-wide
+// (renderer). While this is `true` the modal is never shown, no eligibility
+// check runs, and no review-ledger IPC fires — in BOTH the orchestrator path
+// (OrchestratedToasterHost mounts <ReviewPromptHost isOpen> in production) and
+// the dev-only direct mount in App.tsx. ReviewModal / ReviewPromptHost and the
+// backend review service are all left intact for a future re-enable:
+//   * set this back to `false`, or
+//   * delete this constant and the three `REVIEW_PROMPT_DISABLED` guards below.
+const REVIEW_PROMPT_DISABLED = true
+
 // Build-time dev auto-open. Pulled once at module load because Vite injects
 // `import.meta.env.DEV` as a literal (true/false) in the bundle — it does not
 // change at runtime. In production builds DEV is false, so we use the normal
@@ -134,6 +145,7 @@ const ReviewPromptHost: React.FC<ReviewPromptHostProps> = ({ paused, isOpen: isO
     }, [])
 
     const check = useCallback(async () => {
+        if (REVIEW_PROMPT_DISABLED) return
         if (isOpenRef.current) return
         try {
             if (!window.electronAPI?.reviewGetPromptState) return
@@ -152,7 +164,7 @@ const ReviewPromptHost: React.FC<ReviewPromptHostProps> = ({ paused, isOpen: isO
     }, [forceTick])
 
     useEffect(() => {
-        if (paused) return
+        if (paused || REVIEW_PROMPT_DISABLED) return
         // When orchestrator-controlled, the host is purely presentational —
         // visibility comes from the prop, no auto-scheduling.
         if (isOrchestratorControlled) return
@@ -247,7 +259,7 @@ const ReviewPromptHost: React.FC<ReviewPromptHostProps> = ({ paused, isOpen: isO
 
     return (
         <ReviewModal
-            isOpen={isOpen}
+            isOpen={REVIEW_PROMPT_DISABLED ? false : isOpen}
             onClose={onClose}
             onDismissLater={handleDismissLater}
             onDismissForever={handleDismissForever}
