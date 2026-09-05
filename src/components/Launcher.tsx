@@ -1416,7 +1416,7 @@ const Launcher: React.FC<LauncherProps> = ({ onStartMeeting, onOpenSettings, onO
                                         {/* Persisted, data-driven recording source selector. The selected
                                             value is also passed into Start so this click cannot race the
                                             settings broadcast reaching the main process. */}
-                                        <div ref={audioSourceMenuRef} className="relative shrink-0 mr-3">
+                                        <div ref={audioSourceMenuRef} className="relative shrink-0 mr-2.5">
                                             <button
                                                 type="button"
                                                 aria-haspopup="listbox"
@@ -1424,24 +1424,24 @@ const Launcher: React.FC<LauncherProps> = ({ onStartMeeting, onOpenSettings, onO
                                                 aria-label={t('Audio source')}
                                                 disabled={isMeetingActive}
                                                 onClick={() => setIsAudioSourceOpen((open) => !open)}
-                                                className={`h-10 min-w-[132px] px-3.5 rounded-full border flex items-center justify-between gap-3 text-text-primary backdrop-blur-xl transition-all duration-200 ${
+                                                className={`h-9 min-w-[120px] px-3 rounded-full border flex items-center justify-between gap-2.5 text-text-primary backdrop-blur-xl transition-all duration-200 ${
                                                     isLight
                                                         ? 'bg-white/72 border-black/10 shadow-[0_4px_18px_rgba(15,23,42,0.10)] hover:bg-white/90'
                                                         : 'bg-white/[0.07] border-white/10 shadow-[0_4px_18px_rgba(0,0,0,0.24)] hover:bg-white/[0.11]'
                                                 } ${isMeetingActive ? 'opacity-55 cursor-default' : 'active:scale-[0.98]'}`}
                                             >
-                                                <span className="flex items-center gap-2.5 min-w-0">
+                                                <span className="flex items-center gap-2 min-w-0">
                                                     {React.createElement(AUDIO_SOURCE_PRESENTATION[audioSource].Icon, {
-                                                        size: 15,
+                                                        size: 14,
                                                         strokeWidth: 2,
                                                         className: 'text-accent-primary shrink-0',
                                                     })}
-                                                    <span className="text-[13px] font-medium whitespace-nowrap">
+                                                    <span className="text-[12px] font-medium whitespace-nowrap">
                                                         {t(AUDIO_SOURCE_PRESENTATION[audioSource].label)}
                                                     </span>
                                                 </span>
                                                 <ChevronDown
-                                                    size={13}
+                                                    size={12}
                                                     className={`text-text-tertiary shrink-0 transition-transform duration-200 ${isAudioSourceOpen ? 'rotate-180' : ''}`}
                                                 />
                                             </button>
@@ -1455,13 +1455,13 @@ const Launcher: React.FC<LauncherProps> = ({ onStartMeeting, onOpenSettings, onO
                                                         animate={{ opacity: 1, y: 0, scale: 1 }}
                                                         exit={{ opacity: 0, y: -4, scale: 0.985 }}
                                                         transition={{ duration: 0.16, ease: [0.25, 1, 0.5, 1] }}
-                                                        className={`absolute right-0 top-[calc(100%+8px)] z-[80] w-[232px] rounded-xl border p-1.5 backdrop-blur-2xl ${
+                                                        className={`absolute right-0 top-[calc(100%+6px)] z-[80] w-[212px] rounded-[10px] border p-1 backdrop-blur-2xl ${
                                                             isLight
                                                                 ? 'bg-white/95 border-black/10 shadow-[0_18px_46px_rgba(15,23,42,0.18)]'
                                                                 : 'bg-[#171719]/95 border-white/10 shadow-[0_18px_46px_rgba(0,0,0,0.5)]'
                                                         }`}
                                                     >
-                                                        <div className="px-2.5 pt-1 pb-1.5 text-[10px] font-semibold uppercase tracking-[0.12em] text-text-tertiary">
+                                                        <div className="px-2 pt-1 pb-1 text-[9px] font-semibold uppercase tracking-[0.12em] text-text-tertiary">
                                                             {t('Audio source')}
                                                         </div>
                                                         {AUDIO_SOURCE_MODES.map((source) => {
@@ -1474,20 +1474,20 @@ const Launcher: React.FC<LauncherProps> = ({ onStartMeeting, onOpenSettings, onO
                                                                     role="option"
                                                                     aria-selected={selected}
                                                                     onClick={() => void selectAudioSource(source)}
-                                                                    className={`w-full rounded-lg px-2.5 py-2 flex items-center gap-2.5 text-left transition-colors ${
+                                                                    className={`w-full rounded-md px-2 py-1.5 flex items-center gap-2 text-left transition-colors ${
                                                                         selected
                                                                             ? (isLight ? 'bg-sky-500/10' : 'bg-sky-400/12')
                                                                             : (isLight ? 'hover:bg-black/[0.045]' : 'hover:bg-white/[0.06]')
                                                                     }`}
                                                                 >
-                                                                    <span className={`w-7 h-7 rounded-md flex items-center justify-center shrink-0 ${selected ? 'bg-accent-primary/15 text-accent-primary' : 'bg-bg-tertiary text-text-secondary'}`}>
-                                                                        <option.Icon size={15} strokeWidth={2} />
+                                                                    <span className={`w-6 h-6 rounded-md flex items-center justify-center shrink-0 ${selected ? 'bg-accent-primary/15 text-accent-primary' : 'bg-bg-tertiary text-text-secondary'}`}>
+                                                                        <option.Icon size={14} strokeWidth={2} />
                                                                     </span>
                                                                     <span className="flex-1 min-w-0">
-                                                                        <span className="block text-[13px] font-medium text-text-primary">{t(option.label)}</span>
-                                                                        <span className="block text-[10px] leading-[14px] text-text-tertiary">{t(option.description)}</span>
+                                                                        <span className="block text-[12px] font-medium text-text-primary">{t(option.label)}</span>
+                                                                        <span className="block text-[9px] leading-3 text-text-tertiary">{t(option.description)}</span>
                                                                     </span>
-                                                                    <Check size={14} className={selected ? 'text-accent-primary opacity-100' : 'opacity-0'} />
+                                                                    <Check size={12} className={selected ? 'text-accent-primary opacity-100' : 'opacity-0'} />
                                                                 </button>
                                                             );
                                                         })}
