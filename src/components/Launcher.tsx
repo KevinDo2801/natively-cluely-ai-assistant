@@ -1766,7 +1766,7 @@ const Launcher: React.FC<LauncherProps> = ({ onStartMeeting, onOpenSettings, onO
                                                                         commitMeetingRename(m.id);
                                                                     }}
                                                                     spellCheck={false}
-                                                                    className="flex-1 min-w-0 bg-transparent text-[14px] font-medium text-text-primary text-left focus:outline-none border-b border-accent-primary focus:border-accent-primary selection:bg-accent-primary/30"
+                                                                    className="flex-1 min-w-0 rounded-md bg-transparent text-[14px] font-medium text-text-primary text-left focus:outline-none border border-accent-primary focus:border-accent-primary focus:ring-2 focus:ring-accent-primary/20 px-1.5 py-0.5 -mx-0.5 mr-1.5 selection:bg-accent-primary/30"
                                                                 />
                                                             ) : (
                                                                 <div className={`flex-1 min-w-0 font-medium text-[14px] text-left truncate ${m.title === 'Processing...' ? 'text-blue-400 italic animate-pulse' : 'text-text-primary'}`}>
