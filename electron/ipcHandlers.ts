@@ -9853,7 +9853,12 @@ export function initializeIpcHandlers(appState: AppState): void {
   });
 
   safeHandle('update-meeting-title', async (_, { id, title }: { id: string; title: string }) => {
-    return DatabaseManager.getInstance().updateMeetingTitle(id, title);
+    const ok = DatabaseManager.getInstance().updateMeetingTitle(id, title);
+    // A rename changes the title surfaced in every meeting list (launcher side
+    // list, folder views, header search). Broadcast like the other mutating
+    // handlers so those surfaces refetch and show the new title immediately.
+    if (ok) appState.broadcast('meetings-updated');
+    return ok;
   });
 
   safeHandle('update-meeting-summary', async (_, { id, updates }: { id: string; updates: any }) => {
