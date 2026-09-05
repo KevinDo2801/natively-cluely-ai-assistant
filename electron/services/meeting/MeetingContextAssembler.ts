@@ -62,7 +62,10 @@ export class MeetingContextAssembler {
     try {
       params.onStatusUpdate?.('chunking');
       const normalized = this.normalizer.normalize(params.transcript);
-      if (normalized.segments.length < 3) {
+      // MIN-SEGMENT FLOOR (2026-02-XX): was `< 3` (needed >=3 normalized segments). Matches the
+      // lowered floor in MeetingPersistence so a short-but-real meeting (>=2 spoken segments)
+      // still gets its mode's note-template sections instead of an empty generic note.
+      if (normalized.segments.length < 2) {
         return { summary: null, meta: failMeta() };
       }
 

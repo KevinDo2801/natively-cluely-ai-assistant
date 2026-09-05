@@ -468,7 +468,12 @@ export class MeetingPersistence {
             // Generate Structured Summary. V3 is the long-context path: it never uses a
             // naïve transcript prefix as the primary summary input. If it fails or is
             // disabled, the existing V2 single-pass path below remains the compatibility fallback.
-            if (data.transcript.length > 2 && isIntelligenceFlagEnabled('meetingSummaryV3') && postCallSummaryAllowed) {
+            // MIN-SEGMENT FLOOR (2026-02-XX): was `> 2` (>=3 segments). A real but short
+            // meeting (e.g. a 2-utterance exchange, ~3.5k chars) was silently skipped, so the
+            // note came back empty and the mode's note-template sections never rendered —
+            // users read that as "the template disappeared". Lowered to `> 1` (>=2 segments);
+            // a single trivial clip is still below the floor and stays skipped.
+            if (data.transcript.length > 1 && isIntelligenceFlagEnabled('meetingSummaryV3') && postCallSummaryAllowed) {
                 const db = DatabaseManager.getInstance();
                 db.updateSummaryStatus(meetingId, 'queued');
                 const assembler = new MeetingContextAssembler(this.llmHelper);
@@ -562,7 +567,7 @@ export class MeetingPersistence {
                 console.warn('[MeetingSummaryV3] post_call_summary scope denied — skipping V3 cloud summary path.');
             }
 
-            if (summaryData.schemaVersion !== 3 && data.transcript.length > 2 && postCallSummaryAllowed) {
+            if (summaryData.schemaVersion !== 3 && data.transcript.length > 1 && postCallSummaryAllowed) {
                 const baseRules = `RULES:
 - Do NOT invent information not present in the context
 - You MAY infer implied action items or next steps if they are logical consequences of the discussion
@@ -949,7 +954,9 @@ Return ONLY valid JSON (no markdown code blocks):
     public async regenerateSavedMeeting(meetingId: string, opts?: { templateType?: string; tone?: 'professional' | 'warm' | 'concise' | 'friendly' }): Promise<boolean> {
         const db = DatabaseManager.getInstance();
         const details = db.getMeetingDetails(meetingId);
-        if (!details || !Array.isArray(details.transcript) || details.transcript.length < 3) return false;
+        // MIN-SEGMENT FLOOR aligns with the generation floor (>=2 segments) so a short-but-real
+        // meeting that was summarized can also be regenerated.
+        if (!details || !Array.isArray(details.transcript) || details.transcript.length < 2) return false;
 
         // Scope gate.
         let postCallSummaryAllowed = true;

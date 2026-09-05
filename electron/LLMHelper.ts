@@ -9368,7 +9368,7 @@ let isMultimodal = !!(imagePaths?.length);
     // summarise, the provider fallback chain (Natively → Codex → Groq → Gemini
     // Flash-Lite → Flash → Pro) burns up to ~10 minutes of wall-clock time on retries
     // for a result that will be discarded by the caller anyway. The caller
-    // (MeetingPersistence) already checks `transcript.length > 2` before using
+    // (MeetingPersistence) already checks `transcript.length > 1` before using
     // the summary, but the title-generation call site does NOT — so this guard
     // is the load-bearing one.
     if (!context || context.trim().length === 0) {
