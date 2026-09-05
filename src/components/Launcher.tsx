@@ -1706,12 +1706,20 @@ const Launcher: React.FC<LauncherProps> = ({ onStartMeeting, onOpenSettings, onO
                                                 <div className="space-y-1">
                                                     {groupedMeetings[label].map((m) => {
                                                         const isSelected = selectionMode && selectedIds.has(m.id);
+                                                        const isRenamingThisRow = renamingId === m.id;
                                                         return (
                                                         <motion.div
                                                             key={m.id}
                                                             layoutId={`meeting-${m.id}`}
-                                                            className={`group relative flex items-center justify-between px-3 py-2 rounded-lg transition-colors cursor-pointer ${isSelected ? 'bg-selection-bg' : 'bg-transparent hover:bg-bg-elevated'}`}
-                                                            onClick={() => selectionMode ? toggleSelect(m.id, !!m.isLive) : handleOpenMeeting(m)}
+                                                            className={`group relative flex items-center justify-between px-3 py-2 rounded-lg transition-colors ${isSelected ? 'bg-selection-bg' : 'bg-transparent hover:bg-bg-elevated'} ${isRenamingThisRow ? 'cursor-default' : 'cursor-pointer'}`}
+                                                            onClick={() => {
+                                                                // While inline-renaming this row, clicking it must NOT open / select the
+                                                                // meeting — the row is in edit mode. The rename input handles its own
+                                                                // clicks; any other click anywhere on the row is ignored.
+                                                                if (isRenamingThisRow) return;
+                                                                if (selectionMode) toggleSelect(m.id, !!m.isLive);
+                                                                else handleOpenMeeting(m);
+                                                            }}
                                                         >
                                                             {/* Selection checkbox (v32) — in-flow on the far left; shifting the
                                                                 title right by its width when selecting is the standard pattern. */}
