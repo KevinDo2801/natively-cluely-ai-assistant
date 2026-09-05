@@ -563,9 +563,55 @@ const Launcher: React.FC<LauncherProps> = ({ onStartMeeting, onOpenSettings, onO
     const [activeMenuId, setActiveMenuId] = useState<string | null>(null);
     const [menuEntered, setMenuEntered] = useState(false);
 
+    // Inline rename of a meeting title straight from its list-row ⋯ menu.
+    const [renamingId, setRenamingId] = useState<string | null>(null);
+    const [renameDraft, setRenameDraft] = useState('');
+    const renameInputRef = useRef<HTMLInputElement | null>(null);
+    // Enter/Escape terminate the edit through the keydown handler; the blur that
+    // fires because the input then unmounts must not re-commit/cancel. This ref is
+    // set just before an intentional end and consumed by the blur handler.
+    const renameDoneByKeyRef = useRef(false);
+
     useEffect(() => {
         setMenuEntered(false);
     }, [activeMenuId]);
+
+    // Focus + select the current title when the inline rename input mounts, so
+    // typing immediately overwrites it.
+    useEffect(() => {
+        if (renamingId && renameInputRef.current) {
+            renameInputRef.current.focus();
+            renameInputRef.current.select();
+        }
+    }, [renamingId]);
+
+    const beginMeetingRename = (id: string, currentTitle: string) => {
+        renameDoneByKeyRef.current = false;
+        setActiveMenuId(null);
+        setRenameDraft(currentTitle);
+        setRenamingId(id);
+    };
+
+    const cancelMeetingRename = () => {
+        setRenamingId(null);
+        setRenameDraft('');
+    };
+
+    const commitMeetingRename = async (id: string) => {
+        const title = renameDraft.trim();
+        cancelMeetingRename();
+        const current = meetings.find(m => m.id === id);
+        if (!title || (current && current.title === title)) return;
+        if (window.electronAPI?.updateMeetingTitle) {
+            await window.electronAPI.updateMeetingTitle(id, title);
+        }
+        // update-meeting-title broadcasts meetings-updated (the handler refetches
+        // the lists); still patch mirrors optimistically so every surfaced copy of
+        // this title (list, all-meetings search, open detail) reflects it at once.
+        setMeetings(prev => prev.map(m => m.id === id ? { ...m, title } : m));
+        setAllMeetings(prev => prev.map(m => m.id === id ? { ...m, title } : m));
+        setSelectedMeeting(prev => prev && prev.id === id ? { ...prev, title } : prev);
+    };
 
     // Global click listener to close menu
     useEffect(() => {
@@ -1681,9 +1727,44 @@ const Launcher: React.FC<LauncherProps> = ({ onStartMeeting, onOpenSettings, onO
                                                                 </button>
                                                             )}
 
-                                                            <div className={`flex-1 min-w-0 font-medium text-[14px] text-left truncate ${m.title === 'Processing...' ? 'text-blue-400 italic animate-pulse' : 'text-text-primary'}`}>
-                                                                {m.title}
-                                                            </div>
+                                                            {renamingId === m.id ? (
+                                                                <input
+                                                                    ref={renameInputRef}
+                                                                    value={renameDraft}
+                                                                    onChange={(e) => setRenameDraft(e.target.value)}
+                                                                    onClick={(e) => e.stopPropagation()}
+                                                                    onKeyDown={(e) => {
+                                                                        if (e.key === 'Enter') {
+                                                                            e.preventDefault();
+                                                                            // committing here; ignore the blur that unmounting triggers below
+                                                                            renameDoneByKeyRef.current = true;
+                                                                            void commitMeetingRename(m.id);
+                                                                        } else if (e.key === 'Escape') {
+                                                                            e.preventDefault();
+                                                                            e.stopPropagation();
+                                                                            // intentional cancel; ignore the blur echo
+                                                                            renameDoneByKeyRef.current = true;
+                                                                            cancelMeetingRename();
+                                                                        } else {
+                                                                            e.stopPropagation();
+                                                                        }
+                                                                    }}
+                                                                    onBlur={() => {
+                                                                        // Enter/Escape already terminated the edit — consume and no-op
+                                                                        if (renameDoneByKeyRef.current) {
+                                                                            renameDoneByKeyRef.current = false;
+                                                                            return;
+                                                                        }
+                                                                        commitMeetingRename(m.id);
+                                                                    }}
+                                                                    spellCheck={false}
+                                                                    className="flex-1 min-w-0 bg-transparent text-[14px] font-medium text-text-primary text-left focus:outline-none border-b border-accent-primary focus:border-accent-primary selection:bg-accent-primary/30"
+                                                                />
+                                                            ) : (
+                                                                <div className={`flex-1 min-w-0 font-medium text-[14px] text-left truncate ${m.title === 'Processing...' ? 'text-blue-400 italic animate-pulse' : 'text-text-primary'}`}>
+                                                                    {m.title}
+                                                                </div>
+                                                            )}
 
                                                             {/* Time & Duration Section */}
                                                             <div className="flex items-center gap-4">
@@ -1737,7 +1818,7 @@ const Launcher: React.FC<LauncherProps> = ({ onStartMeeting, onOpenSettings, onO
                                                                         animate={{ opacity: 1, scale: 1, y: 0 }}
                                                                         exit={{ opacity: 0, scale: 0.95, y: 5 }}
                                                                         transition={{ duration: 0.1 }}
-                                                                        className={`absolute right-0 top-full mt-1 w-[90px] backdrop-blur-xl rounded-lg shadow-2xl z-50 overflow-hidden border ${isLight ? 'bg-bg-elevated border-border-muted shadow-[0_8px_24px_rgba(0,0,0,0.12)]' : 'bg-[#1E1E1E]/80 border-white/10'}`}
+                                                                        className={`absolute right-0 top-full mt-1 w-[118px] backdrop-blur-xl rounded-lg shadow-2xl z-50 overflow-hidden border ${isLight ? 'bg-bg-elevated border-border-muted shadow-[0_8px_24px_rgba(0,0,0,0.12)]' : 'bg-[#1E1E1E]/80 border-white/10'}`}
                                                                         onClick={(e) => e.stopPropagation()}
                                                                         onMouseEnter={() => setMenuEntered(true)}
                                                                         onMouseLeave={() => {
@@ -1745,6 +1826,13 @@ const Launcher: React.FC<LauncherProps> = ({ onStartMeeting, onOpenSettings, onO
                                                                         }}
                                                                     >
                                                                         <div className="p-1 flex flex-col gap-0.5">
+                                                                            <button
+                                                                                className={`w-full flex items-center gap-2 px-3 py-1.5 text-[12px] text-text-primary rounded-lg transition-colors text-left ${isLight ? 'hover:bg-bg-item-surface' : 'hover:bg-white/10'}`}
+                                                                                onClick={() => beginMeetingRename(m.id, m.title)}
+                                                                            >
+                                                                                <Pencil size={13} />
+                                                                                {t('Rename')}
+                                                                            </button>
                                                                             <button
                                                                                 className={`w-full flex items-center gap-2 px-3 py-1.5 text-[12px] text-text-primary rounded-lg transition-colors text-left ${isLight ? 'hover:bg-bg-item-surface' : 'hover:bg-white/10'}`}
                                                                                 onClick={() => {
