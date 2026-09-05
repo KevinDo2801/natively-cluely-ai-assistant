@@ -17,7 +17,11 @@
 
 import { describe, test } from 'node:test';
 import assert from 'node:assert/strict';
-import { normalizeFinalizedMarkdownMath, renderStreamingMarkdown } from '../streamingMarkdown.ts';
+import {
+  normalizeBareMarkdownMath,
+  normalizeFinalizedMarkdownMath,
+  renderStreamingMarkdown,
+} from '../streamingMarkdown.ts';
 import { unified } from 'unified';
 import remarkParse from 'remark-parse';
 import remarkMath from 'remark-math';
@@ -47,6 +51,36 @@ describe('renderStreamingMarkdown — completed math', () => {
   test('renders multiple inline expressions independently', () => {
     const html = renderStreamingMarkdown('$a$ and $b$');
     assert.equal(katexCount(html), 2, html);
+  });
+
+  test('renders conservative bare exponent, square-root and fraction expressions', () => {
+    const html = renderStreamingMarkdown('2^2 = 4; (a+b)^2; \\sqrt{x}; \\frac{a}{b}');
+    assert.equal(katexCount(html), 4, html);
+    assert.match(html, /<msup>/);
+  });
+});
+
+describe('normalizeBareMarkdownMath — code safety', () => {
+  test('wraps the exact bare exponent forms reported in Chat Overlay prose', () => {
+    assert.equal(
+      normalizeBareMarkdownMath('2^2 = 4\n(a+b)^2 = a^2 + 2ab + b^2'),
+      '$2^2$ = 4\n$(a+b)^2$ = $a^2$ + 2ab + $b^2$',
+    );
+  });
+
+  test('preserves inline code, fenced code, and already-delimited math', () => {
+    const source = 'Use `x^2` in code, but 2^2 in prose and $y^2$ in math.\n```js\nconst mask = a^2;\n```';
+    assert.equal(
+      normalizeBareMarkdownMath(source),
+      'Use `x^2` in code, but $2^2$ in prose and $y^2$ in math.\n```js\nconst mask = a^2;\n```',
+    );
+  });
+
+  test('converts a whole backticked equation but keeps ambiguous code inline', () => {
+    assert.equal(
+      normalizeBareMarkdownMath('`(a+b)^2 = a^2 + 2ab + b^2` and `x^2`'),
+      '$(a+b)^2 = a^2 + 2ab + b^2$ and `x^2`',
+    );
   });
 });
 
@@ -460,6 +494,9 @@ describe('the FINALIZED path must survive remark-math, not just this module', ()
     ['spaces inside the expression', 'We know $a + b = c$ holds.'],
     ['single digit', 'Given $5$ apples.'],
     ['display math', 'Put the formula on its own line as $$E=mc^2$$.'],
+    ['reported bare exponent', '2^2 = 4.'],
+    ['reported bare binomial exponent', '(a+b)^2 = a^2 + 2ab + b^2.'],
+    ['bare square root', 'The result is \\sqrt{x}.'],
     // Both kinds in one line: the sigil must be neutralised without taking the
     // real expression with it.
     ['real math alongside a shell sigil', 'Vars $@ are prose but $x$ is math.'],

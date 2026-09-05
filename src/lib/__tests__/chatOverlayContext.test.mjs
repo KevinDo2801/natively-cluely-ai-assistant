@@ -77,6 +77,13 @@ describe('composeChatOverlayContext', () => {
     assert.match(out, /\*\*Câu đang nói dở:\*\*/);
     assert.match(out, /Do NOT add the quote section to plain factual or technical questions/);
   });
+
+  test('default persona requires delimited LaTeX instead of code-formatted formulas', () => {
+    const out = composeChatOverlayContext({ transcript: 't', chatHistory: '' });
+    assert.match(out, /NEVER put mathematical formulas in backticks/);
+    assert.match(out, /\$\.\.\.\$ inline or \$\$\.\.\.\$\$/);
+    assert.match(out, /\$2\^2\$/);
+  });
 });
 
 describe('composeChatOverlayContext — vague-question brevity bound', () => {

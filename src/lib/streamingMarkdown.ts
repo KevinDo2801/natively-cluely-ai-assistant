@@ -299,10 +299,11 @@ const streamingMarked = new Marked({
  * dollar openers are escaped so they cannot pair with a later currency/math `$`.
  */
 export function normalizeFinalizedMarkdownMath(markdown: string): string {
+  const normalizedMarkdown = normalizeBareMarkdownMath(markdown);
   let fenced = false;
   let fenceChar = '';
   let fenceLength = 0;
-  const lines = markdown.split(/(?<=\n)/);
+  const lines = normalizedMarkdown.split(/(?<=\n)/);
   const output: string[] = [];
 
   for (let index = 0; index < lines.length; index += 1) {
@@ -480,6 +481,148 @@ function toRemarkMathBlock(body: string, before: string, after: string): string 
   return `${needsLeadingBreak ? '\n\n' : ''}${block}${needsTrailingBreak ? '\n\n' : ''}`;
 }
 
+// Models occasionally emit obvious math without delimiters even when the
+// prompt asks for LaTeX (for example `2^2` or `\sqrt{x}`). KaTeX correctly
+// ignores those strings because remark-math/Marked only recognize delimited
+// math. Add delimiters for a deliberately small set of unambiguous patterns.
+//
+// This runs only on prose spans: fenced code, inline code, and already
+// delimited math are preserved byte-for-byte by the scanners below. Keeping
+// the pattern conservative is important — a broad "anything containing ^"
+// rewrite would corrupt source code, shell examples, URLs, and ordinary text.
+const BARE_MATH_RE = /(?:\\frac\{[^{}\n]+\}\{[^{}\n]+\}|\\sqrt(?:\[[^\]\n]+\])?\{[^{}\n]+\}|\([A-Za-z0-9+\-*/\s]+\)\^(?:\{[^{}\n]+\}|[-+]?\d+|[A-Za-z])|\b[A-Za-z0-9]+\^(?:\{[^{}\n]+\}|[-+]?\d+|[A-Za-z]))/g;
+
+function wrapBareMathInPlainProse(source: string): string {
+  return source.replace(BARE_MATH_RE, (expression) => `$${expression}$`);
+}
+
+function normalizeBareMathProse(source: string): string {
+  let output = '';
+  let plainStart = 0;
+  let cursor = 0;
+
+  const flushPlain = (end: number) => {
+    output += wrapBareMathInPlainProse(source.slice(plainStart, end));
+  };
+
+  while (cursor < source.length) {
+    let closer = -1;
+    let delimiterLength = 0;
+    let foundOpener = false;
+
+    if (source.startsWith('$$', cursor) && !isEscaped(source, cursor)) {
+      foundOpener = true;
+      closer = source.indexOf('$$', cursor + 2);
+      delimiterLength = 2;
+    } else if (source[cursor] === '$' && source[cursor + 1] !== '$' && !isEscaped(source, cursor)) {
+      foundOpener = true;
+      closer = source.indexOf('$', cursor + 1);
+      delimiterLength = 1;
+    } else if (source.startsWith('\\[', cursor) && !isEscaped(source, cursor)) {
+      foundOpener = true;
+      closer = source.indexOf('\\]', cursor + 2);
+      delimiterLength = 2;
+    }
+
+    if (closer >= 0) {
+      flushPlain(cursor);
+      output += source.slice(cursor, closer + delimiterLength);
+      cursor = closer + delimiterLength;
+      plainStart = cursor;
+      continue;
+    }
+
+    // A partial streaming delimiter owns the remainder of this prose chunk.
+    // Do not discover and wrap exponent-looking text inside it: `$E=mc^2`
+    // must stay literal until its closing `$` arrives, not become
+    // `$E=$mc^2$` midway through the stream.
+    if (foundOpener) {
+      flushPlain(cursor);
+      output += source.slice(cursor);
+      return output;
+    }
+
+    cursor += 1;
+  }
+
+  flushPlain(source.length);
+  return output;
+}
+
+function normalizeBareMathOutsideInlineCode(line: string): string {
+  let output = '';
+  let proseStart = 0;
+  let cursor = 0;
+
+  while (cursor < line.length) {
+    if (line[cursor] !== '`') {
+      cursor += 1;
+      continue;
+    }
+    let runEnd = cursor + 1;
+    while (line[runEnd] === '`') runEnd += 1;
+    const delimiter = line.slice(cursor, runEnd);
+    const closer = line.indexOf(delimiter, runEnd);
+    if (closer < 0) break;
+    output += normalizeBareMathProse(line.slice(proseStart, cursor));
+    const inlineCodeBody = line.slice(runEnd, closer).trim();
+    // Some providers follow an older chat instruction and return an entire
+    // equation as inline code. Convert only unmistakable equations: they must
+    // contain `=`, a math construct we support, and nothing outside a narrow
+    // math-character alphabet. Ambiguous snippets such as `x^2` remain code.
+    const isClearlyMathEquation = delimiter === '`'
+      && inlineCodeBody.includes('=')
+      && /(?:\^|\\sqrt|\\frac)/.test(inlineCodeBody)
+      && /^[A-Za-z0-9\s()+\-*/^=.,\\{}\u005b\u005d]+$/.test(inlineCodeBody);
+    output += isClearlyMathEquation
+      ? `$${inlineCodeBody}$`
+      : line.slice(cursor, closer + delimiter.length);
+    cursor = closer + delimiter.length;
+    proseStart = cursor;
+  }
+
+  return output + normalizeBareMathProse(line.slice(proseStart));
+}
+
+/** Add delimiters to conservative bare-math patterns outside Markdown code. */
+export function normalizeBareMarkdownMath(markdown: string): string {
+  let fenced = false;
+  let fenceChar = '';
+  let fenceLength = 0;
+  let proseBuffer = '';
+  let output = '';
+
+  const flushProse = () => {
+    output += normalizeBareMathOutsideInlineCode(proseBuffer);
+    proseBuffer = '';
+  };
+
+  for (const line of markdown.split(/(?<=\n)/)) {
+    const fence = /^( {0,3})(`{3,}|~{3,})([\s\S]*)$/.exec(line);
+    if (fenced) {
+      const closesBlock = fence
+        && fence[2][0] === fenceChar
+        && fence[2].length >= fenceLength
+        && fence[3].trim() === '';
+      if (closesBlock) fenced = false;
+      output += line;
+      continue;
+    }
+    if (fence) {
+      flushProse();
+      fenced = true;
+      fenceChar = fence[2][0];
+      fenceLength = fence[2].length;
+      output += line;
+      continue;
+    }
+    proseBuffer += line;
+  }
+
+  flushProse();
+  return output;
+}
+
 export function renderStreamingMarkdown(markdown: string): string {
-  return streamingMarked.parse(markdown || '', { async: false }) as string;
+  return streamingMarked.parse(normalizeBareMarkdownMath(markdown || ''), { async: false }) as string;
 }

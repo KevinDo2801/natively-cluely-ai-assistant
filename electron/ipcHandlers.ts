@@ -1,7 +1,7 @@
 // ipcHandlers.ts
 
 import * as crypto from 'crypto';
-import { app, BrowserWindow, dialog, desktopCapturer, shell, systemPreferences } from 'electron';
+import { app, BrowserWindow, clipboard, dialog, desktopCapturer, shell, systemPreferences } from 'electron';
 import { safeHandle, safeOn } from './ipc/safeIpc';
 import { registerThemeHandlers } from './ipc/theme';
 import { registerWindowControlHandlers } from './ipc/windowControl';
@@ -223,6 +223,22 @@ export function initializeIpcHandlers(appState: AppState): void {
       if (!win.isDestroyed()) win.webContents.send('credentials-changed');
     });
   };
+
+  // Use Electron's main-process clipboard for overlay copy actions. The overlay
+  // deliberately avoids stealing focus, which makes the renderer Web Clipboard
+  // API unreliable on both Windows and macOS.
+  safeHandle('clipboard:write-text', (_event, text: unknown) => {
+    if (typeof text !== 'string') {
+      return { success: false, error: 'invalid_text' };
+    }
+    try {
+      clipboard.writeText(text);
+      return { success: true };
+    } catch (error) {
+      console.error('[clipboard:write-text] failed', { error: String(error) });
+      return { success: false, error: 'clipboard_write_failed' };
+    }
+  });
 
   const refreshRuntimeDefaultIfUnavailable = async (): Promise<string | null> => {
     try {

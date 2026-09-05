@@ -672,7 +672,7 @@ Aim for smart notes a person can skim in a few seconds, not an essay or a ChatGP
 
 Shape:
 1. Open with the main point or the direct answer in one short sentence. No "Sure!", no preamble, no restating the question.
-2. Put formulas, code, commands, exact phrases, names, numbers, and sentences the user may want to reuse into inline code (backticks), e.g. \`magnification = image / object = f / z\`. Use a fenced code block only when the sample runs more than a line or two.
+2. Render every mathematical formula as LaTeX using $...$ inline or $$...$$ on its own line; NEVER put a formula in backticks. Put only code, commands, exact non-math phrases, names, numbers, and reusable sentences into inline code. Use a fenced code block only when the sample runs more than a line or two.
 3. Break the rest into short labeled sections. A label is a short bold phrase or word followed by a colon — \*\*Ý chính:\*\*, \*\*Nghĩa là:\*\*, \*\*Ví dụ:\*\*, \*\*Tóm gọn:\*\* — and is written in the SAME language as the answer (a Vietnamese answer uses Vietnamese labels, an English answer uses English ones). Each section holds a tiny paragraph, a compact hyphen-bulleted list (one idea per bullet), or a small code block. Choose labels that fit the question; never force a fixed set, and never add a section for its own sake.
 4. Use bold sparingly for the few load-bearing words: the conclusion, the key term, the decisive number or variable. At most a handful of marks per answer. Never bold a whole sentence, an entire bullet, or most of the text.
 5. Prefer short bullets to long paragraphs whenever more than one idea is doing work, and keep each bullet to a single idea. Use nested bullets only when the tree genuinely improves the hierarchy.
@@ -688,7 +688,7 @@ Exceptions, in precedence order: the coding contract owns full coding answers wh
 // Local tier gets the same surface semantics compressed — the tiny models
 // follow one short paragraph better than five numbered laws.
 const CHAT_LAYOUT_TINY = `<chat_layout>
-Typed chat panel — the user reads this on screen, nobody speaks it, so bold labels, bullets, and inline code are allowed here. Open with one sentence that answers directly. Put formulas, code, commands, and exact phrases in backticks (inline code). Break the rest into short bold-labeled sections (\*\*Ý chính:\*\*, \*\*Ví dụ:\*\*, \*\*Tóm gọn:\*\*) with compact one-idea bullets, using labels in the answer's language. Bold only the few key words. Keep it short: a simple question is 1–3 lines; a normal answer is a few short sections, never a wall of text. The coding contract, exact-words requests, and explicit format requests override this layout.
+Typed chat panel — the user reads this on screen, nobody speaks it, so bold labels, bullets, and inline code are allowed here. Open with one sentence that answers directly. Render every mathematical formula as LaTeX using $...$ inline or $$...$$ on its own line; NEVER put formulas in backticks. Put code, commands, and exact non-math phrases in backticks. Break the rest into short bold-labeled sections (\*\*Ý chính:\*\*, \*\*Ví dụ:\*\*, \*\*Tóm gọn:\*\*) with compact one-idea bullets, using labels in the answer's language. Bold only the few key words. Keep it short: a simple question is 1–3 lines; a normal answer is a few short sections, never a wall of text. The coding contract, exact-words requests, and explicit format requests override this layout.
 </chat_layout>`;
 
 function chatLayoutBlock(input: BuildSystemPromptV2Input, tier: PromptTierV2): string {

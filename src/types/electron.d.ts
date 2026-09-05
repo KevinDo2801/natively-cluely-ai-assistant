@@ -37,6 +37,7 @@ export interface ElectronAPI {
     width: number
     height: number
   }) => Promise<void>
+  writeClipboardText?: (text: string) => Promise<{ success: boolean; error?: string }>
   // Overlay aux windows (pill / resize toggle) coordination
   sendOverlayUiState?: (state: Record<string, unknown>) => Promise<void>
   onOverlayUiState?: (

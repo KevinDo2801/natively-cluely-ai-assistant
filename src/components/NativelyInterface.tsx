@@ -159,72 +159,82 @@ const displayLanguageName = (lang: string): string =>
 // split-position version (label at one offset, button at another) read as
 // disjointed floating chrome; grouping them into a single translucent
 // surface with one hover fade gives it a calmer, more cohesive feel.
-const CodeBlockChrome = ({ lang, code }: { lang: string; code: string }) => {
+const CodeCopyButton = ({ code, className = '' }: { code: string; className?: string }) => {
   const t = useT();
   const [copied, setCopied] = useState(false);
   const timer = useRef<ReturnType<typeof setTimeout> | null>(null);
   useEffect(() => () => {
     if (timer.current) clearTimeout(timer.current);
   }, []);
-  const handleCopy = () => {
-    const p = navigator.clipboard?.writeText(code);
-    if (!p) return;
-    p.then(() => {
+  const handleCopy = async () => {
+    let copiedSuccessfully = false;
+    try {
+      const result = await window.electronAPI?.writeClipboardText?.(code);
+      copiedSuccessfully = result?.success === true;
+      if (!copiedSuccessfully && navigator.clipboard) {
+        await navigator.clipboard.writeText(code);
+        copiedSuccessfully = true;
+      }
+    } catch (error) {
+      console.error('[CodeCopyButton] Clipboard write failed', { error: String(error) });
+    }
+
+    if (copiedSuccessfully) {
       setCopied(true);
       if (timer.current) clearTimeout(timer.current);
       timer.current = setTimeout(() => setCopied(false), 2000);
-    }).catch(() => {});
+    }
   };
   return (
-    <div
-      className={`absolute top-2 right-2 z-10 flex items-center gap-1.5 pl-2.5 pr-1.5 py-1 rounded-lg backdrop-blur-md opacity-0 group-hover/code:opacity-100 transition-[opacity,background-color] duration-150 ${
-        copied ? 'bg-emerald-500/15' : 'bg-black/55 hover:bg-black/70'
-      }`}
+    <button
+      type="button"
+      onClick={handleCopy}
+      title={copied ? t('Copied') : t('Copy code')}
+      aria-label={copied ? t('Copied') : t('Copy code')}
+      className={`relative w-5 h-5 shrink-0 flex items-center justify-center transition-[opacity,transform] duration-150 active:scale-95 ${className}`}
     >
-      {lang && (
-        <span
-          className="text-[10px] font-mono tracking-wide pointer-events-none"
-          style={{ color: VIVID_DARK_LINE_NUMBER_COLOR }}
-        >
-          {displayLanguageName(lang)}
-        </span>
-      )}
-      <button
-        type="button"
-        onClick={handleCopy}
-        title={copied ? t('Copied') : t('Copy code')}
-        aria-label={copied ? t('Copied') : t('Copy code')}
-        className="relative w-5 h-5 flex items-center justify-center transition-transform duration-150 active:scale-95"
-      >
-        <AnimatePresence mode="wait" initial={false}>
-          {copied ? (
-            <motion.span
-              key="check"
-              initial={{ opacity: 0, scale: 0.8 }}
-              animate={{ opacity: 1, scale: 1 }}
-              exit={{ opacity: 0, scale: 0.8 }}
-              transition={{ duration: 0.14 }}
-              className="absolute inset-0 flex items-center justify-center"
-            >
-              <Check className="w-3.5 h-3.5 text-emerald-400" strokeWidth={2.5} />
-            </motion.span>
-          ) : (
-            <motion.span
-              key="copy"
-              initial={{ opacity: 0, scale: 0.8 }}
-              animate={{ opacity: 1, scale: 1 }}
-              exit={{ opacity: 0, scale: 0.8 }}
-              transition={{ duration: 0.14 }}
-              className="absolute inset-0 flex items-center justify-center text-white/70 hover:text-white/95"
-            >
-              <Copy className="w-3.5 h-3.5" strokeWidth={2} />
-            </motion.span>
-          )}
-        </AnimatePresence>
-      </button>
-    </div>
+      <AnimatePresence mode="wait" initial={false}>
+        {copied ? (
+          <motion.span
+            key="check"
+            initial={{ opacity: 0, scale: 0.8 }}
+            animate={{ opacity: 1, scale: 1 }}
+            exit={{ opacity: 0, scale: 0.8 }}
+            transition={{ duration: 0.14 }}
+            className="absolute inset-0 flex items-center justify-center"
+          >
+            <Check className="w-3.5 h-3.5 text-emerald-400" strokeWidth={2.5} />
+          </motion.span>
+        ) : (
+          <motion.span
+            key="copy"
+            initial={{ opacity: 0, scale: 0.8 }}
+            animate={{ opacity: 1, scale: 1 }}
+            exit={{ opacity: 0, scale: 0.8 }}
+            transition={{ duration: 0.14 }}
+            className="absolute inset-0 flex items-center justify-center"
+          >
+            <Copy className="w-3.5 h-3.5" strokeWidth={2} />
+          </motion.span>
+        )}
+      </AnimatePresence>
+    </button>
   );
 };
+
+const CodeBlockChrome = ({ lang, code }: { lang: string; code: string }) => (
+  <div className="absolute top-2 right-2 z-10 flex items-center gap-1.5 pl-2.5 pr-1.5 py-1 rounded-lg backdrop-blur-md opacity-0 group-hover/code:opacity-100 bg-black/55 hover:bg-black/70 text-white transition-[opacity,background-color] duration-150">
+    {lang && (
+      <span
+        className="text-[10px] font-mono tracking-wide pointer-events-none"
+        style={{ color: VIVID_DARK_LINE_NUMBER_COLOR }}
+      >
+        {displayLanguageName(lang)}
+      </span>
+    )}
+    <CodeCopyButton code={code} />
+  </div>
+);
 
 import React, {
   startTransition as reactStartTransition,
@@ -506,7 +516,7 @@ const HighlightedCode = React.memo(
             over the code instead (see below). */}
         {showCodeHeader && (
           <div
-            className={`px-3 py-1.5 border-b ${codeHeaderClass}`}
+            className={`px-3 py-1.5 border-b flex items-center justify-between gap-2 ${codeHeaderClass}`}
             style={isSpecialTheme ? undefined : appearance.codeHeaderStyle}
           >
             <span
@@ -514,6 +524,7 @@ const HighlightedCode = React.memo(
             >
               {resolved || 'CODE'}
             </span>
+            <CodeCopyButton code={code} className="overlay-text-muted opacity-80 hover:opacity-100" />
           </div>
         )}
         {!showCodeHeader && (
@@ -685,7 +696,7 @@ export const StreamingHighlightedCode = React.memo(
       >
         {showCodeHeader && (
           <div
-            className={`px-3 py-1.5 border-b ${codeHeaderClass}`}
+            className={`px-3 py-1.5 border-b flex items-center justify-between gap-2 ${codeHeaderClass}`}
             style={isSpecialTheme ? undefined : appearance.codeHeaderStyle}
           >
             <span
@@ -693,6 +704,7 @@ export const StreamingHighlightedCode = React.memo(
             >
               {resolved || 'CODE'}
             </span>
+            <CodeCopyButton code={code} className="overlay-text-muted opacity-80 hover:opacity-100" />
           </div>
         )}
         {!showCodeHeader && (

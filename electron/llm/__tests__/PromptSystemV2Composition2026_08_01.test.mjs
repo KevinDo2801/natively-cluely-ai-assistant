@@ -755,6 +755,15 @@ describe('chatSurface — typed-chat layout attachment', () => {
     assert.ok(!p.includes('Shape:'), 'local tier got the full numbered cloud layout');
   });
 
+  test('cloud and local chat layouts require LaTeX and never code-format formulas', () => {
+    for (const tier of TIERS) {
+      const p = v2.buildSystemPromptV2({ mode: 'general', action: 'answer', tier, chatSurface: true });
+      assert.match(p, /Render every mathematical formula as LaTeX using \$\.\.\.\$/i);
+      assert.match(p, /NEVER put (?:a formula|formulas) in backticks/i);
+      assert.doesNotMatch(p, /Put formulas,\s*code[^\n]*in backticks/i);
+    }
+  });
+
   test('chatSurface + codingTask co-exist, coding contract FIRST (precedence by position)', () => {
     const p = v2.buildSystemPromptV2({ mode: 'general', action: 'answer', tier: 'cloud', chatSurface: true, codingTask: true });
     const coding = p.indexOf('<coding_contract>');
