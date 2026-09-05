@@ -1,6 +1,7 @@
 import { app } from 'electron';
 import fs from 'fs';
 import path from 'path';
+import type { AudioSourceMode } from '../../src/types/audio';
 
 export interface AppSettings {
     // Only boot-critical or non-encrypted settings should live here.
@@ -9,6 +10,9 @@ export interface AppSettings {
     isUndetectable?: boolean;
     disguiseMode?: 'terminal' | 'settings' | 'activity' | 'none';
     verboseLogging?: boolean;
+    // Launcher recording-source choice. Undefined preserves the historical
+    // behavior (capture microphone + system audio).
+    meetingAudioSource?: AudioSourceMode;
     // Context Intelligence debug logging level (Developer settings). The env
     // var NATIVELY_CONTEXT_DEBUG overrides this — precedence is owned by
     // context-intelligence/debug/debug-config.ts, which reads this value

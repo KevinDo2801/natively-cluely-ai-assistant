@@ -35,6 +35,7 @@ import { analytics } from "./lib/analytics/analytics.service"
 import { ErrorBoundary } from "./components/ErrorBoundary"
 import ModesSettings from "./components/settings/ModesSettings"
 import { ProfileIntelligenceSettings } from "./components/ProfileIntelligenceSettings"
+import type { AudioSourceMode } from './types/audio'
 
 
 // DEV-ONLY: should the launcher mount an uncontrolled ReviewPromptHost?
@@ -682,7 +683,7 @@ const App: React.FC = () => {
     }
   };
 
-  const handleStartMeeting = async () => {
+  const handleStartMeeting = async (audioSource?: AudioSourceMode) => {
     try {
       localStorage.setItem('natively_last_meeting_start', Date.now().toString());
       const inputDeviceId = localStorage.getItem('preferredInputDeviceId');
@@ -707,7 +708,7 @@ const App: React.FC = () => {
 
       const meetingRetention = await window.electronAPI.getMeetingRetention?.().catch(() => 'forever');
       const result = await window.electronAPI.startMeeting({
-        audio: { inputDeviceId, outputDeviceId },
+        audio: { inputDeviceId, outputDeviceId, source: audioSource },
         doNotPersist: meetingRetention === 'never'
       });
       if (result.success) {

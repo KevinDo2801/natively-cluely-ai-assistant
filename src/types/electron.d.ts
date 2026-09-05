@@ -699,6 +699,9 @@ export interface ElectronAPI {
   getMeetingRetention: () => Promise<'forever' | '7d' | '30d' | 'never'>;
   setMeetingRetention: (retention: 'forever' | '7d' | '30d' | 'never') => Promise<{ success: boolean; error?: string }>;
   onMeetingRetentionChanged: (callback: (retention: 'forever' | '7d' | '30d' | 'never') => void) => () => void;
+  getMeetingAudioSource: () => Promise<'both' | 'microphone' | 'system'>;
+  setMeetingAudioSource: (source: 'both' | 'microphone' | 'system') => Promise<{ success: boolean; error?: string }>;
+  onMeetingAudioSourceChanged: (callback: (source: 'both' | 'microphone' | 'system') => void) => () => void;
   getProviderDataScopes: () => Promise<{ transcript?: boolean; screenshots?: boolean; reference_files?: boolean; profile_history?: boolean; embeddings?: boolean; post_call_summary?: boolean }>;
   setProviderDataScopes: (scopes: { transcript?: boolean; screenshots?: boolean; reference_files?: boolean; profile_history?: boolean; embeddings?: boolean; post_call_summary?: boolean }) => Promise<{ success: boolean; error?: string }>;
   onProviderDataScopesChanged: (callback: (scopes: { transcript?: boolean; screenshots?: boolean; reference_files?: boolean; profile_history?: boolean; embeddings?: boolean; post_call_summary?: boolean }) => void) => () => void;

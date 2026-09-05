@@ -861,6 +861,9 @@ interface ElectronAPI {
   onMeetingRetentionChanged: (
     callback: (retention: 'forever' | '7d' | '30d' | 'never') => void,
   ) => () => void;
+  getMeetingAudioSource: () => Promise<'both' | 'microphone' | 'system'>;
+  setMeetingAudioSource: (source: 'both' | 'microphone' | 'system') => Promise<{ success: boolean; error?: string }>;
+  onMeetingAudioSourceChanged: (callback: (source: 'both' | 'microphone' | 'system') => void) => () => void;
   getProviderDataScopes: () => Promise<{
     transcript?: boolean;
     screenshots?: boolean;
@@ -2390,6 +2393,16 @@ contextBridge.exposeInMainWorld('electronAPI', {
     ipcRenderer.on('meeting-retention-changed', subscription);
     return () => {
       ipcRenderer.removeListener('meeting-retention-changed', subscription);
+    };
+  },
+  getMeetingAudioSource: () => ipcRenderer.invoke('get-meeting-audio-source'),
+  setMeetingAudioSource: (source: 'both' | 'microphone' | 'system') =>
+    ipcRenderer.invoke('set-meeting-audio-source', source),
+  onMeetingAudioSourceChanged: (callback: (source: 'both' | 'microphone' | 'system') => void) => {
+    const subscription = (_: any, source: 'both' | 'microphone' | 'system') => callback(source);
+    ipcRenderer.on('meeting-audio-source-changed', subscription);
+    return () => {
+      ipcRenderer.removeListener('meeting-audio-source-changed', subscription);
     };
   },
   getProviderDataScopes: () => ipcRenderer.invoke('get-provider-data-scopes'),

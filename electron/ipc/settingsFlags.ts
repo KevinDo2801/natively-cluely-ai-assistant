@@ -11,6 +11,7 @@ import { app, BrowserWindow } from 'electron';
 import { safeHandle } from './safeIpc';
 import { SettingsManager } from '../services/SettingsManager';
 import { mergeProviderDataScopes } from '../llm/ProviderRouter';
+import { isAudioSourceMode, type AudioSourceMode } from '../../src/types/audio';
 
 export interface SettingsFlagsDeps {
   getVerboseLogging(): boolean;
@@ -143,6 +144,24 @@ export function registerSettingsFlagHandlers(deps: SettingsFlagsDeps): void {
       if (!win.isDestroyed()) {
         win.webContents.send('meeting-retention-changed', retention);
       }
+    });
+    return { success: true };
+  });
+
+  safeHandle('get-meeting-audio-source', async () => {
+    const stored = SettingsManager.getInstance().get('meetingAudioSource');
+    return isAudioSourceMode(stored) ? stored : 'both';
+  });
+
+  safeHandle('set-meeting-audio-source', async (_event, source: AudioSourceMode) => {
+    if (!isAudioSourceMode(source)) {
+      return { success: false, error: 'invalid_audio_source' };
+    }
+    if (!SettingsManager.getInstance().set('meetingAudioSource', source)) {
+      return { success: false, error: 'settings_store_degraded' };
+    }
+    BrowserWindow.getAllWindows().forEach((win) => {
+      if (!win.isDestroyed()) win.webContents.send('meeting-audio-source-changed', source);
     });
     return { success: true };
   });

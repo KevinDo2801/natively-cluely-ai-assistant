@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { useT } from '../i18n';
-import { ToggleLeft, ToggleRight, Search, Calendar, ArrowRight, ArrowLeft, MoreHorizontal, Globe, Clock, ChevronRight, Settings, LayoutGrid, RefreshCw, Eye, EyeOff, Ghost, Plus, Mail, Link as LinkIcon, ChevronDown, Trash2, Bell, Download, DownloadCloud, CheckCircle, AlertCircle, User, UserSearch, Sparkles, Folder, FolderPlus, FolderOpen, Check, Pencil, X } from 'lucide-react';
+import { ToggleLeft, ToggleRight, Search, Calendar, ArrowRight, ArrowLeft, MoreHorizontal, Globe, Clock, ChevronRight, Settings, LayoutGrid, RefreshCw, Eye, EyeOff, Ghost, Plus, Mail, Link as LinkIcon, ChevronDown, Trash2, Bell, Download, DownloadCloud, CheckCircle, AlertCircle, User, UserSearch, Sparkles, Folder, FolderPlus, FolderOpen, Check, Pencil, X, Mic, Volume2, AudioLines } from 'lucide-react';
 import { generateMeetingPDF } from '../utils/pdfGenerator';
 import icon from "./icon.png";
 import LinkCalendarPrompt from './ui/LinkCalendarPrompt';
@@ -20,6 +20,7 @@ import { LIVE_SESSION_START_KEY } from '../utils/liveSessionStart';
 import WindowControls from './WindowControls';
 import { NativelyLogoMark } from './NativelyLogoMark';
 import { emitOrchestratorEvent, setUserState as setOrchestratorUserState } from './onboarding/OrchestratedToasterHost';
+import { AUDIO_SOURCE_MODES, isAudioSourceMode, type AudioSourceMode } from '../types/audio';
 
 interface Meeting {
     id: string;
@@ -58,7 +59,7 @@ interface Folder {
 }
 
 interface LauncherProps {
-    onStartMeeting: () => void;
+    onStartMeeting: (audioSource?: AudioSourceMode) => void;
     onOpenSettings: (tab?: string) => void;
     onOpenProfile?: () => void;
     onOpenModes?: () => void;
@@ -67,6 +68,16 @@ interface LauncherProps {
     ollamaPullPercent?: number;
     ollamaPullMessage?: string;
 }
+
+const AUDIO_SOURCE_PRESENTATION: Record<AudioSourceMode, {
+    label: string;
+    description: string;
+    Icon: typeof AudioLines;
+}> = {
+    both: { label: 'Both', description: 'Microphone + system audio', Icon: AudioLines },
+    microphone: { label: 'Microphone', description: 'Your microphone only', Icon: Mic },
+    system: { label: 'System Audio', description: 'Computer audio only', Icon: Volume2 },
+};
 
 // Helper to format date groups
 const getGroupLabel = (dateStr: string) => {
@@ -114,6 +125,9 @@ const Launcher: React.FC<LauncherProps> = ({ onStartMeeting, onOpenSettings, onO
     const [isCalendarConnected, setIsCalendarConnected] = useState(false);
     const [isRefreshing, setIsRefreshing] = useState(false);
     const [showNotification, setShowNotification] = useState(false);
+    const [audioSource, setAudioSource] = useState<AudioSourceMode>('both');
+    const [isAudioSourceOpen, setIsAudioSourceOpen] = useState(false);
+    const audioSourceMenuRef = useRef<HTMLDivElement | null>(null);
 
     // ── Meeting folders (v32) — Google-Drive style organization ──
     const [folders, setFolders] = useState<Folder[]>([]);
@@ -471,6 +485,57 @@ const Launcher: React.FC<LauncherProps> = ({ onStartMeeting, onOpenSettings, onO
         };
     // eslint-disable-next-line react-hooks/exhaustive-deps
     }, []); // Mount-only: stable setup that must run exactly once
+
+    useEffect(() => {
+        let mounted = true;
+        window.electronAPI?.getMeetingAudioSource?.()
+            .then((source) => {
+                if (mounted && isAudioSourceMode(source)) setAudioSource(source);
+            })
+            .catch((err) => console.warn('[Launcher] Failed to load meeting audio source:', err));
+
+        const unsubscribe = window.electronAPI?.onMeetingAudioSourceChanged?.((source) => {
+            if (isAudioSourceMode(source)) setAudioSource(source);
+        });
+        return () => {
+            mounted = false;
+            unsubscribe?.();
+        };
+    }, []);
+
+    useEffect(() => {
+        if (!isAudioSourceOpen) return;
+        const closeOnOutsideClick = (event: PointerEvent) => {
+            if (!audioSourceMenuRef.current?.contains(event.target as Node)) {
+                setIsAudioSourceOpen(false);
+            }
+        };
+        const closeOnEscape = (event: KeyboardEvent) => {
+            if (event.key === 'Escape') setIsAudioSourceOpen(false);
+        };
+        document.addEventListener('pointerdown', closeOnOutsideClick);
+        document.addEventListener('keydown', closeOnEscape);
+        return () => {
+            document.removeEventListener('pointerdown', closeOnOutsideClick);
+            document.removeEventListener('keydown', closeOnEscape);
+        };
+    }, [isAudioSourceOpen]);
+
+    const selectAudioSource = async (source: AudioSourceMode) => {
+        const previous = audioSource;
+        setAudioSource(source);
+        setIsAudioSourceOpen(false);
+        try {
+            const result = await window.electronAPI?.setMeetingAudioSource?.(source);
+            if (result && !result.success) {
+                setAudioSource(previous);
+                console.error('[Launcher] Audio source was not saved:', result.error);
+            }
+        } catch (err) {
+            setAudioSource(previous);
+            console.error('[Launcher] Failed to save meeting audio source:', err);
+        }
+    };
 
     // Separate effect for keyboard listener — re-registers when isShortcutPressed changes
     useEffect(() => {
@@ -1251,8 +1316,8 @@ const Launcher: React.FC<LauncherProps> = ({ onStartMeeting, onOpenSettings, onO
 
                             {/* TOP SECTION: Grey Background (Scrolls with content) */}
                             <section
-                                className={`${isLight ? 'bg-bg-secondary' : 'bg-bg-elevated'} px-8 pt-6 border-b border-border-subtle shrink-0 transition-[padding] duration-150 ${heroHeight !== null && heroHeight < (heroBoundsRef.current.min || 0) + 60 ? 'pb-3' : 'pb-8'}`}
-                                style={heroHeight !== null ? { height: heroHeight, overflow: 'hidden' } : undefined}
+                                className={`${isLight ? 'bg-bg-secondary' : 'bg-bg-elevated'} relative ${isAudioSourceOpen ? 'z-50' : 'z-auto'} px-8 pt-6 border-b border-border-subtle shrink-0 transition-[padding] duration-150 ${heroHeight !== null && heroHeight < (heroBoundsRef.current.min || 0) + 60 ? 'pb-3' : 'pb-8'}`}
+                                style={heroHeight !== null ? { height: heroHeight, overflow: isAudioSourceOpen ? 'visible' : 'hidden' } : undefined}
                             >
                                 <div ref={heroContentRef} className={`max-w-4xl mx-auto space-y-6 ${heroHeight !== null && isCalendarConnected ? 'h-full flex flex-col min-h-0' : ''}`}>
                                     {/* 1.5. Hero Header (Title + Controls + CTA) */}
@@ -1348,6 +1413,89 @@ const Launcher: React.FC<LauncherProps> = ({ onStartMeeting, onOpenSettings, onO
                                             </AnimatePresence>
                                         </div>
 
+                                        {/* Persisted, data-driven recording source selector. The selected
+                                            value is also passed into Start so this click cannot race the
+                                            settings broadcast reaching the main process. */}
+                                        <div ref={audioSourceMenuRef} className="relative shrink-0 mr-3">
+                                            <button
+                                                type="button"
+                                                aria-haspopup="listbox"
+                                                aria-expanded={isAudioSourceOpen}
+                                                aria-label={t('Audio source')}
+                                                disabled={isMeetingActive}
+                                                onClick={() => setIsAudioSourceOpen((open) => !open)}
+                                                className={`h-10 min-w-[132px] px-3.5 rounded-full border flex items-center justify-between gap-3 text-text-primary backdrop-blur-xl transition-all duration-200 ${
+                                                    isLight
+                                                        ? 'bg-white/72 border-black/10 shadow-[0_4px_18px_rgba(15,23,42,0.10)] hover:bg-white/90'
+                                                        : 'bg-white/[0.07] border-white/10 shadow-[0_4px_18px_rgba(0,0,0,0.24)] hover:bg-white/[0.11]'
+                                                } ${isMeetingActive ? 'opacity-55 cursor-default' : 'active:scale-[0.98]'}`}
+                                            >
+                                                <span className="flex items-center gap-2.5 min-w-0">
+                                                    {React.createElement(AUDIO_SOURCE_PRESENTATION[audioSource].Icon, {
+                                                        size: 15,
+                                                        strokeWidth: 2,
+                                                        className: 'text-accent-primary shrink-0',
+                                                    })}
+                                                    <span className="text-[13px] font-medium whitespace-nowrap">
+                                                        {t(AUDIO_SOURCE_PRESENTATION[audioSource].label)}
+                                                    </span>
+                                                </span>
+                                                <ChevronDown
+                                                    size={13}
+                                                    className={`text-text-tertiary shrink-0 transition-transform duration-200 ${isAudioSourceOpen ? 'rotate-180' : ''}`}
+                                                />
+                                            </button>
+
+                                            <AnimatePresence>
+                                                {isAudioSourceOpen && !isMeetingActive && (
+                                                    <motion.div
+                                                        role="listbox"
+                                                        aria-label={t('Audio source')}
+                                                        initial={{ opacity: 0, y: -6, scale: 0.98 }}
+                                                        animate={{ opacity: 1, y: 0, scale: 1 }}
+                                                        exit={{ opacity: 0, y: -4, scale: 0.985 }}
+                                                        transition={{ duration: 0.16, ease: [0.25, 1, 0.5, 1] }}
+                                                        className={`absolute right-0 top-[calc(100%+8px)] z-[80] w-[232px] rounded-xl border p-1.5 backdrop-blur-2xl ${
+                                                            isLight
+                                                                ? 'bg-white/95 border-black/10 shadow-[0_18px_46px_rgba(15,23,42,0.18)]'
+                                                                : 'bg-[#171719]/95 border-white/10 shadow-[0_18px_46px_rgba(0,0,0,0.5)]'
+                                                        }`}
+                                                    >
+                                                        <div className="px-2.5 pt-1 pb-1.5 text-[10px] font-semibold uppercase tracking-[0.12em] text-text-tertiary">
+                                                            {t('Audio source')}
+                                                        </div>
+                                                        {AUDIO_SOURCE_MODES.map((source) => {
+                                                            const option = AUDIO_SOURCE_PRESENTATION[source];
+                                                            const selected = source === audioSource;
+                                                            return (
+                                                                <button
+                                                                    key={source}
+                                                                    type="button"
+                                                                    role="option"
+                                                                    aria-selected={selected}
+                                                                    onClick={() => void selectAudioSource(source)}
+                                                                    className={`w-full rounded-lg px-2.5 py-2 flex items-center gap-2.5 text-left transition-colors ${
+                                                                        selected
+                                                                            ? (isLight ? 'bg-sky-500/10' : 'bg-sky-400/12')
+                                                                            : (isLight ? 'hover:bg-black/[0.045]' : 'hover:bg-white/[0.06]')
+                                                                    }`}
+                                                                >
+                                                                    <span className={`w-7 h-7 rounded-md flex items-center justify-center shrink-0 ${selected ? 'bg-accent-primary/15 text-accent-primary' : 'bg-bg-tertiary text-text-secondary'}`}>
+                                                                        <option.Icon size={15} strokeWidth={2} />
+                                                                    </span>
+                                                                    <span className="flex-1 min-w-0">
+                                                                        <span className="block text-[13px] font-medium text-text-primary">{t(option.label)}</span>
+                                                                        <span className="block text-[10px] leading-[14px] text-text-tertiary">{t(option.description)}</span>
+                                                                    </span>
+                                                                    <Check size={14} className={selected ? 'text-accent-primary opacity-100' : 'opacity-0'} />
+                                                                </button>
+                                                            );
+                                                        })}
+                                                    </motion.div>
+                                                )}
+                                            </AnimatePresence>
+                                        </div>
+
                                         {/* Unified CTA pill — plain <button> (no `layout`, no `initial`) so both
                                             the pill AND its label appear in their final position on mount with
                                             no fly-in or fade-up. The label swap (idle ↔ meeting-active) still
@@ -1365,7 +1513,7 @@ const Launcher: React.FC<LauncherProps> = ({ onStartMeeting, onOpenSettings, onO
                                                     analytics.trackCommandExecuted('resume_meeting_from_launcher');
                                                 } else {
                                                     emitOrchestratorEvent({ type: 'turn:done', surface: 'meeting' });
-                                                    onStartMeeting();
+                                                    onStartMeeting(audioSource);
                                                     analytics.trackCommandExecuted('start_natively_cta');
                                                 }
                                             }}
