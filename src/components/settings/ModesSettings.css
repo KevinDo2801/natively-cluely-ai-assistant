@@ -584,7 +584,11 @@
   border-style: dashed;
 }
 
-.ms-section-add-btn {
+/* Scoped under .modes-manager-root so these backgrounds beat the reset
+   `.modes-manager-root button { background: transparent }` (specificity 0,1,1).
+   Unscoped rules here are only (0,1,0) and lose, which made the blue Add
+   button render transparent until hover. */
+.modes-manager-root .ms-section-add-btn {
   height: 30px;
   padding: 0 12px;
   border-radius: 8px;
@@ -595,7 +599,7 @@
   flex-shrink: 0;
 }
 
-.ms-section-add-btn:hover {
+.modes-manager-root .ms-section-add-btn:hover {
   background: #0795d4;
 }
 
@@ -608,7 +612,7 @@
   cursor: not-allowed;
 }
 
-.ms-section-cancel-btn {
+.modes-manager-root .ms-section-cancel-btn {
   height: 30px;
   padding: 0 10px;
   border-radius: 8px;
@@ -619,7 +623,7 @@
   flex-shrink: 0;
 }
 
-.ms-section-cancel-btn:hover {
+.modes-manager-root .ms-section-cancel-btn:hover {
   background: #e9e9ee;
 }
 
