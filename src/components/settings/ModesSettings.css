@@ -599,6 +599,15 @@
   background: #0795d4;
 }
 
+/* The Add button must stay clearly visible even while disabled (empty title).
+   The generic .modes-manager-root button:disabled fade (opacity 0.45) made it
+   read as "appears only on hover"; override to keep it always on screen. */
+.modes-manager-root .ms-section-add-btn:disabled {
+  opacity: 1;
+  background: #7cc4ef;
+  cursor: not-allowed;
+}
+
 .ms-section-cancel-btn {
   height: 30px;
   padding: 0 10px;
