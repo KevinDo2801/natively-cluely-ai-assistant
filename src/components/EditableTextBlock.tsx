@@ -1,4 +1,4 @@
-import React, { useState, useRef, useEffect, useCallback } from 'react';
+import React, { useState, useRef, useEffect, useLayoutEffect, useCallback } from 'react';
 
 interface EditableTextBlockProps {
     initialValue: string;
@@ -11,6 +11,29 @@ interface EditableTextBlockProps {
     autoFocus?: boolean;
 }
 
+/**
+ * EditableTextBlock — a contentEditable span/heading/etc. with debounced save.
+ *
+ * Why this is implemented the way it is (caret stability):
+ *
+ * The text lives inside a native `contentEditable`. The browser owns the live DOM
+ * text while the user types. If React *also* owns that text (e.g. by rendering
+ * `{initialValue}` or `{localValue}` as a JSX child), then any re-render of this
+ * component — including the one caused by our own debounced `onSave` flowing back
+ * through `initialValue` from the parent — makes React reconcile the text node.
+ * Because React tracks its *previous rendered* value rather than the live, already
+ * browser-edited text, that reconciliation rewrites the text node inside the open
+ * contentEditable and the caret snaps to 0 or the end ("nhảy lung tung").
+ *
+ * The fix: never render the editable text through a React child node. Keep the
+ * element's text as `null` children and write text into the DOM imperatively via
+ * `innerText`, only when the element is NOT being edited. While editing, React never
+ * touches the live text, so the browser caret is left completely alone.
+ *
+ * A happy side effect of leaving children as `null` is that Tailwind's `empty:`
+ * (`&:empty`) placeholder still works: the element is `:empty` whenever we haven't
+ * imperatively inserted a text node (i.e. whenever the value is empty).
+ */
 const EditableTextBlock: React.FC<EditableTextBlockProps> = ({
     initialValue,
     onSave,
@@ -22,39 +45,54 @@ const EditableTextBlock: React.FC<EditableTextBlockProps> = ({
     autoFocus = false
 }) => {
     const [isEditing, setIsEditing] = useState(autoFocus); // Start editing if autoFocus is true
-    const [localValue, setLocalValue] = useState(initialValue);
     const contentRef = useRef<HTMLElement>(null);
-    const saveTimeoutRef = useRef<NodeJS.Timeout | null>(null);
 
-    // Sync external changes if not editing
-    useEffect(() => {
-        if (!isEditing) {
-            setLocalValue(initialValue);
-            if (contentRef.current && contentRef.current.innerText !== initialValue) {
-                contentRef.current.innerText = initialValue;
-            }
-        }
-    }, [initialValue, isEditing]);
+    // localValue is the logical current text. While editing it mirrors the live DOM
+    // (updated on every input) but it is only ever written to the DOM when NOT editing.
+    const [localValue, setLocalValue] = useState(initialValue);
+
+    const saveTimeoutRef = useRef<NodeJS.Timeout | null>(null);
+    const lastEnterTime = useRef<number>(0);
 
     const handleSave = useCallback((newValue: string) => {
         const trimmed = newValue.trim();
-        // Only save if changed (allow saving empty string if that's the intent, but usually we want to keep it clean)
-        // If it's a list item, empty might mean delete, but for now let's just save whatever.
+        // Only save if changed
         if (trimmed !== initialValue) {
             onSave(trimmed);
         }
     }, [initialValue, onSave]);
 
+    // Imperatively keep the DOM text in sync with localValue, only while NOT editing.
+    // During editing the browser owns the text and we deliberately do nothing, so
+    // React never rewrites live content and never moves the caret.
+    useLayoutEffect(() => {
+        if (isEditing) return;
+        const el = contentRef.current;
+        if (!el) return;
+        if (el.innerText !== localValue) {
+            el.innerText = localValue;
+        }
+    }, [localValue, isEditing]);
+
+    // When NOT editing, keep localValue in sync with an externally changed initialValue
+    // (e.g. remote rename). The DOM write happens through the effect above.
+    useEffect(() => {
+        if (!isEditing) {
+            setLocalValue(initialValue);
+        }
+        // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, [initialValue]);
+
     const handleChange = useCallback(() => {
         if (!contentRef.current) return;
         const newValue = contentRef.current.innerText;
+        // Mirror the live DOM so revert/save know the current text, but never write it
+        // back (we are editing).
         setLocalValue(newValue);
 
-        // Debounced save
         if (saveTimeoutRef.current) {
             clearTimeout(saveTimeoutRef.current);
         }
-
         saveTimeoutRef.current = setTimeout(() => {
             handleSave(newValue);
         }, 600); // 600ms debounce
@@ -70,12 +108,10 @@ const EditableTextBlock: React.FC<EditableTextBlockProps> = ({
         }
     }, [handleSave]);
 
-    const lastEnterTime = useRef<number>(0);
-
     const handleKeyDown = (e: React.KeyboardEvent) => {
         if (e.key === 'Escape') {
             e.preventDefault();
-            // Revert
+            // Revert both the DOM and the logical value to the committed initialValue.
             setIsEditing(false);
             if (saveTimeoutRef.current) {
                 clearTimeout(saveTimeoutRef.current);
@@ -99,11 +135,8 @@ const EditableTextBlock: React.FC<EditableTextBlockProps> = ({
                     onEnter();
                     lastEnterTime.current = 0; // Reset
                 } else {
-                    // First Enter: Allow default (newline)
-                    // But track time
+                    // First Enter: Allow default (newline) + track time
                     lastEnterTime.current = now;
-                    // Standard newline behavior allows contentEditable to insert <div> or <br>
-                    // We don't preventDefault here.
                 }
             }
         }
@@ -113,12 +146,10 @@ const EditableTextBlock: React.FC<EditableTextBlockProps> = ({
         setIsEditing(true);
     };
 
-    // Focus management
+    // Focus management when editing begins.
     useEffect(() => {
         if (isEditing && contentRef.current) {
             contentRef.current.focus();
-            // If autoFocus was relevant (newly created), we might want cursor at start or end?
-            // Standard behavior usually end, but for new empty item it doesn't matter.
         }
     }, [isEditing]);
 
@@ -142,7 +173,10 @@ const EditableTextBlock: React.FC<EditableTextBlockProps> = ({
             data-placeholder={placeholder}
             spellCheck={false} // Clean look
         >
-            {initialValue}
+            {/* Deliberately no React child here — see the component doc comment above.
+                Display text is seeded imperatively by the layout effect. Keep this
+                element `:empty` so the placeholder utility matches for blank values. */}
+            {null}
         </Tag>
     );
 };
