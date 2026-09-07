@@ -147,7 +147,7 @@ const UpcomingCalendarCard: React.FC<UpcomingCalendarCardProps> = ({
                                     <button
                                         type="button"
                                         onClick={(e) => { e.stopPropagation(); openLink(mainMeeting.link); }}
-                                        className={`cc-join inline-flex items-center gap-1.5 shrink-0 h-[26px] px-3 rounded-full text-[11.5px] font-semibold transition-colors duration-200 mt-0.5 cursor-pointer ${
+                                        className={`cc-join inline-flex items-center gap-1.5 shrink-0 h-[26px] px-3 rounded-full text-[11.5px] font-semibold transition-colors duration-200 mt-0.5 mr-3 cursor-pointer ${
                                             isLight
                                                 ? 'bg-[#caecfc] text-[#0785cb] hover:bg-[#b6e2fa]'
                                                 : 'bg-sky-400/15 text-sky-200 ring-1 ring-sky-300/20 hover:bg-sky-400/25'

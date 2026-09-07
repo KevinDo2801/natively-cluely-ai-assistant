@@ -245,9 +245,9 @@ const Launcher: React.FC<LauncherProps> = ({ onStartMeeting, onOpenSettings, onO
     const isLight = useResolvedTheme() === 'light';
 
     // ── Hero panel vertical resize (drag the bottom edge to expand/collapse) ──
-    // `heroHeight === null` → the panel is sized naturally by its content (fully
-    // open). Once the user drags the grip we pin an explicit pixel height. When a
-    // calendar is connected, the hero content flips to a bounded flex column and
+    // Start the panel at the designed 248px height. Once the user drags the grip,
+    // we keep pinning it to an explicit pixel height. When a calendar is connected,
+    // the hero content flips to a bounded flex column and
     // the calendar block (flex-1 min-h-0) receives the REAL leftover height — the
     // Upcoming card then reflows fluidly (its internal paddings/margins track its
     // own height via container-query units) instead of being cropped. Cropping
@@ -258,7 +258,8 @@ const Launcher: React.FC<LauncherProps> = ({ onStartMeeting, onOpenSettings, onO
     const heroHeaderRef = useRef<HTMLDivElement | null>(null);  // header row    → natural collapsed height
     const heroBoundsRef = useRef<{ full: number; min: number }>({ full: 0, min: 0 });
     const heroResizeRef = useRef<{ startY: number; startH: number } | null>(null);
-    const [heroHeight, setHeroHeight] = useState<number | null>(null);
+    const heroWasResizedRef = useRef(false);
+    const [heroHeight, setHeroHeight] = useState<number | null>(248);
     const [heroDragging, setHeroDragging] = useState(false);
     const [heroHover, setHeroHover] = useState(false);
 
@@ -306,6 +307,7 @@ const Launcher: React.FC<LauncherProps> = ({ onStartMeeting, onOpenSettings, onO
         const min = Math.max(1, Math.min(b.min, full));
         // Physical direction: pulling the bottom edge DOWN grows the panel,
         // pulling it UP collapses it (not the inverse).
+        heroWasResizedRef.current = true;
         let v = d.startH + (e.clientY - d.startY);
         v = Math.max(min, Math.min(full, v));
         // Snap to the two clean resting states so collapse looks intentional.
@@ -329,7 +331,7 @@ const Launcher: React.FC<LauncherProps> = ({ onStartMeeting, onOpenSettings, onO
     useEffect(() => {
         heroBoundsRef.current = measureHeroBounds();
         const { full } = heroBoundsRef.current;
-        if (heroHeight !== null && full > 0) {
+        if (heroWasResizedRef.current && heroHeight !== null && full > 0) {
             setHeroHeight((h) => (h === null || h <= full ? h : full));
         }
         // eslint-disable-next-line react-hooks/exhaustive-deps
