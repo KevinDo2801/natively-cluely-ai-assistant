@@ -94,6 +94,8 @@ const SettingsPopup = () => {
     const isFirstRender = React.useRef(true);
 
     const [hasStoredKey, setHasStoredKey] = useState<Record<string, boolean>>({});
+    const [isCodexReady, setIsCodexReady] = useState(false);
+    const canUseFastResponse = !!(hasStoredKey.groq || hasStoredKey.natively || isCodexReady);
     const [interfaceTheme, setInterfaceTheme] = useState<MeetingInterfaceTheme>(() => {
         return getMeetingInterfaceTheme();
     });
@@ -133,6 +135,12 @@ const SettingsPopup = () => {
                     natively: !!creds.hasNativelyKey
                 });
             }
+
+            const [codexConfig, codexStatus] = await Promise.all([
+                window.electronAPI?.getCodexCliConfig?.(),
+                window.electronAPI?.codexLoginStatus?.(),
+            ]);
+            setIsCodexReady(Boolean(codexConfig?.enabled && codexStatus?.success && codexStatus.signedIn));
         } catch (e) {
             console.error("Failed to load settings:", e);
         }
@@ -429,8 +437,8 @@ const SettingsPopup = () => {
                 </div>
 
 
-                {/* Groq (Fast Text) Toggle — enabled with Groq key OR Natively API key */}
-                <div className={`flex items-center justify-between px-2.5 py-1.5 rounded-md transition-colors duration-200 group ${!(hasStoredKey.groq || hasStoredKey.natively) ? 'opacity-50 grayscale cursor-not-allowed' : `${itemHoverClass} ${glassRowClass} cursor-default`}`} title={!(hasStoredKey.groq || hasStoredKey.natively) ? "Requires Groq or Natively API key" : ""}>
+                {/* Fast Response — enabled with Groq, Natively API, or a signed-in Codex CLI. */}
+                <div className={`flex items-center justify-between px-2.5 py-1.5 rounded-md transition-colors duration-200 group ${!canUseFastResponse ? 'opacity-50 grayscale cursor-not-allowed' : `${itemHoverClass} ${glassRowClass} cursor-default`}`} title={!canUseFastResponse ? "Requires Groq, Natively API, or Codex CLI" : ""}>
                     <div className="flex items-center gap-2.5">
                         <Zap
                             className={`w-4 h-4 transition-colors ${useGroqFastText ? 'text-accent-primary' : inactiveIconColorClass}`}
@@ -441,9 +449,9 @@ const SettingsPopup = () => {
                     <PopupToggle
                         checked={useGroqFastText}
                         label="Fast Response"
-                        disabled={!(hasStoredKey.groq || hasStoredKey.natively)}
+                        disabled={!canUseFastResponse}
                         onChange={() => {
-                            if (!(hasStoredKey.groq || hasStoredKey.natively)) return;
+                            if (!canUseFastResponse) return;
                             setUseGroqFastText(!useGroqFastText);
                         }}
                         onClassName="bg-accent-primary shadow-[0_2px_10px_var(--accent-shadow-20)]"
