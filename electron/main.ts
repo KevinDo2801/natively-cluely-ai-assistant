@@ -8006,7 +8006,12 @@ export class AppState {
     // (stealth ON → no-activate/unfocusable; OFF → focusable so the IME works.)
     if (process.platform === 'win32' && wasEnabled !== enabled) {
       const overlay = this.windowHelper?.getOverlayWindow?.();
-      if (overlay && !overlay.isDestroyed()) overlay.setFocusable(!enabled);
+      if (overlay && !overlay.isDestroyed()) {
+        overlay.setFocusable(!enabled);
+        // setFocusable() can make Windows re-register the HWND in taskbar
+        // previews. Keep ChatOverlay and its TopPill family tool-window-only.
+        this.windowHelper.reassertOverlayTaskbarHidden();
+      }
     }
     return true;
   }

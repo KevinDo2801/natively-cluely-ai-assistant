@@ -318,19 +318,19 @@ describe('NativelyInterface.tsx: guard implementation must keep checking both re
   test('onStealthTapState flips isCgEventTapAvailableRef to false on permission revoke and true on active', () => {
     // M1 contract: the state listener must update isCgEventTapAvailableRef in
     // both directions.
-    const stateHandler = source.match(
-      /const unsubState = window\.electronAPI\.onStealthTapState\(\(\{[\s\S]*?\}\) => \{[\s\S]*?\}\);/,
-    );
-    assert.ok(stateHandler, 'onStealthTapState handler not found');
+    const stateStart = source.indexOf('const unsubState = window.electronAPI.onStealthTapState');
+    const stateEnd = source.indexOf('const unsubKey = window.electronAPI.onStealthKeyCaptured', stateStart);
+    const stateHandler = source.slice(stateStart, stateEnd);
+    assert.ok(stateStart >= 0 && stateEnd > stateStart, 'onStealthTapState handler not found');
     // false branch on permission revoke
     assert.match(
-      stateHandler[0],
+      stateHandler,
       /reason === 'permission'[\s\S]*?isCgEventTapAvailableRef\.current = false;/,
       'M1: onStealthTapState({active:false, reason:"permission"}) must flip isCgEventTapAvailableRef to false',
     );
     // true branch on active=true
     assert.match(
-      stateHandler[0],
+      stateHandler,
       /if \(active\) \{[\s\S]*?isCgEventTapAvailableRef\.current = true;[\s\S]*?\}/,
       'M1: onStealthTapState({active:true}) must promote isCgEventTapAvailableRef to true',
     );

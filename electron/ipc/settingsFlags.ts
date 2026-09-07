@@ -96,9 +96,25 @@ export function registerSettingsFlagHandlers(deps: SettingsFlagsDeps): void {
 
   safeHandle('set-stealth-typing-enabled', async (_event, enabled: boolean) => {
     const persisted = deps.setStealthTypingEnabled(Boolean(enabled));
-    return persisted
-      ? { success: true }
-      : { success: false, error: 'Settings store is unavailable; the change was not saved.' };
+    if (!persisted) {
+      return { success: false, error: 'Settings store is unavailable; the change was not saved.' };
+    }
+
+    // The overlay caches native-hook availability in refs because its
+    // mousedown handler must decide synchronously whether to block DOM focus.
+    // Notify every renderer immediately so toggling stealth OFF cannot leave a
+    // stale `true` ref that intermittently swallows the first normal-input
+    // click while waiting for a later window-focus refresh.
+    BrowserWindow.getAllWindows().forEach((win) => {
+      if (!win.isDestroyed()) {
+        win.webContents.send('stealth-tap-state', {
+          active: false,
+          reason: enabled ? 'setting-enabled' : 'setting-disabled',
+        });
+      }
+    });
+
+    return { success: true };
   });
 
   safeHandle('get-code-verification', async () => {

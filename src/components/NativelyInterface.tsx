@@ -7394,6 +7394,32 @@ Provide only the answer, nothing else.`;
     const unsubState = window.electronAPI.onStealthTapState(({ active, reason }) => {
       stealthTapActiveRef.current = active;
       setStealthTapActive(active);
+      if (!active && reason === 'setting-disabled') {
+        // Switching to normal typing must synchronously release the
+        // mousedown focus guard. Waiting for `window.focus` creates a race:
+        // the first click can be prevented while these refs still say the
+        // native hook is available, even though main already stopped it.
+        stealthAutoEngageOkRef.current = false;
+        isCgEventTapAvailableRef.current = false;
+      }
+      if (!active && reason === 'setting-enabled') {
+        // Re-arm only after main confirms both the user setting and native/IME
+        // availability. Until these probes resolve, fail closed to ordinary
+        // DOM focus rather than trapping a click with no working input path.
+        stealthAutoEngageOkRef.current = false;
+        isCgEventTapAvailableRef.current = false;
+        Promise.all([
+          window.electronAPI?.stealthTapShouldAutoEngage?.(),
+          window.electronAPI?.stealthTapAvailable?.(),
+        ])
+          .then(([autoEngageOk, tapAvailable]) => {
+            stealthAutoEngageOkRef.current = !!autoEngageOk;
+            isCgEventTapAvailableRef.current = !!tapAvailable;
+          })
+          .catch(() => {
+            // Keep normal input usable when the availability refresh fails.
+          });
+      }
       if (active) {
         isCgEventTapAvailableRef.current = true;
         // Auto-expand the overlay so the user can see what they're

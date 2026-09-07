@@ -32,6 +32,7 @@ const policy = read('electron/utils/windowsFocusPolicy.ts');
 const flags = read('electron/ipc/settingsFlags.ts');
 const preload = read('electron/preload.ts');
 const electronDts = read('src/types/electron.d.ts');
+const overlay = read('src/components/NativelyInterface.tsx');
 
 test('SettingsManager declares the stealthTypingEnabled setting key', () => {
   assert.match(
@@ -101,6 +102,33 @@ test('settings IPC + preload + electron.d.ts expose the toggle', () => {
   assert.match(preload, /set-stealth-typing-enabled/);
   assert.match(electronDts, /getStealthTypingEnabled: \(\) => Promise<boolean>/);
   assert.match(electronDts, /setStealthTypingEnabled: \(enabled: boolean\) => Promise<\{ success: boolean; error\?: string \}>/);
+});
+
+test('toggle changes invalidate the overlay focus-guard cache immediately', () => {
+  const handler = flags.slice(
+    flags.indexOf("safeHandle('set-stealth-typing-enabled'"),
+    flags.indexOf("safeHandle('get-code-verification'"),
+  );
+  assert.match(
+    handler,
+    /webContents\.send\('stealth-tap-state',[\s\S]{0,180}setting-enabled[\s\S]{0,80}setting-disabled/,
+    'BUG: the settings handler must broadcast the committed toggle state instead of waiting for an unreliable window-focus refresh.',
+  );
+
+  const stateListener = overlay.slice(
+    overlay.indexOf('const unsubState = window.electronAPI.onStealthTapState'),
+    overlay.indexOf('const unsubKey = window.electronAPI.onStealthKeyCaptured'),
+  );
+  assert.match(
+    stateListener,
+    /reason === 'setting-disabled'[\s\S]{0,320}stealthAutoEngageOkRef\.current = false;[\s\S]{0,120}isCgEventTapAvailableRef\.current = false;/,
+    'BUG: turning stealth OFF must synchronously release both mousedown focus guards.',
+  );
+  assert.match(
+    stateListener,
+    /reason === 'setting-enabled'[\s\S]{0,520}stealthTapShouldAutoEngage[\s\S]{0,160}stealthTapAvailable/,
+    'BUG: turning stealth back ON must re-probe policy and native-hook availability.',
+  );
 });
 
 test('Windows no-activate blur/hide revert is setting-aware (does not fight the toggle)', () => {

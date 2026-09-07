@@ -331,6 +331,19 @@ export class WindowHelper {
     this.adapter.syncLauncherTaskbarPresence(win, !!this.appState.getUndetectable());
   }
 
+  /**
+   * Windows can re-register a frameless window with the taskbar when its
+   * focusability changes or it is shown again. Re-assert the invariant for the
+   * complete overlay family so neither ChatOverlay nor its TopPill chrome
+   * appears in taskbar thumbnails.
+   */
+  public reassertOverlayTaskbarHidden(): void {
+    if (!this.adapter.isWindows()) return;
+    for (const win of [this.overlayWindow, this.pillWindow, this.toggleWindow]) {
+      if (win && !win.isDestroyed()) win.setSkipTaskbar(true);
+    }
+  }
+
   // Force-reapply the CURRENT content-protection state to every live window,
   // bypassing the dedupe guard in setContentProtection(). Needed because
   // app.dock.hide()/show() flips the macOS activation policy, which makes
@@ -1610,6 +1623,9 @@ export class WindowHelper {
         if (win.isDestroyed() || !win.isVisible()) return;
         this.adapter.reassertAlwaysOnTop(win);
       });
+      win.on('show', () => {
+        if (!win.isDestroyed()) win.setSkipTaskbar(true);
+      });
     }
 
     // Group sync — see the coordination model comment above.
@@ -1637,6 +1653,7 @@ export class WindowHelper {
       this.repositionOverlayPopovers();
     });
     this.overlayWindow.on('show', () => {
+      this.reassertOverlayTaskbarHidden();
       // Safe default on every show: interactive until the renderer's hover
       // hit-test says the pointer is over a transparent margin.
       this.overlayHoverInteractive = true;
@@ -2297,6 +2314,7 @@ export class WindowHelper {
   // Used by IPC handlers to show the overlay independently.
   public showOverlay(inactive: boolean = false): void {
     if (!this.overlayWindow || this.overlayWindow.isDestroyed()) return;
+    this.reassertOverlayTaskbarHidden();
     // If the pill was floating standalone (Ask click from an always-visible
     // pill), open the overlay RIGHT where the pill is — centered under it —
     // instead of at the overlay's previous/default bounds ("Ask jumps to the
@@ -2336,6 +2354,7 @@ export class WindowHelper {
     }
     // Explicit, same-block aux show — see switchToOverlay.
     this.applyOverlayAuxVisibility(true);
+    this.reassertOverlayTaskbarHidden();
     // Refresh the aux windows' overlay/meeting state (Ask/Hide label,
     // mic/stop icon).
     this.pushPillState();
