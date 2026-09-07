@@ -7635,6 +7635,18 @@ export class AppState {
     console.log(`[Stealth] setUndetectable(${state}) called`);
 
     this.isUndetectable = state
+
+    // Returning to Detectable mode restores ordinary window interaction. Keep
+    // the typing mode consistent with that transition: a still-enabled native
+    // keyboard hook would leave the overlay behaving "stealthy" even though
+    // the user explicitly chose Detectable.
+    if (!state && this._stealthTypingEnabled) {
+      const stealthTypingDisabled = this.setStealthTypingEnabled(false);
+      if (!stealthTypingDisabled) {
+        console.warn('[Stealth] Could not disable Stealth Typing while enabling Detectable mode.');
+      }
+    }
+
     this.windowHelper.setContentProtection(state)
     this.settingsWindowHelper.setContentProtection(state)
     this.modelSelectorWindowHelper.setContentProtection(state)
@@ -8013,6 +8025,20 @@ export class AppState {
         this.windowHelper.reassertOverlayTaskbarHidden();
       }
     }
+
+    // This setter is also called indirectly when switching back to Detectable
+    // mode, not only through the dedicated settings IPC handler. Broadcast from
+    // the source of truth so every renderer releases its cached focus guards
+    // and the Settings toggle updates immediately in either path.
+    BrowserWindow.getAllWindows().forEach((win) => {
+      if (!win.isDestroyed()) {
+        win.webContents.send('stealth-tap-state', {
+          active: false,
+          reason: enabled ? 'setting-enabled' : 'setting-disabled',
+        });
+      }
+    });
+
     return true;
   }
 

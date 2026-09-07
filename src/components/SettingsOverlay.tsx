@@ -600,6 +600,14 @@ const SettingsOverlay: React.FC<SettingsOverlayProps> = ({
     }, []);
 
     useEffect(() => {
+        if (!window.electronAPI?.onStealthTapState) return;
+        return window.electronAPI.onStealthTapState(({ reason }) => {
+            if (reason === 'setting-disabled') setStealthTypingEnabled(false);
+            if (reason === 'setting-enabled') setStealthTypingEnabled(true);
+        });
+    }, []);
+
+    useEffect(() => {
         if (window.electronAPI?.onMeetingRetentionChanged) {
             const unsubscribe = window.electronAPI.onMeetingRetentionChanged(setMeetingRetention);
             return () => unsubscribe();

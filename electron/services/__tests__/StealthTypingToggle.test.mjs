@@ -105,14 +105,11 @@ test('settings IPC + preload + electron.d.ts expose the toggle', () => {
 });
 
 test('toggle changes invalidate the overlay focus-guard cache immediately', () => {
-  const handler = flags.slice(
-    flags.indexOf("safeHandle('set-stealth-typing-enabled'"),
-    flags.indexOf("safeHandle('get-code-verification'"),
-  );
+  const setter = main.slice(main.indexOf('public setStealthTypingEnabled'), main.indexOf('public setDisguise'));
   assert.match(
-    handler,
+    setter,
     /webContents\.send\('stealth-tap-state',[\s\S]{0,180}setting-enabled[\s\S]{0,80}setting-disabled/,
-    'BUG: the settings handler must broadcast the committed toggle state instead of waiting for an unreliable window-focus refresh.',
+    'BUG: the source-of-truth setter must broadcast the committed toggle state instead of waiting for an unreliable window-focus refresh.',
   );
 
   const stateListener = overlay.slice(
@@ -128,6 +125,22 @@ test('toggle changes invalidate the overlay focus-guard cache immediately', () =
     stateListener,
     /reason === 'setting-enabled'[\s\S]{0,520}stealthTapShouldAutoEngage[\s\S]{0,160}stealthTapAvailable/,
     'BUG: turning stealth back ON must re-probe policy and native-hook availability.',
+  );
+});
+
+test('switching from Undetectable to Detectable turns Stealth Typing off and syncs Settings', () => {
+  const detectableSetter = main.slice(main.indexOf('public setUndetectable'), main.indexOf('private _enforceDockState'));
+  assert.match(
+    detectableSetter,
+    /if \(!state && this\._stealthTypingEnabled\)[\s\S]{0,160}this\.setStealthTypingEnabled\(false\)/,
+    'BUG: returning to Detectable must disable an active Stealth Typing hook.',
+  );
+
+  const settingsOverlay = read('src/components/SettingsOverlay.tsx');
+  assert.match(
+    settingsOverlay,
+    /onStealthTapState[\s\S]{0,220}reason === 'setting-disabled'[\s\S]{0,80}setStealthTypingEnabled\(false\)/,
+    'BUG: Settings must reflect the automatic Stealth Typing shutdown immediately.',
   );
 });
 
