@@ -8860,6 +8860,10 @@ Provide only the answer, nothing else.`;
                     value={inputValue}
                     onChange={(e) => { setInputValue(e.target.value); setSkillPickerIndex(0); }}
                     onKeyDown={(e) => {
+                      // Normal typing uses a real textarea, so preserve its
+                      // native multiline behavior. Stealth typing handles
+                      // Return through the OS keyboard hook instead.
+                      if (e.key === 'Enter' && e.shiftKey && !stealthTapActive) return;
                       if (filteredSkills.length > 0 && skillPickerQuery !== null) {
                         if (e.key === 'ArrowUp') {
                           e.preventDefault();

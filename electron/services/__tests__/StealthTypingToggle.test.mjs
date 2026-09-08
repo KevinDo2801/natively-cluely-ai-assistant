@@ -33,6 +33,7 @@ const flags = read('electron/ipc/settingsFlags.ts');
 const preload = read('electron/preload.ts');
 const electronDts = read('src/types/electron.d.ts');
 const overlay = read('src/components/NativelyInterface.tsx');
+const quickSettings = read('src/components/SettingsPopup.tsx');
 
 test('SettingsManager declares the stealthTypingEnabled setting key', () => {
   assert.match(
@@ -141,6 +142,29 @@ test('switching from Undetectable to Detectable turns Stealth Typing off and syn
     settingsOverlay,
     /onStealthTapState[\s\S]{0,220}reason === 'setting-disabled'[\s\S]{0,80}setStealthTypingEnabled\(false\)/,
     'BUG: Settings must reflect the automatic Stealth Typing shutdown immediately.',
+  );
+});
+
+test('ChatOverlay quick settings exposes a synchronized Stealth Typing toggle', () => {
+  assert.match(quickSettings, /getStealthTypingEnabled\?\.\(\)/);
+  assert.match(
+    quickSettings,
+    /onStealthTapState[\s\S]{0,220}setting-disabled[\s\S]{0,100}setStealthTypingEnabled\(false\)[\s\S]{0,100}setting-enabled[\s\S]{0,100}setStealthTypingEnabled\(true\)/,
+    'BUG: the ChatOverlay quick toggle must stay synchronized with Settings and Detectable mode.',
+  );
+  assert.match(quickSettings, /label="Stealth Typing"/);
+  assert.match(quickSettings, /setStealthTypingEnabled\?\.\(newState\)/);
+});
+
+test('normal ChatOverlay typing keeps Shift+Enter as a newline', () => {
+  const inputHandler = overlay.slice(
+    overlay.indexOf('data-testid="overlay-chat-input"'),
+    overlay.indexOf('onMouseDown={blockInputFocus}'),
+  );
+  assert.match(
+    inputHandler,
+    /e\.key === 'Enter' && e\.shiftKey && !stealthTapActive\) return;/,
+    'BUG: with Stealth Typing OFF, Shift+Enter must reach the textarea default behavior instead of submitting.',
   );
 });
 

@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useLayoutEffect, useMemo, useRef } from 'react';
-import { MessageSquare, Camera, Zap, User, Pin } from 'lucide-react';
+import { MessageSquare, Camera, Zap, User, Pin, Keyboard } from 'lucide-react';
 import { useShortcuts } from '../hooks/useShortcuts';
 import { useResolvedTheme } from '../hooks/useResolvedTheme';
 import { getModifierSymbol } from '../utils/platformUtils';
@@ -73,6 +73,7 @@ const SettingsPopup = () => {
     const { shortcuts } = useShortcuts();
     const isLightTheme = useResolvedTheme() === 'light';
     const [isUndetectable, setIsUndetectable] = useState(false);
+    const [stealthTypingEnabled, setStealthTypingEnabled] = useState(true);
     const [useGroqFastText, setUseGroqFastText] = useState(() => {
         return localStorage.getItem('natively_groq_fast_text') === 'true';
     });
@@ -170,6 +171,9 @@ const SettingsPopup = () => {
         try {
             window.electronAPI?.getPillAlwaysVisible?.().then((state: boolean) => setPillAlwaysVisible(!!state)).catch(() => {});
         } catch { /* non-fatal */ }
+        try {
+            window.electronAPI?.getStealthTypingEnabled?.().then((state: boolean) => setStealthTypingEnabled(state !== false)).catch(() => {});
+        } catch { /* non-fatal */ }
 
         // Settings staleness fix (2026-08-21): this window mounts ONCE at app
         // start and is hidden/shown afterwards, so the mount fetches above go
@@ -184,6 +188,9 @@ const SettingsPopup = () => {
             loadProfile();
             try {
                 window.electronAPI?.getPillAlwaysVisible?.().then((state: boolean) => setPillAlwaysVisible(!!state)).catch(() => {});
+            } catch { /* non-fatal */ }
+            try {
+                window.electronAPI?.getStealthTypingEnabled?.().then((state: boolean) => setStealthTypingEnabled(state !== false)).catch(() => {});
             } catch { /* non-fatal */ }
             try {
                 // Undetectable's INITIAL fetch is mount-only; its change
@@ -258,6 +265,16 @@ const SettingsPopup = () => {
             });
             return () => unsubscribe();
         }
+    }, []);
+
+    // Keep this quick toggle synchronized with Settings and with automatic
+    // shutdown when the user switches back to Detectable mode.
+    useEffect(() => {
+        if (!window.electronAPI?.onStealthTapState) return;
+        return window.electronAPI.onStealthTapState(({ reason }) => {
+            if (reason === 'setting-disabled') setStealthTypingEnabled(false);
+            if (reason === 'setting-enabled') setStealthTypingEnabled(true);
+        });
     }, []);
 
     useEffect(() => {
@@ -432,6 +449,37 @@ const SettingsPopup = () => {
                         onClassName={isDarkBg
                             ? 'bg-white shadow-[0_2px_8px_rgba(255,255,255,0.2)]'
                             : 'bg-slate-900 shadow-[0_2px_8px_rgba(15,23,42,0.18)]'}
+                        offClassName={defaultToggleTrackClass}
+                    />
+                </div>
+
+                {/* Stealth Typing */}
+                <div className={`flex items-center justify-between px-2.5 py-1.5 rounded-md transition-colors duration-200 group cursor-default ${itemHoverClass} ${glassRowClass}`}>
+                    <div className="flex items-center gap-2.5">
+                        <Keyboard
+                            className={`w-3.5 h-3.5 transition-colors ${stealthTypingEnabled ? 'text-accent-primary' : inactiveIconColorClass}`}
+                        />
+                        <span className={`text-[12px] font-medium transition-colors ${labelColorClass}`}>Stealth Typing</span>
+                    </div>
+                    <PopupToggle
+                        checked={stealthTypingEnabled}
+                        label="Stealth Typing"
+                        onChange={async () => {
+                            const previous = stealthTypingEnabled;
+                            const newState = !previous;
+                            setStealthTypingEnabled(newState);
+                            try {
+                                const result = await window.electronAPI?.setStealthTypingEnabled?.(newState);
+                                if (result && !result.success) {
+                                    setStealthTypingEnabled(previous);
+                                    console.error('[SettingsPopup] Failed to set Stealth Typing:', result.error);
+                                }
+                            } catch (error) {
+                                setStealthTypingEnabled(previous);
+                                console.error('[SettingsPopup] Exception setting Stealth Typing:', error);
+                            }
+                        }}
+                        onClassName="bg-accent-primary shadow-[0_2px_10px_var(--accent-shadow-20)]"
                         offClassName={defaultToggleTrackClass}
                     />
                 </div>
