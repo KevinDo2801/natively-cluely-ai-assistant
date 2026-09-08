@@ -957,7 +957,11 @@ const Launcher: React.FC<LauncherProps> = ({ onStartMeeting, onOpenSettings, onO
     };
 
     return (
-        <div className="h-full w-full flex flex-col bg-bg-primary text-text-primary font-sans overflow-hidden selection:bg-accent-secondary/30">
+        <div className={`h-full w-full flex flex-col bg-bg-primary text-text-primary font-sans overflow-hidden rounded-[8px] border selection:bg-accent-secondary/30 ${
+            isLight
+                ? 'border-black/[0.08] shadow-[inset_0_0_18px_rgba(15,23,42,0.08),0_0_24px_rgba(15,23,42,0.18)]'
+                : 'border-white/[0.08] shadow-[inset_0_0_20px_rgba(0,0,0,0.38),0_0_28px_rgba(0,0,0,0.58)]'
+        }`}>
             {/* 1. Header (Static) */}
             <header className={`relative w-full h-[40px] shrink-0 flex items-center justify-between pl-0 drag-region select-none ${isLight ? 'bg-bg-primary' : 'bg-bg-secondary'} border-b border-border-subtle z-[200]`}>
                 {/* Left: Spacing for Traffic Lights + Navigation Arrows */}
