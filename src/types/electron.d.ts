@@ -486,6 +486,10 @@ export interface ElectronAPI {
   codexStartLogin: () => Promise<{ success: boolean; email?: string; expiresAt?: number; error?: string }>;
   codexSignOut: () => Promise<{ success: boolean; error?: string }>;
   codexRefreshTokens: () => Promise<{ success: boolean; email?: string; expiresAt?: number; error?: string }>;
+  codexPluginsList: (force?: boolean) => Promise<{ success: boolean; apps: CodexPluginApp[]; signedIn: boolean; limited?: boolean; error?: string }>;
+  codexPluginSetEnabled: (id: string, enabled: boolean) => Promise<{ success: boolean; error?: string }>;
+  codexPluginConnect: (id: string) => Promise<{ success: boolean; opened: boolean; error?: string }>;
+  onCodexPluginsChanged: (callback: () => void) => () => void;
   onCodexLoginComplete: (callback: (info: { email?: string }) => void) => () => void;
   onCodexLoginFailed: (callback: (info: { message: string }) => void) => () => void;
   onCodexSignedOut: (callback: () => void) => () => void;
@@ -956,6 +960,21 @@ export interface SkillSummary {
   description: string;
   source: 'builtin' | 'userData';
   enabled: boolean;
+}
+
+export interface CodexPluginApp {
+  id: string;
+  name: string;
+  description?: string;
+  logoUrl?: string;
+  installUrl?: string;
+  isAccessible: boolean;
+  isEnabled: boolean;
+  callable: boolean;
+  canToggle?: boolean;
+  marketplaceName?: string;
+  pluginName?: string;
+  pluginDisplayNames: string[];
 }
 
 // ---------------------------------------------------------------------------

@@ -27,8 +27,6 @@ import {
 import { categorizeSttError } from '../lib/sttErrorMapper';
 import { splitGistLine, splitGistLineStreaming, collapseBlockGaps } from '../lib/displayMarkup';
 
-import type { SkillSummary } from '../types/electron';
-
 function SkillPicker({
   skills,
   selectedIndex,
@@ -59,6 +57,47 @@ function SkillPicker({
         >
           <span className="text-[11px] font-mono text-amber-400 shrink-0">/{skill.id}</span>
           <span className="text-[11px] truncate flex-1">{skill.description}</span>
+        </button>
+      ))}
+    </div>
+  );
+}
+
+function PluginPicker({
+  plugins,
+  selectedIndex,
+  anchorEl,
+  onSelect,
+}: {
+  plugins: CodexPluginApp[];
+  selectedIndex: number;
+  anchorEl: HTMLElement | null;
+  onSelect: (plugin: CodexPluginApp) => void;
+}) {
+  const rect = anchorEl?.getBoundingClientRect();
+  if (!rect) return null;
+  const style: React.CSSProperties = {
+    position: 'fixed',
+    left: rect.left,
+    bottom: window.innerHeight - rect.top + 6,
+    width: rect.width,
+    zIndex: 9999,
+  };
+  return (
+    <div style={style} className="rounded-xl border border-border-subtle bg-bg-card shadow-xl overflow-hidden max-h-56 overflow-y-auto">
+      {plugins.map((plugin, i) => (
+        <button
+          key={plugin.id}
+          onMouseDown={(event) => { event.preventDefault(); onSelect(plugin); }}
+          className={`w-full flex items-center gap-2.5 px-3 py-2 text-left transition-colors ${i === selectedIndex ? 'bg-accent-muted text-text-primary' : 'hover:bg-bg-subtle/50 text-text-secondary'}`}
+        >
+          <span className="text-[11px] font-mono text-sky-400 shrink-0">@{plugin.id}</span>
+          <span className="min-w-0 flex-1">
+            <span className="block text-[11px] font-medium truncate">{plugin.name}</span>
+            {plugin.description && (
+              <span className="block text-[10px] text-text-tertiary truncate">{plugin.description}</span>
+            )}
+          </span>
         </button>
       ))}
     </div>
@@ -336,7 +375,7 @@ import {
   getOverlayAppearance,
   OVERLAY_OPACITY_DEFAULT,
 } from '../lib/overlayAppearance';
-import type { DynamicActionPayload } from '../types/electron';
+import type { CodexPluginApp, DynamicActionPayload, SkillSummary } from '../types/electron';
 import { getCodexCliModelDisplayName, litellmModelLabel } from '../utils/modelUtils';
 import { getModifierSymbol, isMac, isWindows } from '../utils/platformUtils';
 import { fetchChatOverlayContext, buildReaderLanguageHint } from '../lib/chatOverlayContext';
@@ -1113,6 +1152,12 @@ const NativelyInterface: React.FC<NativelyInterfaceProps> = ({
   const filteredSkillsCountRef = useRef(0);
   const [availableSkills, setAvailableSkills] = useState<SkillSummary[]>([]);
   const [skillPickerIndex, setSkillPickerIndex] = useState(0);
+  const pluginPickerOpenRef = useRef(false);
+  const filteredPluginsCountRef = useRef(0);
+  const filteredPluginsRef = useRef<CodexPluginApp[]>([]);
+  const pluginPickerIndexRef = useRef(0);
+  const [availablePlugins, setAvailablePlugins] = useState<CodexPluginApp[]>([]);
+  const [pluginPickerIndex, setPluginPickerIndex] = useState(0);
   const { shortcuts, isShortcutPressed } = useShortcuts();
   const [messages, setMessages] = useState<Message[]>([]);
   // Keep chat history visible once an answer lands until explicit clear / session reset.
@@ -1721,6 +1766,7 @@ const NativelyInterface: React.FC<NativelyInterfaceProps> = ({
   // field instead.)
   const [activeModeLabel, setActiveModeLabel] = useState<string | null>(null);
   const [llmProviderLabel, setLlmProviderLabel] = useState<string>('unknown');
+  const [llmProviderId, setLlmProviderId] = useState<string>('unknown');
   const [llmPrivacyLabel, setLlmPrivacyLabel] = useState<string | null>(null);
   const [screenContextStatus, setScreenContextStatus] = useState<
     'not_available' | 'available' | 'failed'
@@ -1799,6 +1845,39 @@ const NativelyInterface: React.FC<NativelyInterfaceProps> = ({
       .catch(() => {});
   }, []);
 
+  useEffect(() => {
+    let alive = true;
+    const loadPlugins = async (force = false) => {
+      try {
+        const result = await window.electronAPI?.codexPluginsList?.(force);
+        if (!alive) return;
+        setAvailablePlugins(
+          result?.success && Array.isArray(result.apps)
+            ? result.apps.filter(plugin => plugin.callable && plugin.isEnabled)
+            : [],
+        );
+      } catch {
+        if (alive) setAvailablePlugins([]);
+      }
+    };
+    void loadPlugins(false);
+    const unsubscribeChanged = window.electronAPI?.onCodexPluginsChanged?.(() => {
+      void loadPlugins(true);
+    });
+    const unsubscribeLogin = window.electronAPI?.onCodexLoginComplete?.(() => {
+      void loadPlugins(true);
+    });
+    const unsubscribeSignedOut = window.electronAPI?.onCodexSignedOut?.(() => {
+      setAvailablePlugins([]);
+    });
+    return () => {
+      alive = false;
+      unsubscribeChanged?.();
+      unsubscribeLogin?.();
+      unsubscribeSignedOut?.();
+    };
+  }, []);
+
   // NOTE: live-refresh subscription removed (onSkillsChanged broadcast went
   // with the toggle UI). The picker is fetched once on mount. Users who
   // delete a skill in Settings then switch back to the overlay will see a
@@ -1812,6 +1891,7 @@ const NativelyInterface: React.FC<NativelyInterfaceProps> = ({
       const config = await window.electronAPI?.getCurrentLlmConfig?.().catch(() => null);
       if (!mounted || !config) return;
       setLlmProviderLabel(formatProviderLabel(config.provider));
+      setLlmProviderId(config.provider);
       setLlmPrivacyLabel(
         config.provider === 'ollama' || config.provider === 'codex-cli'
           ? 'Local/private route'
@@ -6074,6 +6154,12 @@ Provide only the answer, nothing else.`;
     textInputRef.current?.focus();
   }, [inputValue]);
 
+  const selectPlugin = useCallback((plugin: CodexPluginApp) => {
+    setInputValue(`@${plugin.id} `);
+    setPluginPickerIndex(0);
+    textInputRef.current?.focus();
+  }, []);
+
   const handleManualSubmit = async () => {
     if (!inputValue.trim() && attachedContext.length === 0) return;
 
@@ -7480,6 +7566,14 @@ Provide only the answer, nothing else.`;
       switch (ev.keyCode) {
         case 36: // Return
         case 76: // Numpad Enter
+          if (pluginPickerOpenRef.current) {
+            const plugin = filteredPluginsRef.current[pluginPickerIndexRef.current];
+            if (plugin) {
+              setInputValue(`@${plugin.id} `);
+              setPluginPickerIndex(0);
+              return;
+            }
+          }
           handleManualSubmitRef.current();
           // macOS parity: on macOS the input holds real DOM focus, so submitting
           // leaves the caret in the box and the user can type the next message
@@ -7496,8 +7590,14 @@ Provide only the answer, nothing else.`;
           return;
         case 126: // Up arrow — terminal-style chat history (older entry)
         case 125: // Down arrow — terminal-style chat history (newer entry)
-          // While the skill picker is open, arrows navigate it instead.
-          if (skillPickerOpenRef.current) {
+          // While a picker is open, arrows navigate it instead.
+          if (pluginPickerOpenRef.current) {
+            if (ev.keyCode === 126) {
+              setPluginPickerIndex((i) => Math.max(0, i - 1));
+            } else {
+              setPluginPickerIndex((i) => Math.min(filteredPluginsCountRef.current - 1, i + 1));
+            }
+          } else if (skillPickerOpenRef.current) {
             if (ev.keyCode === 126) {
               setSkillPickerIndex((i) => Math.max(0, i - 1));
             } else {
@@ -7834,6 +7934,27 @@ Provide only the answer, nothing else.`;
   // navigate the picker while it's open, chat history otherwise.
   skillPickerOpenRef.current = filteredSkills.length > 0 && skillPickerQuery !== null;
   filteredSkillsCountRef.current = filteredSkills.length;
+
+  // Codex plugins use @ to avoid colliding with local Skills (/ and $).
+  // Only the Codex route may open this picker; other providers receive no
+  // plugin syntax because Apps are an App Server capability.
+  const pluginPickerQuery = (() => {
+    if (llmProviderId !== 'codex-cli') return null;
+    const match = inputValue.match(/^@([A-Za-z0-9_-]*)$/);
+    return match ? match[1].toLowerCase() : null;
+  })();
+  const filteredPlugins = pluginPickerQuery !== null
+    ? availablePlugins.filter(plugin => plugin.id.toLowerCase().includes(pluginPickerQuery)
+      || plugin.name.toLowerCase().includes(pluginPickerQuery))
+    : [];
+  const clampedPluginPickerIndex = Math.min(
+    pluginPickerIndex,
+    Math.max(0, filteredPlugins.length - 1),
+  );
+  pluginPickerOpenRef.current = filteredPlugins.length > 0 && pluginPickerQuery !== null;
+  filteredPluginsCountRef.current = filteredPlugins.length;
+  filteredPluginsRef.current = filteredPlugins;
+  pluginPickerIndexRef.current = clampedPluginPickerIndex;
 
   return (
     <>
@@ -8858,12 +8979,38 @@ Provide only the answer, nothing else.`;
                     rows={1}
                     wrap="soft"
                     value={inputValue}
-                    onChange={(e) => { setInputValue(e.target.value); setSkillPickerIndex(0); }}
+                    onChange={(e) => {
+                      setInputValue(e.target.value);
+                      setSkillPickerIndex(0);
+                      setPluginPickerIndex(0);
+                    }}
                     onKeyDown={(e) => {
                       // Normal typing uses a real textarea, so preserve its
                       // native multiline behavior. Stealth typing handles
                       // Return through the OS keyboard hook instead.
                       if (e.key === 'Enter' && e.shiftKey && !stealthTapActive) return;
+                      if (filteredPlugins.length > 0 && pluginPickerQuery !== null) {
+                        if (e.key === 'ArrowUp') {
+                          e.preventDefault();
+                          setPluginPickerIndex((i) => Math.max(0, i - 1));
+                          return;
+                        }
+                        if (e.key === 'ArrowDown') {
+                          e.preventDefault();
+                          setPluginPickerIndex((i) => Math.min(filteredPlugins.length - 1, i + 1));
+                          return;
+                        }
+                        if (e.key === 'Escape') {
+                          e.preventDefault();
+                          setInputValue('');
+                          return;
+                        }
+                        if (e.key === 'Tab' || (e.key === 'Enter' && !e.repeat)) {
+                          e.preventDefault();
+                          selectPlugin(filteredPlugins[clampedPluginPickerIndex]);
+                          return;
+                        }
+                      }
                       if (filteredSkills.length > 0 && skillPickerQuery !== null) {
                         if (e.key === 'ArrowUp') {
                           e.preventDefault();
@@ -8956,6 +9103,19 @@ Provide only the answer, nothing else.`;
                         selectedIndex={clampedPickerIndex}
                         anchorEl={textInputRef.current}
                         onSelect={selectSkill}
+                      />,
+                      document.body,
+                    )
+                  }
+
+                  {/* Codex plugin picker — @ becomes an App Server mention on submit. */}
+                  {filteredPlugins.length > 0 && pluginPickerQuery !== null &&
+                    createPortal(
+                      <PluginPicker
+                        plugins={filteredPlugins}
+                        selectedIndex={clampedPluginPickerIndex}
+                        anchorEl={textInputRef.current}
+                        onSelect={selectPlugin}
                       />,
                       document.body,
                     )

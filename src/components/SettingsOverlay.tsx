@@ -7,7 +7,7 @@ import {
     Camera, RotateCcw, Eye, EyeOff, Layout, MessageSquare, Crop,
     ChevronDown, ChevronUp, Check, BadgeCheck, Power, Palette, Calendar, Ghost, Sun, Moon, RefreshCw, Info, Globe, FlaskConical, Terminal, Settings, Activity, ExternalLink, Trash2,
     Sparkles, Pencil, Briefcase, Building2, Search, MapPin, CheckCircle, HelpCircle, Zap, SlidersHorizontal, PointerOff, Folder,
-    Star, AlertCircle, Gift, Shield, Code2, Headphones, MessageSquareReply, Pin
+    Star, AlertCircle, Gift, Shield, Code2, Headphones, MessageSquareReply, Pin, Plug
 } from 'lucide-react';
 import { analytics } from '../lib/analytics/analytics.service';
 import { AboutSection } from './AboutSection';
@@ -16,6 +16,7 @@ import { AIProvidersSettings } from './settings/AIProvidersSettings';
 import { PhoneMirrorSettings } from './settings/PhoneMirrorSettings';
 import { IntelligenceSettings } from './settings/IntelligenceSettings';
 import { SkillsSettings } from './settings/SkillsSettings';
+import { PluginsSettings } from './settings/PluginsSettings';
 import { AccountSettings } from './settings/AccountSettings';
 import { LocalWhisperModelPanel, type ChannelConfig as LocalWhisperChannelConfig } from './LocalWhisperModelPanel';
 import { motion, AnimatePresence, useReducedMotion } from 'framer-motion';
@@ -406,6 +407,7 @@ const SETTINGS_NAV_ORDER = [
     'general',
     'account',
     'ai-providers',
+    'plugins',
     'skills',
     'calendar',
     'audio',
@@ -1836,6 +1838,13 @@ const SettingsOverlay: React.FC<SettingsOverlayProps> = ({
                                         <FlaskConical size={16} /> {t('AI Providers')}
                                     </button>
                                     <button
+                                        onClick={() => setActiveTab('plugins')}
+                                        className={navItemClass(activeTab === 'plugins')}
+                                    >
+                                        {activeTab === 'plugins' && navActivePill}
+                                        <Plug size={16} /> {t('Plugins')}
+                                    </button>
+                                    <button
                                         onClick={() => setActiveTab('skills')}
                                         className={navItemClass(activeTab === 'skills')}
                                     >
@@ -2671,6 +2680,9 @@ const SettingsOverlay: React.FC<SettingsOverlayProps> = ({
                             )}
                             {activeTab === 'skills' && (
                                 <SkillsSettings />
+                            )}
+                            {activeTab === 'plugins' && (
+                                <PluginsSettings />
                             )}
                             {activeTab === 'keybinds' && (
                                 <div className="space-y-5 animated fadeIn select-text pb-4">

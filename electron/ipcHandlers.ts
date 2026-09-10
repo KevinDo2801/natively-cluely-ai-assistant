@@ -14,7 +14,7 @@ import * as path from 'path';
 import { AudioDevices } from './audio/AudioDevices';
 import { DatabaseManager } from './db/DatabaseManager'; // Import Database Manager
 import { AppState } from './main';
-import { CodexAppServerService } from './services/CodexAppServerService';
+import { CodexAppServerService, type CodexAppInfo } from './services/CodexAppServerService';
 import { CodexCliService, isCodexAuthError } from './services/CodexCliService';
 import { describeServiceAccountRejection } from './services/googleServiceAccount';
 import { PhoneMirrorService } from './services/PhoneMirrorService';
@@ -9217,6 +9217,51 @@ export function initializeIpcHandlers(appState: AppState): void {
 
   const codexServer = CodexAppServerService.getInstance();
   const codexPath = () => appState.processingHelper.getLLMHelper().getCodexCliConfig().path;
+  const writeCodexAppsDiagnostic = (details: Record<string, unknown>) => {
+    try {
+      const diagnosticPath = path.join(app.getPath('userData'), 'codex-apps-diagnostic.json');
+      fs.writeFileSync(diagnosticPath, JSON.stringify({ at: new Date().toISOString(), ...details }, null, 2), 'utf8');
+    } catch { /* diagnostics must never break the catalog */ }
+  };
+  let codexAppsRecovery: Promise<void> | undefined;
+  let codexAppsRecoveryTimer: ReturnType<typeof setTimeout> | undefined;
+  let codexAppsRecoveryAttempt = 0;
+  const codexAppsRecoveryDelays = [10_000, 30_000, 60_000, 120_000, 300_000];
+  const scheduleCodexAppsRecovery = () => {
+    if (codexAppsRecovery || codexAppsRecoveryTimer) return;
+    const delay = codexAppsRecoveryDelays[Math.min(codexAppsRecoveryAttempt, codexAppsRecoveryDelays.length - 1)];
+    codexAppsRecoveryTimer = setTimeout(() => {
+      codexAppsRecoveryTimer = undefined;
+      const attempt = ++codexAppsRecoveryAttempt;
+      const recoveryServer = new CodexAppServerService();
+      let shouldRetry = true;
+      const recovery = (async () => {
+        try {
+          const apps = await recoveryServer.listApps(codexPath(), false);
+          if (!recoveryServer.getAppsCatalogStatus().limited) {
+            codexServer.adoptAppsCatalog(apps);
+            codexAppsRecoveryAttempt = 0;
+            shouldRetry = false;
+            console.info(`[Codex Apps] Background catalog recovery succeeded on attempt ${attempt}.`);
+            writeCodexAppsDiagnostic({ source: 'directory-recovery', attempt, count: apps.length });
+            broadcastCodex('plugins:changed');
+            return;
+          }
+          console.warn(`[Codex Apps] Background catalog recovery attempt ${attempt} returned the installed-only fallback.`);
+          writeCodexAppsDiagnostic({ source: 'recovery-fallback', attempt, count: apps.length });
+        } catch (error: any) {
+          console.warn(`[Codex Apps] Background catalog recovery attempt ${attempt} failed:`, error?.message || error);
+          writeCodexAppsDiagnostic({ source: 'recovery-error', attempt, error: String(error?.message || error).slice(0, 240) });
+        } finally {
+          recoveryServer.close();
+        }
+      })().finally(() => {
+        if (codexAppsRecovery === recovery) codexAppsRecovery = undefined;
+        if (shouldRetry) scheduleCodexAppsRecovery();
+      });
+      codexAppsRecovery = recovery;
+    }, delay);
+  };
   const broadcastCodex = (event: string, payload?: any) => {
     for (const win of BrowserWindow.getAllWindows()) {
       if (!win.isDestroyed()) win.webContents.send(`codex:${event}`, payload);
@@ -9249,7 +9294,12 @@ export function initializeIpcHandlers(appState: AppState): void {
     await refreshRuntimeDefaultIfUnavailable();
     broadcastCredentialsChanged();
   });
-  app.once('before-quit', () => codexServer.close());
+  codexServer.on('apps:changed', () => broadcastCodex('plugins:changed'));
+  app.once('before-quit', () => {
+    if (codexAppsRecoveryTimer) clearTimeout(codexAppsRecoveryTimer);
+    codexAppsRecoveryTimer = undefined;
+    codexServer.close();
+  });
   // Warm the actual transport before the first chat, without blocking the window.
   if (appState.processingHelper.getLLMHelper().getCodexCliConfig().enabled) {
     void synchronizeCodexModels().then(() => broadcastCredentialsChanged()).catch(error => console.warn('[Codex] Startup:', error.message));
@@ -9257,6 +9307,57 @@ export function initializeIpcHandlers(appState: AppState): void {
   safeHandle('codex:list-models', async () => {
     try { return { success: true, models: await synchronizeCodexModels(), config: appState.processingHelper.getLLMHelper().getCodexCliConfig() }; }
     catch (error: any) { return { success: false, models: [], error: error.message }; }
+  });
+  safeHandle('codex:plugins-list', async (_event, force?: boolean) => {
+    try {
+      let apps = await codexServer.listApps(codexPath(), force === true);
+      if (codexServer.getAppsCatalogStatus().limited) {
+        writeCodexAppsDiagnostic({ source: 'primary-fallback', count: apps.length });
+        scheduleCodexAppsRecovery();
+      }
+      writeCodexAppsDiagnostic({
+        source: `${codexServer.getAppsCatalogStatus().source}-final`,
+        count: apps.length,
+      });
+      return { success: true, apps, signedIn: true, ...codexServer.getAppsCatalogStatus() };
+    } catch (error: any) {
+      return {
+        success: false,
+        apps: [],
+        signedIn: codexServer.getStatus().signedIn,
+        ...codexServer.getAppsCatalogStatus(),
+        error: error?.message || 'Could not load plugins.',
+      };
+    }
+  });
+  safeHandle('codex:plugin-set-enabled', async (_event, id: unknown, enabled: unknown) => {
+    try {
+      if (typeof id !== 'string' || typeof enabled !== 'boolean') throw new Error('Invalid plugin setting.');
+      await codexServer.setAppEnabled(id, enabled, codexPath());
+      return { success: true };
+    } catch (error: any) {
+      return { success: false, error: error?.message || 'Could not update plugin.' };
+    }
+  });
+  safeHandle('codex:plugin-connect', async (_event, id: unknown) => {
+    try {
+      if (typeof id !== 'string') throw new Error('Invalid plugin id.');
+      const apps = await codexServer.listApps(codexPath(), false);
+      const plugin = apps.find(app => app.id === id);
+      if (!plugin) throw new Error('Plugin not found. Refresh the catalog and try again.');
+      const connectionUrl = await codexServer.getAppConnectionUrl(plugin, codexPath());
+      if (!connectionUrl) throw new Error('This plugin does not provide a connection page.');
+      const url = new URL(connectionUrl);
+      const trustedHost = url.hostname === 'chatgpt.com'
+        || url.hostname.endsWith('.chatgpt.com')
+        || url.hostname === 'openai.com'
+        || url.hostname.endsWith('.openai.com');
+      if (url.protocol !== 'https:' || !trustedHost) throw new Error('Plugin returned an unexpected connection address.');
+      await shell.openExternal(url.toString());
+      return { success: true, opened: true };
+    } catch (error: any) {
+      return { success: false, opened: false, error: error?.message || 'Could not connect plugin.' };
+    }
   });
   safeHandle('test-codex-cli', async (_, config?: any) => {
     try {

@@ -15,6 +15,21 @@ interface DomCaptureMeta {
   firstLine?: string;
 }
 
+interface CodexPluginApp {
+  id: string;
+  name: string;
+  description?: string;
+  logoUrl?: string;
+  installUrl?: string;
+  isAccessible: boolean;
+  isEnabled: boolean;
+  callable: boolean;
+  canToggle?: boolean;
+  marketplaceName?: string;
+  pluginName?: string;
+  pluginDisplayNames: string[];
+}
+
 // Types for the exposed Electron API
 interface ElectronAPI {
   updateContentDimensions: (dimensions: { width: number; height: number }) => Promise<void>;
@@ -582,6 +597,10 @@ interface ElectronAPI {
   codexStartLogin: () => Promise<{ success: boolean; email?: string; expiresAt?: number; error?: string }>;
   codexSignOut: () => Promise<{ success: boolean; error?: string }>;
   codexRefreshTokens: () => Promise<{ success: boolean; email?: string; expiresAt?: number; error?: string }>;
+  codexPluginsList: (force?: boolean) => Promise<{ success: boolean; apps: CodexPluginApp[]; signedIn: boolean; limited?: boolean; error?: string }>;
+  codexPluginSetEnabled: (id: string, enabled: boolean) => Promise<{ success: boolean; error?: string }>;
+  codexPluginConnect: (id: string) => Promise<{ success: boolean; opened: boolean; error?: string }>;
+  onCodexPluginsChanged: (callback: () => void) => () => void;
 
   // Supabase auth (email + password) — Settings "Account" tab
   authGetStatus: () => Promise<{ success: boolean; signedIn: boolean; email?: string; userId?: string; error?: string }>;
@@ -1948,6 +1967,14 @@ contextBridge.exposeInMainWorld('electronAPI', {
   codexStartLogin: () => ipcRenderer.invoke('codex:start-login'),
   codexSignOut: () => ipcRenderer.invoke('codex:sign-out'),
   codexRefreshTokens: () => ipcRenderer.invoke('codex:refresh-tokens'),
+  codexPluginsList: (force?: boolean) => ipcRenderer.invoke('codex:plugins-list', force === true),
+  codexPluginSetEnabled: (id: string, enabled: boolean) => ipcRenderer.invoke('codex:plugin-set-enabled', id, enabled),
+  codexPluginConnect: (id: string) => ipcRenderer.invoke('codex:plugin-connect', id),
+  onCodexPluginsChanged: (callback: () => void) => {
+    const subscription = () => callback();
+    ipcRenderer.on('codex:plugins:changed', subscription);
+    return () => { ipcRenderer.removeListener('codex:plugins:changed', subscription); };
+  },
   onCodexLoginComplete: (callback: (info: { email?: string }) => void) => {
     const subscription = (_: any, info: any) => callback(info || {});
     ipcRenderer.on('codex:login:complete', subscription);
