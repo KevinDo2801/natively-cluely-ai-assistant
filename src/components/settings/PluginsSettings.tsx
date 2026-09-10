@@ -9,16 +9,56 @@ import {
     Plug,
     RefreshCw,
     Search,
+    Sparkles,
 } from 'lucide-react';
 import { useT } from '../../i18n';
 import type { CodexPluginApp } from '../../types/electron';
 
 const bridgeMissing = 'Plugins IPC bridge not detected. Restart Natively after updating.';
+const pageSize = 48;
+type PluginFilter = 'all' | 'connected' | 'available';
+
+const safeLogoUrl = (logoUrl?: string) => {
+    if (!logoUrl) return undefined;
+    try {
+        const url = new URL(logoUrl);
+        return url.protocol === 'https:' || url.protocol === 'data:' ? logoUrl : undefined;
+    } catch {
+        return undefined;
+    }
+};
+
+const PluginLogo: React.FC<{ plugin: CodexPluginApp }> = ({ plugin }) => {
+    const [failed, setFailed] = useState(false);
+    const logoUrl = safeLogoUrl(plugin.logoUrl);
+
+    if (logoUrl && !failed) {
+        return (
+            <img
+                src={logoUrl}
+                alt=""
+                loading="lazy"
+                className="h-full w-full object-contain"
+                onError={() => setFailed(true)}
+            />
+        );
+    }
+
+    const initials = plugin.name
+        .split(/\s+/)
+        .filter(Boolean)
+        .slice(0, 2)
+        .map(part => part[0]?.toUpperCase())
+        .join('');
+
+    return <span className="text-sm font-bold tracking-tight text-text-secondary">{initials || <Plug size={18} />}</span>;
+};
 
 export const PluginsSettings: React.FC = () => {
     const t = useT();
     const [plugins, setPlugins] = useState<CodexPluginApp[]>([]);
     const [query, setQuery] = useState('');
+    const [filter, setFilter] = useState<PluginFilter>('all');
     const [page, setPage] = useState(0);
     const [loading, setLoading] = useState(false);
     const [signedIn, setSignedIn] = useState(true);
@@ -69,16 +109,25 @@ export const PluginsSettings: React.FC = () => {
     const visiblePlugins = useMemo(() => {
         const needle = query.trim().toLowerCase();
         return plugins
-            .filter(plugin => !needle
-                || plugin.name.toLowerCase().includes(needle)
-                || plugin.id.toLowerCase().includes(needle)
-                || (plugin.description || '').toLowerCase().includes(needle))
+            .filter(plugin => {
+                const matchesFilter = filter === 'all'
+                    || (filter === 'connected' && plugin.callable)
+                    || (filter === 'available' && !plugin.callable && plugin.isAccessible);
+                const matchesQuery = !needle
+                    || plugin.name.toLowerCase().includes(needle)
+                    || plugin.id.toLowerCase().includes(needle)
+                    || (plugin.description || '').toLowerCase().includes(needle);
+                return matchesFilter && matchesQuery;
+            })
             .sort((a, b) => Number(b.callable) - Number(a.callable)
                 || Number(b.isAccessible) - Number(a.isAccessible)
                 || a.name.localeCompare(b.name));
-    }, [plugins, query]);
+    }, [filter, plugins, query]);
     const connectedCount = useMemo(() => plugins.filter(plugin => plugin.callable).length, [plugins]);
-    const pageSize = 100;
+    const availableCount = useMemo(
+        () => plugins.filter(plugin => !plugin.callable && plugin.isAccessible).length,
+        [plugins],
+    );
     const pageCount = Math.max(1, Math.ceil(visiblePlugins.length / pageSize));
     const currentPage = Math.min(page, pageCount - 1);
     const displayedPlugins = visiblePlugins.slice(currentPage * pageSize, (currentPage + 1) * pageSize);
@@ -131,36 +180,51 @@ export const PluginsSettings: React.FC = () => {
     };
 
     return (
-        <div className="space-y-5 animated fadeIn select-text pb-4">
-            <div className="flex items-start justify-between gap-4">
-                <div>
-                    <h3 className="text-lg font-bold text-text-primary mb-1">{t('Plugins')}</h3>
-                    <p className="text-xs text-text-secondary leading-relaxed max-w-xl">
-                        {t('Connect Codex apps, control which ones can be used, then type @ in chat to choose a connected plugin.')}
-                    </p>
-                </div>
-                <div className="flex items-center gap-2 shrink-0">
-                    {plugins.length > 0 && (
-                        <span className="text-[11px] text-text-tertiary tabular-nums">
-                            {plugins.length.toLocaleString()} {t('plugins')} · {connectedCount.toLocaleString()} {t('connected')}
-                        </span>
-                    )}
+        <div className="space-y-4 animated fadeIn select-text pb-5">
+            <section className="relative overflow-hidden rounded-2xl border border-border-subtle bg-bg-card px-5 py-5">
+                <div className="pointer-events-none absolute -right-16 -top-20 h-52 w-52 rounded-full bg-legacy-action-bg/10 blur-3xl" />
+                <div className="relative flex items-start justify-between gap-5">
+                    <div className="flex min-w-0 items-start gap-3.5">
+                        <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl border border-legacy-action-border bg-legacy-action-subtle text-legacy-action-bg shadow-sm">
+                            <Sparkles size={18} />
+                        </div>
+                        <div>
+                            <h3 className="text-lg font-bold text-text-primary">{t('Plugins')}</h3>
+                            <p className="mt-1 max-w-xl text-xs leading-relaxed text-text-secondary">
+                                {t('Connect Codex apps, control which ones can be used, then type @ in chat to choose a connected plugin.')}
+                            </p>
+                        </div>
+                    </div>
                     <button
                         onClick={() => void loadPlugins(true)}
                         disabled={loading}
-                        className="flex items-center gap-2 px-3 py-1.5 rounded-lg border border-border-subtle bg-bg-input hover:bg-bg-elevated text-xs font-medium text-text-secondary hover:text-text-primary transition-colors disabled:opacity-50"
+                        className="flex shrink-0 items-center gap-2 rounded-lg border border-border-subtle bg-bg-input px-3 py-2 text-xs font-semibold text-text-secondary transition hover:border-border-muted hover:bg-bg-elevated hover:text-text-primary disabled:opacity-50"
                     >
                         <RefreshCw size={13} className={loading ? 'animate-spin' : ''} />
                         {t('Refresh')}
                     </button>
                 </div>
-            </div>
+                {plugins.length > 0 && (
+                    <div className="relative mt-5 grid grid-cols-3 gap-2">
+                        {[
+                            [plugins.length, 'All plugins'],
+                            [connectedCount, 'Connected'],
+                            [availableCount, 'Ready to connect'],
+                        ].map(([value, label]) => (
+                            <div key={String(label)} className="rounded-xl border border-border-subtle bg-bg-input/60 px-3 py-2.5">
+                                <div className="text-base font-bold tabular-nums text-text-primary">{Number(value).toLocaleString()}</div>
+                                <div className="mt-0.5 text-[10px] font-medium uppercase tracking-wide text-text-tertiary">{t(String(label))}</div>
+                            </div>
+                        ))}
+                    </div>
+                )}
+            </section>
 
-            <div className="rounded-xl border border-amber-500/20 bg-amber-500/10 px-3.5 py-3 flex items-start gap-2.5">
-                <Plug size={15} className="text-amber-400 mt-0.5 shrink-0" />
-                <div className="text-xs text-text-secondary leading-relaxed">
+            <div className="flex items-start gap-2.5 rounded-xl border border-blue-500/20 bg-blue-500/10 px-3.5 py-3">
+                <Plug size={15} className="mt-0.5 shrink-0 text-blue-400" />
+                <div className="text-xs leading-relaxed text-text-secondary">
                     <span className="font-semibold text-text-primary">{t('How to use:')}</span>{' '}
-                    {t('type')} <span className="font-mono text-amber-400">@</span> {t('at the beginning of a chat message, select a connected plugin, then write your request.')}
+                    {t('type')} <span className="rounded bg-blue-500/15 px-1.5 py-0.5 font-mono font-semibold text-blue-400">@</span> {t('at the beginning of a chat message, select a connected plugin, then write your request.')}
                 </div>
             </div>
 
@@ -190,23 +254,47 @@ export const PluginsSettings: React.FC = () => {
                 </div>
             )}
 
-            <div className="relative">
-                <Search size={14} className="absolute left-3 top-1/2 -translate-y-1/2 text-text-tertiary" />
-                <input
-                    value={query}
-                    onChange={event => {
-                        setQuery(event.target.value);
-                        setPage(0);
-                    }}
-                    placeholder={t('Search plugins')}
-                    className="w-full rounded-lg border border-border-subtle bg-bg-input py-2 pl-9 pr-3 text-sm text-text-primary placeholder:text-text-tertiary focus:outline-none focus:border-border-muted"
-                />
+            <div className="flex flex-col gap-2.5 sm:flex-row sm:items-center">
+                <div className="relative min-w-0 flex-1">
+                    <Search size={15} className="absolute left-3 top-1/2 -translate-y-1/2 text-text-tertiary" />
+                    <input
+                        value={query}
+                        onChange={event => {
+                            setQuery(event.target.value);
+                            setPage(0);
+                        }}
+                        placeholder={t('Search by name or capability…')}
+                        className="w-full rounded-xl border border-border-subtle bg-bg-input py-2.5 pl-9 pr-3 text-sm text-text-primary placeholder:text-text-tertiary transition focus:border-legacy-action-border focus:outline-none focus:ring-2 focus:ring-legacy-action-subtle"
+                    />
+                </div>
+                <div className="flex shrink-0 items-center rounded-xl border border-border-subtle bg-bg-input p-1">
+                    {([
+                        ['all', 'All'],
+                        ['connected', 'Connected'],
+                        ['available', 'Available'],
+                    ] as const).map(([value, label]) => (
+                        <button
+                            key={value}
+                            onClick={() => {
+                                setFilter(value);
+                                setPage(0);
+                            }}
+                            className={`rounded-lg px-3 py-1.5 text-[11px] font-semibold transition ${filter === value
+                                ? 'bg-bg-card text-text-primary shadow-sm'
+                                : 'text-text-tertiary hover:text-text-secondary'}`}
+                        >
+                            {t(label)}
+                        </button>
+                    ))}
+                </div>
             </div>
 
-            <div className="space-y-2">
+            <div>
                 {loading && plugins.length === 0 && (
-                    <div className="flex items-center justify-center gap-2 py-10 text-xs text-text-tertiary">
-                        <Loader2 size={15} className="animate-spin" /> {t('Loading plugins…')}
+                    <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
+                        {Array.from({ length: 6 }).map((_, index) => (
+                            <div key={index} className="h-36 animate-pulse rounded-2xl border border-border-subtle bg-bg-card" />
+                        ))}
                     </div>
                 )}
 
@@ -216,62 +304,80 @@ export const PluginsSettings: React.FC = () => {
                     </div>
                 )}
 
-                {displayedPlugins.map(plugin => {
-                    const updating = updatingIds.has(plugin.id);
-                    const status = plugin.callable
-                        ? 'Connected'
-                        : plugin.isAccessible
-                            ? 'Available'
-                            : 'Not connected';
-                    return (
-                        <div key={plugin.id} className="rounded-xl border border-border-subtle bg-bg-card px-3.5 py-3 hover:border-border-muted transition-colors">
-                            <div className="flex items-start gap-3">
-                                <div className="w-9 h-9 rounded-lg bg-bg-input border border-border-subtle flex items-center justify-center shrink-0 text-text-secondary">
-                                    <Plug size={16} />
-                                </div>
-                                <div className="min-w-0 flex-1">
-                                    <div className="flex items-center gap-2 flex-wrap">
-                                        <span className="text-sm font-semibold text-text-primary truncate">{plugin.name}</span>
-                                        <span className="text-[10px] font-mono text-text-tertiary">@{plugin.id}</span>
-                                        <span className={`inline-flex items-center gap-1 text-[10px] font-medium ${plugin.callable ? 'text-emerald-400' : 'text-text-tertiary'}`}>
-                                            {plugin.callable && <CheckCircle2 size={11} />}
-                                            {t(status)}
-                                        </span>
+                {displayedPlugins.length > 0 && (
+                    <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
+                        {displayedPlugins.map(plugin => {
+                            const updating = updatingIds.has(plugin.id);
+                            return (
+                                <article
+                                    key={plugin.id}
+                                    className="group flex min-h-36 flex-col rounded-2xl border border-border-subtle bg-bg-card p-4 transition duration-200 hover:-translate-y-0.5 hover:border-border-muted hover:shadow-lg hover:shadow-black/5"
+                                >
+                                    <div className="flex min-w-0 items-start gap-3">
+                                        <div className="flex h-11 w-11 shrink-0 items-center justify-center overflow-hidden rounded-xl border border-border-subtle bg-white p-1.5 shadow-sm">
+                                            <PluginLogo plugin={plugin} />
+                                        </div>
+                                        <div className="min-w-0 flex-1 pt-0.5">
+                                            <div className="flex items-center gap-2">
+                                                <h4 className="truncate text-sm font-semibold text-text-primary" title={plugin.name}>{plugin.name}</h4>
+                                                {plugin.callable && (
+                                                    <span className="inline-flex shrink-0 items-center gap-1 rounded-full bg-emerald-500/10 px-2 py-0.5 text-[10px] font-semibold text-emerald-400">
+                                                        <CheckCircle2 size={10} /> {t('Connected')}
+                                                    </span>
+                                                )}
+                                            </div>
+                                            <p className="mt-0.5 truncate text-[10px] font-medium text-text-tertiary" title={`@${plugin.id}`}>
+                                                @{plugin.id}
+                                            </p>
+                                        </div>
                                     </div>
-                                    {plugin.description && (
-                                        <p className="mt-1 text-xs text-text-secondary leading-relaxed line-clamp-2">{plugin.description}</p>
-                                    )}
-                                </div>
-                                <div className="flex items-center gap-2 shrink-0">
-                                    {!plugin.callable && plugin.isAccessible && (plugin.installUrl || plugin.marketplaceName) && (
-                                        <button
-                                            onClick={() => void connectPlugin(plugin)}
-                                            disabled={updating}
-                                            className="flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg bg-legacy-action-bg hover:bg-legacy-action-hover text-legacy-action-fg text-[11px] font-semibold transition-colors disabled:opacity-50"
+
+                                    <p className="mt-3 line-clamp-2 flex-1 text-xs leading-relaxed text-text-secondary">
+                                        {plugin.description || t('Use this app with Codex inside Natively.')}
+                                    </p>
+
+                                    <div className="mt-3 flex min-h-8 items-center justify-between gap-3 border-t border-border-subtle pt-3">
+                                        <span className={`text-[10px] font-semibold ${plugin.callable
+                                            ? 'text-emerald-400'
+                                            : plugin.isAccessible
+                                                ? 'text-text-secondary'
+                                                : 'text-text-tertiary'}`}
                                         >
-                                            <ExternalLink size={12} /> {t('Connect')}
-                                        </button>
-                                    )}
-                                    {plugin.canToggle && (
-                                        <button
-                                            role="switch"
-                                            aria-checked={plugin.isEnabled}
-                                            aria-label={`${plugin.isEnabled ? 'Disable' : 'Enable'} ${plugin.name}`}
-                                            onClick={() => void togglePlugin(plugin)}
-                                            disabled={updating}
-                                            className={`relative w-9 h-5 rounded-full transition-colors disabled:opacity-50 ${plugin.isEnabled ? 'bg-emerald-500' : 'bg-bg-input border border-border-muted'}`}
-                                        >
-                                            <span className={`absolute left-0.5 top-0.5 w-4 h-4 rounded-full bg-white shadow-sm transition-transform ${plugin.isEnabled ? 'translate-x-4' : 'translate-x-0'}`} />
-                                        </button>
-                                    )}
-                                </div>
-                            </div>
-                        </div>
-                    );
-                })}
+                                            {t(plugin.callable ? 'Ready to use' : plugin.isAccessible ? 'Available to connect' : 'Unavailable')}
+                                        </span>
+                                        <div className="flex shrink-0 items-center gap-2">
+                                            {!plugin.callable && plugin.isAccessible && (plugin.installUrl || plugin.marketplaceName) && (
+                                                <button
+                                                    onClick={() => void connectPlugin(plugin)}
+                                                    disabled={updating}
+                                                    className="flex items-center gap-1.5 rounded-lg bg-legacy-action-bg px-3 py-1.5 text-[11px] font-semibold text-legacy-action-fg transition hover:bg-legacy-action-hover disabled:opacity-50"
+                                                >
+                                                    {updating ? <Loader2 size={12} className="animate-spin" /> : <ExternalLink size={12} />}
+                                                    {t('Connect')}
+                                                </button>
+                                            )}
+                                            {plugin.canToggle && (
+                                                <button
+                                                    role="switch"
+                                                    aria-checked={plugin.isEnabled}
+                                                    aria-label={`${plugin.isEnabled ? 'Disable' : 'Enable'} ${plugin.name}`}
+                                                    onClick={() => void togglePlugin(plugin)}
+                                                    disabled={updating}
+                                                    className={`relative h-5 w-9 rounded-full transition-colors disabled:opacity-50 ${plugin.isEnabled ? 'bg-emerald-500' : 'border border-border-muted bg-bg-input'}`}
+                                                >
+                                                    <span className={`absolute left-0.5 top-0.5 h-4 w-4 rounded-full bg-white shadow-sm transition-transform ${plugin.isEnabled ? 'translate-x-4' : 'translate-x-0'}`} />
+                                                </button>
+                                            )}
+                                        </div>
+                                    </div>
+                                </article>
+                            );
+                        })}
+                    </div>
+                )}
 
                 {visiblePlugins.length > pageSize && (
-                    <div className="flex items-center justify-between gap-3 py-2 text-[11px] text-text-tertiary">
+                    <div className="mt-4 flex items-center justify-between gap-3 rounded-xl border border-border-subtle bg-bg-card px-3 py-2 text-[11px] text-text-tertiary">
                         <span>
                             {t('Showing')} {currentPage * pageSize + 1}–{Math.min((currentPage + 1) * pageSize, visiblePlugins.length)} {t('of')} {visiblePlugins.length}
                         </span>
