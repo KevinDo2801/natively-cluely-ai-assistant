@@ -122,6 +122,12 @@ interface ElectronAPI {
   getAvailableLiteLLMModels: () => Promise<string[]>;
   refreshLiteLLMModels: () => Promise<string[]>;
   getCloudFetchedModels: () => Promise<{ models: Record<string, { id: string; label: string }[]>; fetchedAt: Record<string, number> }>;
+  refreshProviderModelCatalogs: (options?: { force?: boolean; providers?: Array<'gemini' | 'groq' | 'openai' | 'claude' | 'deepseek' | 'nvidia_nim'> }) => Promise<{
+    success: boolean;
+    models: Record<string, { id: string; label: string }[]>;
+    fetchedAt: Record<string, number>;
+    errors: Record<string, string>;
+  }>;
   getDisabledProviders: () => Promise<string[]>;
   setDisabledProviders: (providers: string[]) => Promise<{ success: boolean; error?: string }>;
   setCloudEnabledModels: (provider: string, models: string[]) => Promise<{ success: boolean; error?: string }>;
@@ -571,6 +577,7 @@ interface ElectronAPI {
   // ChatGPT OAuth IPCs — replace the old `codex login` CLI subprocess flow.
   // startLogin kicks off the PKCE flow + opens the system browser; the
   // renderer listens for codex:login:complete / :failed events to update UI.
+  codexListModels: () => Promise<{ success: boolean; models: { id: string; name: string; isDefault: boolean; efforts: string[]; defaultEffort?: string }[]; config?: any; error?: string }>;
   codexLoginStatus: () => Promise<{ success: boolean; signedIn: boolean; email?: string; expiresAt?: number; error?: string }>;
   codexStartLogin: () => Promise<{ success: boolean; email?: string; expiresAt?: number; error?: string }>;
   codexSignOut: () => Promise<{ success: boolean; error?: string }>;
@@ -1435,6 +1442,8 @@ contextBridge.exposeInMainWorld('electronAPI', {
   getAvailableLiteLLMModels: () => ipcRenderer.invoke('get-available-litellm-models'),
   refreshLiteLLMModels: () => ipcRenderer.invoke('refresh-litellm-models'),
   getCloudFetchedModels: () => ipcRenderer.invoke('get-cloud-fetched-models'),
+  refreshProviderModelCatalogs: (options?: { force?: boolean; providers?: Array<'gemini' | 'groq' | 'openai' | 'claude' | 'deepseek' | 'nvidia_nim'> }) =>
+    ipcRenderer.invoke('refresh-provider-model-catalogs', options),
   getDisabledProviders: () => ipcRenderer.invoke('get-disabled-providers'),
   setDisabledProviders: (providers: string[]) => ipcRenderer.invoke('set-disabled-providers', providers),
   setCloudEnabledModels: (provider: string, models: string[]) => ipcRenderer.invoke('set-cloud-enabled-models', provider, models),
@@ -1934,6 +1943,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
   // ChatGPT OAuth (PKCE) — replaces the old `codex login` CLI subprocess.
   // The renderer listens for `codex:login:complete` / `:failed` /
   // `:signed-out` / `:tokens:refreshed` events for live UI updates.
+  codexListModels: () => ipcRenderer.invoke('codex:list-models'),
   codexLoginStatus: () => ipcRenderer.invoke('codex:login-status'),
   codexStartLogin: () => ipcRenderer.invoke('codex:start-login'),
   codexSignOut: () => ipcRenderer.invoke('codex:sign-out'),

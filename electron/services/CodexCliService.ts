@@ -43,6 +43,7 @@ import fs from 'fs';
 import path from 'path';
 import sharp from 'sharp';
 import { CodexOAuthService } from './CodexOAuthService';
+import { CodexAppServerService } from './CodexAppServerService';
 
 // Extension → MIME for the RAW fallback path only (the normal path re-encodes
 // to JPEG via sharp, so its MIME is fixed). PNG/JPEG/WebP/GIF are the four
@@ -213,8 +214,8 @@ export interface CodexCliRunOptions {
 export const DEFAULT_CODEX_CLI_CONFIG: CodexCliConfig = {
   enabled: false,
   path: 'codex', // deprecated — kept so older settings round-trip without resetting
-  model: 'gpt-5.4',
-  fastModel: 'gpt-5.3-codex',
+  model: 'gpt-5.5',
+  fastModel: 'gpt-5.5',
   timeoutMs: 60_000,
   sandboxMode: 'read-only', // deprecated
   serviceTier: 'default',
@@ -325,7 +326,7 @@ export class CodexCliService {
   public static async run(_path: string, options: CodexCliRunOptions): Promise<string> {
     if (options.signal?.aborted) throw new Error('Codex request aborted before start.');
     let out = '';
-    for await (const chunk of this.stream('', options)) {
+    for await (const chunk of this.stream(_path, options)) {
       out += chunk;
     }
     return out;
@@ -341,49 +342,16 @@ export class CodexCliService {
   public static async *stream(_path: string, options: CodexCliRunOptions): AsyncGenerator<string, void, unknown> {
     if (options.signal?.aborted) throw new Error('Codex request aborted before start.');
 
-    const oauth = CodexOAuthService.getInstance();
-    const status = oauth.getStatus();
-    if (!status.signedIn) {
-      throw new Error(CODEX_NOT_SIGNED_IN_MESSAGE);
+    const images: string[] = [];
+    for (const imagePath of options.imagePaths || []) {
+      const encoded = await this.encodeImageForRequest(imagePath);
+      if (encoded) images.push(encoded);
     }
-
-    // Build the request body ONCE outside the retry loop — refreshing
-    // tokens doesn't change the prompt.
-    const body = await this.buildRequestBody(options);
-    const headers = this.buildHeaders();
-
-    // Idle-timeout guard: aborts the HTTP connection if no bytes arrive for
-    // `timeoutMs` ms. The timer RESETS on every yielded delta, so a long
-    // answer that is actively streaming (even slowly) is never cut off.
-    // This is intentionally NOT a wall-clock cap from request start — that
-    // would abort long but healthy responses (e.g. gpt-5.5 with a large
-    // system prompt routinely takes >30s total). The outer
-    // raceStreamWithDeadline() already handles the first-useful-token
-    // deadline and the inter-token stall guard independently; this guard
-    // serves as a belt-and-suspenders kill for a truly stuck HTTP connection
-    // (server accepted the request but sends nothing at all for timeoutMs).
-    const deadlineController = new AbortController();
-    let deadlineTimer: ReturnType<typeof setTimeout> = setTimeout(() => deadlineController.abort(), options.timeoutMs);
-    const resetDeadline = () => {
-      clearTimeout(deadlineTimer);
-      deadlineTimer = setTimeout(() => deadlineController.abort(), options.timeoutMs);
-    };
-    // Combine user-supplied signal with our idle-timeout signal.
-    const combinedSignal = combineSignals(options.signal, deadlineController.signal);
-    const cleanup = () => {
-      clearTimeout(deadlineTimer);
-      combinedSignal.dispose();
-    };
-
-    try {
-      const deltas = this.fetchDeltas(body, headers, combinedSignal.signal, options);
-      for await (const delta of deltas) {
-        resetDeadline();
-        yield delta;
-      }
-    } finally {
-      cleanup();
-    }
+    yield* CodexAppServerService.getInstance().stream({
+      model: options.model, prompt: options.prompt, instructions: options.instructions,
+      images, timeoutMs: options.timeoutMs, signal: options.signal,
+      effort: options.modelReasoningEffort, serviceTier: options.serviceTier,
+    }, _path || 'codex');
   }
 
   // ---------------------------------------------------------------------------

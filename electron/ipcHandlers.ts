@@ -14,6 +14,7 @@ import * as path from 'path';
 import { AudioDevices } from './audio/AudioDevices';
 import { DatabaseManager } from './db/DatabaseManager'; // Import Database Manager
 import { AppState } from './main';
+import { CodexAppServerService } from './services/CodexAppServerService';
 import { CodexCliService, isCodexAuthError } from './services/CodexCliService';
 import { describeServiceAccountRejection } from './services/googleServiceAccount';
 import { PhoneMirrorService } from './services/PhoneMirrorService';
@@ -252,8 +253,7 @@ export function initializeIpcHandlers(appState: AppState): void {
       const codexConfig = llmHelper.getCodexCliConfig();
       let codexSignedIn = false;
       try {
-        const { CodexOAuthService } = require('./services/CodexOAuthService');
-        codexSignedIn = CodexOAuthService.getInstance().getStatus().signedIn === true;
+        codexSignedIn = CodexAppServerService.getInstance().getStatus().signedIn;
       } catch { /* optional */ }
 
       const has = (value?: string) => !!(value && value.trim().length > 0);
@@ -7067,6 +7067,84 @@ export function initializeIpcHandlers(appState: AppState): void {
     }
   });
 
+  // Refresh every configured cloud provider from its authoritative model API.
+  // The renderer never receives API keys: discovery happens entirely in main
+  // and only the sanitized {id,label} catalog crosses IPC. A one-hour cache
+  // keeps the pre-warmed model selector from making six network calls every
+  // time it is shown; saving a key requests a forced refresh for that provider.
+  const CLOUD_MODEL_CATALOG_TTL_MS = 60 * 60 * 1000;
+  const CLOUD_MODEL_PROVIDERS = ['gemini', 'groq', 'openai', 'claude', 'deepseek', 'nvidia_nim'] as const;
+  type CloudModelProvider = typeof CLOUD_MODEL_PROVIDERS[number];
+  let providerCatalogRefreshInFlight: Promise<any> | null = null;
+
+  safeHandle('refresh-provider-model-catalogs', async (_, options?: {
+    force?: boolean;
+    providers?: CloudModelProvider[];
+  }) => {
+    if (providerCatalogRefreshInFlight && !options?.force) return providerCatalogRefreshInFlight;
+
+    const refresh = async () => {
+      const { CredentialsManager } = require('./services/CredentialsManager');
+      const { fetchProviderModels } = require('./utils/modelFetcher');
+      const cm = CredentialsManager.getInstance();
+      const requested = new Set<CloudModelProvider>(
+        Array.isArray(options?.providers) && options!.providers!.length > 0
+          ? options!.providers!.filter((p): p is CloudModelProvider => CLOUD_MODEL_PROVIDERS.includes(p))
+          : CLOUD_MODEL_PROVIDERS,
+      );
+      const keyFor = (provider: CloudModelProvider): string | undefined => {
+        if (provider === 'gemini') return cm.getGeminiApiKey();
+        if (provider === 'groq') return cm.getGroqApiKey();
+        if (provider === 'openai') return cm.getOpenaiApiKey();
+        if (provider === 'claude') return cm.getClaudeApiKey();
+        if (provider === 'deepseek') return cm.getDeepseekApiKey();
+        return cm.getNvidiaNimApiKey();
+      };
+      const errors: Record<string, string> = {};
+      const fetchedAt = cm.getCloudFetchedAt();
+
+      await Promise.all([...requested].map(async (provider) => {
+        const key = keyFor(provider)?.trim();
+        if (!key) return;
+        const cached = cm.getCloudFetchedModels(provider);
+        const fresh = cached.length > 0
+          && Date.now() - (fetchedAt[provider] || 0) < CLOUD_MODEL_CATALOG_TTL_MS;
+        if (!options?.force && fresh) return;
+        try {
+          const models = await fetchProviderModels(provider, key);
+          if (Array.isArray(models) && models.length > 0) {
+            cm.setCloudFetchedModels(
+              provider,
+              models.map((m: any) => ({ id: m.id, label: m.label || m.id })),
+              Date.now(),
+            );
+          }
+        } catch (error: any) {
+          // Preserve the last successful catalog. A temporary provider outage
+          // must not collapse the picker back to one preset model.
+          errors[provider] = error?.response?.data?.error?.message
+            || error?.message
+            || 'Failed to load models';
+        }
+      }));
+
+      return {
+        success: Object.keys(errors).length === 0,
+        models: cm.getAllCloudFetchedModels(),
+        fetchedAt: cm.getCloudFetchedAt(),
+        errors,
+      };
+    };
+
+    const promise = refresh();
+    if (!options?.force) providerCatalogRefreshInFlight = promise;
+    try {
+      return await promise;
+    } finally {
+      if (providerCatalogRefreshInFlight === promise) providerCatalogRefreshInFlight = null;
+    }
+  });
+
   safeHandle('set-cloud-enabled-models', async (_, provider: string, models: string[]) => {
     try {
       const { CredentialsManager } = require('./services/CredentialsManager');
@@ -9137,158 +9215,107 @@ export function initializeIpcHandlers(appState: AppState): void {
     }
   });
 
-  safeHandle('test-codex-cli', async (_, config?: any) => {
-    try {
-      // The new implementation is HTTP-direct — there is no CLI binary to
-      // validate. The test is now "do we have a valid OAuth token + a
-      // reachable model?". A lightweight probe is a status read; the
-      // Settings UI also has a "Try it" button that issues a real chat
-      // call. This handler returns success=true with the current
-      // normalized config so the Settings UI's "Test" button keeps
-      // working without an error state.
-      const current = appState.processingHelper.getLLMHelper().getCodexCliConfig();
-      const normalized = CodexCliService.normalizeConfig({ ...current, ...(config || {}) });
-      const { CodexOAuthService } = require('./services/CodexOAuthService');
-      const status = CodexOAuthService.getInstance().getStatus();
-      return {
-        success: true,
-        resolvedPath: normalized.path, // legacy field; ignored
-        config: normalized,
-        signedIn: status.signedIn,
-        email: status.email,
-      };
-    } catch (error: any) {
-      return { success: false, error: error.message };
+  const codexServer = CodexAppServerService.getInstance();
+  const codexPath = () => appState.processingHelper.getLLMHelper().getCodexCliConfig().path;
+  const broadcastCodex = (event: string, payload?: any) => {
+    for (const win of BrowserWindow.getAllWindows()) {
+      if (!win.isDestroyed()) win.webContents.send(`codex:${event}`, payload);
     }
+  };
+  const synchronizeCodexModels = async (force = false) => {
+    const models = await codexServer.listModels(codexPath(), force);
+    const llm = appState.processingHelper.getLLMHelper();
+    const current = llm.getCodexCliConfig();
+    const fallback = models.find(model => model.isDefault)?.id || models[0]?.id;
+    if (!fallback) throw new Error('Codex returned no available models.');
+    const selected = models.some(model => model.id === current.model) ? current.model : fallback;
+    const fast = models.some(model => model.id === current.fastModel) ? current.fastModel : selected;
+    if (selected !== current.model || fast !== current.fastModel) {
+      const sm = SettingsManager.getInstance();
+      if (!sm.set('codexCliModel', selected) || !sm.set('codexCliFastModel', fast)) throw new Error('Could not save available Codex models.');
+      llm.setCodexCliConfig({ ...current, model: selected, fastModel: fast });
+      console.info('[Codex] Updated unavailable saved models from the official catalog.');
+    }
+    return models;
+  };
+  codexServer.on('login:complete', async (status: any) => {
+    broadcastCodex('login:complete', status);
+    await synchronizeCodexModels(true).catch(() => {});
+    broadcastCredentialsChanged();
   });
-
-  const runCodexAuthAction = async (action: 'status' | 'logout' | 'login' | 'doctor', config?: any) => {
-    // Legacy wrapper. The OAuth-direct implementation does not use
-    // CLI subprocesses for auth, so the old action map is reimplemented
-    // against CodexOAuthService. The renderer-facing shape is unchanged
-    // so the Settings UI keeps working without changes.
-    try {
-      const { CodexOAuthService } = require('./services/CodexOAuthService');
-      const oauth = CodexOAuthService.getInstance();
-      const current = appState.processingHelper.getLLMHelper().getCodexCliConfig();
-      const normalized = CodexCliService.normalizeConfig({ ...current, ...(config || {}) });
-      if (action === 'status') {
-        const status = oauth.getStatus();
-        return {
-          success: status.signedIn,
-          action,
-          output: status.signedIn ? `Logged in with ChatGPT account (${status.email || 'unknown'})` : 'Not signed in',
-          config: normalized,
-        };
-      }
-      if (action === 'logout') {
-        oauth.signOut();
-        return { success: true, action, output: 'Logged out', config: normalized };
-      }
-      if (action === 'login') {
-        // For backwards-compat: the new flow uses codex:start-login IPC
-        // + a callback IPC, but if a legacy caller invokes
-        // codex-cli:login we still kick off the new flow so the
-        // Settings UI works.
-        try {
-          const result = await oauth.startLogin();
-          return {
-            success: true,
-            action,
-            output: `Logged in with ChatGPT account (${result.email || 'unknown'})`,
-            config: normalized,
-          };
-        } catch (e: any) {
-          return { success: false, action, error: e?.message || 'Codex login failed', config: normalized };
-        }
-      }
-      if (action === 'doctor') {
-        const status = oauth.getStatus();
-        return {
-          success: true,
-          action,
-          output: status.signedIn
-            ? `Codex doctor OK — signed in as ${status.email || 'unknown'}`
-            : 'Codex doctor OK — not signed in (run `codex:start-login`)',
-          config: normalized,
-        };
-      }
-      return { success: false, action, error: `Unknown auth action: ${action}`, config: normalized };
-    } catch (error: any) {
-      return { success: false, action, error: error.message || `Codex CLI ${action} failed.` };
-    }
-  };
-
-  safeHandle('codex-cli:auth-status', async (_, config?: any) => runCodexAuthAction('status', config));
-  safeHandle('codex-cli:logout', async (_, config?: any) => runCodexAuthAction('logout', config));
-  safeHandle('codex-cli:login', async (_, config?: any) => runCodexAuthAction('login', config));
-  safeHandle('codex-cli:doctor', async (_, config?: any) => runCodexAuthAction('doctor', config));
-
-  // ── ChatGPT OAuth (new — replaces `codex login` CLI subprocess) ──────────
-  // The renderer calls codex:start-login, which kicks off the PKCE flow,
-  // opens the system browser, and waits for the loopback callback. When
-  // the user completes (or denies) the auth in the browser, the
-  // CodexOAuthService emits 'login:complete' or 'login:failed', which we
-  // rebroadcast on the IPC bus as 'codex:login:complete' / ':failed' so
-  // the renderer can update its UI without polling.
-  const { CodexOAuthService: CodexOAuthServiceClass } = require('./services/CodexOAuthService');
-  const codexOAuth = CodexOAuthServiceClass.getInstance();
-  const broadcastCodexLoginEvent = (event: 'login:complete' | 'login:failed' | 'tokens:refreshed' | 'signed-out', payload: any) => {
-    try {
-      BrowserWindow.getAllWindows().forEach((win) => {
-        if (win.isDestroyed()) return;
-        win.webContents.send(`codex:${event}`, payload);
-      });
-    } catch { /* broadcast best-effort */ }
-  };
-  codexOAuth.on('login:complete', (info: any) => broadcastCodexLoginEvent('login:complete', info));
-  codexOAuth.on('login:failed', (err: Error) => broadcastCodexLoginEvent('login:failed', { message: err?.message || String(err) }));
-  codexOAuth.on('tokens:refreshed', (info: any) => broadcastCodexLoginEvent('tokens:refreshed', info));
-  codexOAuth.on('signed-out', async () => {
-    broadcastCodexLoginEvent('signed-out', undefined);
+  codexServer.on('login:failed', (error: Error) => broadcastCodex('login:failed', { message: error.message }));
+  codexServer.on('signed-out', async () => {
+    broadcastCodex('signed-out');
     await refreshRuntimeDefaultIfUnavailable();
     broadcastCredentialsChanged();
   });
-
-  safeHandle('codex:login-status', () => {
-    try {
-      return { success: true, ...codexOAuth.getStatus() };
-    } catch (error: any) {
-      return { success: false, error: error.message };
-    }
+  app.once('before-quit', () => codexServer.close());
+  // Warm the actual transport before the first chat, without blocking the window.
+  if (appState.processingHelper.getLLMHelper().getCodexCliConfig().enabled) {
+    void synchronizeCodexModels().then(() => broadcastCredentialsChanged()).catch(error => console.warn('[Codex] Startup:', error.message));
+  }
+  safeHandle('codex:list-models', async () => {
+    try { return { success: true, models: await synchronizeCodexModels(), config: appState.processingHelper.getLLMHelper().getCodexCliConfig() }; }
+    catch (error: any) { return { success: false, models: [], error: error.message }; }
   });
-
+  safeHandle('test-codex-cli', async (_, config?: any) => {
+    try {
+      const current = appState.processingHelper.getLLMHelper().getCodexCliConfig();
+      const normalized = CodexCliService.normalizeConfig({ ...current, ...config });
+      await codexServer.connect(normalized.path);
+      const output = await CodexCliService.run(normalized.path, { model: normalized.model, prompt: 'Reply with OK only.', timeoutMs: normalized.timeoutMs });
+      return { success: !!output.trim(), output, config: normalized, signedIn: codexServer.getStatus().signedIn };
+    } catch (error: any) { return { success: false, error: error.message }; }
+  });
+  const getCodexStatus = async (refresh = false) => {
+    if (refresh) await codexServer.refresh(codexPath()); else await codexServer.connect(codexPath());
+    return codexServer.getStatus();
+  };
+  const startCodexLogin = async () => {
+    await codexServer.connect(codexPath());
+    return new Promise<any>((resolve) => {
+      const cleanup = () => { clearTimeout(timer); codexServer.off('login:complete', success); codexServer.off('login:failed', failed); };
+      const success = (status: any) => { cleanup(); resolve({ success: true, ...status }); };
+      const failed = (error: Error) => { cleanup(); resolve({ success: false, error: error.message }); };
+      const timer = setTimeout(() => failed(new Error('Codex sign-in timed out. Please try again.')), 300_000);
+      codexServer.once('login:complete', success); codexServer.once('login:failed', failed);
+      void codexServer.startLogin().then(({ authUrl }) => {
+        const url = new URL(authUrl);
+        if (url.protocol !== 'https:' || !['auth.openai.com', 'chatgpt.com'].includes(url.hostname)) throw new Error('Codex returned an unexpected sign-in address.');
+        return shell.openExternal(authUrl);
+      }).catch(failed);
+    });
+  };
+  safeHandle('codex:login-status', async () => {
+    try { return { success: true, ...await getCodexStatus() }; }
+    catch (error: any) { return { success: false, signedIn: false, error: error.message }; }
+  });
   safeHandle('codex:start-login', async () => {
-    try {
-      const result = await codexOAuth.startLogin();
-      return { success: true, email: result.email, expiresAt: result.tokens.expiresAt };
-    } catch (error: any) {
-      return { success: false, error: error?.message || String(error) };
-    }
+    try { return await startCodexLogin(); } catch (error: any) { return { success: false, error: error.message }; }
   });
-
-  safeHandle('codex:sign-out', () => {
-    try {
-      codexOAuth.signOut();
-      return { success: true };
-    } catch (error: any) {
-      return { success: false, error: error.message };
-    }
-  });
-
-  // Force-refresh — used by the Settings UI's "Refresh now" button so the
-  // user can confirm the stored refresh token still works without waiting
-  // for a 401 from a chat call.
+  const signOutCodex = async () => {
+    try { await codexServer.signOut(); return { success: true }; }
+    catch (error: any) { return { success: false, error: error.message }; }
+  };
+  safeHandle('codex:sign-out', signOutCodex);
   safeHandle('codex:refresh-tokens', async () => {
     try {
-      const tokens = await codexOAuth.refreshTokens();
-      if (!tokens) {
-        return { success: false, error: 'Codex session expired. Please sign in again from Settings → AI Providers.' };
-      }
-      return { success: true, expiresAt: tokens.expiresAt, email: tokens.email };
-    } catch (error: any) {
-      return { success: false, error: error?.message || String(error) };
-    }
+      const status = await getCodexStatus(true);
+      if (!status.signedIn) return { success: false, error: 'Sign in with ChatGPT in Settings → AI Providers.' };
+      await synchronizeCodexModels(true);
+      broadcastCodex('tokens:refreshed', status);
+      return { success: true, ...status };
+    } catch (error: any) { return { success: false, error: error.message }; }
+  });
+  safeHandle('codex-cli:auth-status', async () => {
+    try { const status = await getCodexStatus(); return { success: status.signedIn, output: status.signedIn ? 'Logged in using ChatGPT' : 'Not signed in' }; }
+    catch (error: any) { return { success: false, error: error.message }; }
+  });
+  safeHandle('codex-cli:logout', signOutCodex);
+  safeHandle('codex-cli:login', async () => startCodexLogin());
+  safeHandle('codex-cli:doctor', async () => {
+    try { const models = await synchronizeCodexModels(true); return { success: true, output: `Codex connected. ${models.length} models available.` }; }
+    catch (error: any) { return { success: false, error: error.message }; }
   });
 
   // ── Supabase auth (email + password) — Settings "Account" tab ────────────

@@ -43,8 +43,8 @@ test('DEFAULT_CODEX_CLI_CONFIG has expected shape', () => {
   assert.equal(DEFAULT_CODEX_CLI_CONFIG.enabled, false);
   // `path` is preserved for IPC backward-compat but is ignored at runtime.
   assert.equal(DEFAULT_CODEX_CLI_CONFIG.path, 'codex');
-  assert.equal(DEFAULT_CODEX_CLI_CONFIG.model, 'gpt-5.4');
-  assert.equal(DEFAULT_CODEX_CLI_CONFIG.fastModel, 'gpt-5.3-codex');
+  assert.equal(DEFAULT_CODEX_CLI_CONFIG.model, 'gpt-5.5');
+  assert.equal(DEFAULT_CODEX_CLI_CONFIG.fastModel, 'gpt-5.5');
   assert.equal(DEFAULT_CODEX_CLI_CONFIG.timeoutMs, 60_000);
   assert.equal(DEFAULT_CODEX_CLI_CONFIG.sandboxMode, 'read-only');
 });
@@ -272,38 +272,10 @@ test('extractCodexError: handles plain string error message', () => {
 // CodexCliService.run / .stream — must throw when not signed in
 // =============================================================================
 
-test('run: throws when Codex OAuth is not signed in', async () => {
-  // The HTTP-direct path requires an OAuth token. Without one, run()
-  // surfaces a clear "sign in" error instead of silently failing into
-  // the canned fallback.
-  const oauthModulePath = path.resolve(__dirname, '../../../dist-electron/electron/services/CodexOAuthService.js');
-  const oauthMod = await import(pathToFileURL(oauthModulePath).href);
-  oauthMod.CodexOAuthService.getInstance().__resetForTest();
-  // Defensive: clear any persisted tokens by signing out.
-  oauthMod.CodexOAuthService.getInstance().signOut();
-
-  await assert.rejects(
-    () => CodexCliService.run('', {
-      prompt: 'hi', model: 'gpt-5.4', timeoutMs: 5_000,
-    }),
-    err => /signed in to ChatGPT/i.test(err.message),
-    'run() must surface a clear "sign in" error when OAuth is missing',
-  );
-});
-
-test('stream: throws when Codex OAuth is not signed in', async () => {
-  const oauthModulePath = path.resolve(__dirname, '../../../dist-electron/electron/services/CodexOAuthService.js');
-  const oauthMod = await import(pathToFileURL(oauthModulePath).href);
-  oauthMod.CodexOAuthService.getInstance().__resetForTest();
-  oauthMod.CodexOAuthService.getInstance().signOut();
-
-  const gen = CodexCliService.stream('', {
-    prompt: 'hi', model: 'gpt-5.4', timeoutMs: 5_000,
-  });
-  await assert.rejects(async () => {
-    // eslint-disable-next-line no-unused-vars
-    for await (const _ of gen) { /* drain */ }
-  }, err => /signed in to ChatGPT/i.test(err.message));
+test('run: reports a missing Codex executable without touching credentials', async () => {
+  await assert.rejects(() => CodexCliService.run('/does-not-exist/codex', {
+    prompt: 'hi', model: 'gpt-5.5', timeoutMs: 1000,
+  }), /Codex executable|Could not start Codex/);
 });
 
 test('stream: AbortSignal pre-aborted throws on first iteration', async () => {
@@ -745,28 +717,5 @@ test('parseSseStream: source-pin — done: true sets sawTerminalEvent=true (comm
 // at the 30s wall-clock mark. The fix converts the timer to an IDLE timer
 // that resets on every yielded delta. This source-pin verifies the fix.
 
-test('stream(): source uses resetDeadline() on each yielded delta — idle-timer fix pin', () => {
-  const source = fs.readFileSync(
-    path.resolve(__dirname, '../../../electron/services/CodexCliService.ts'),
-    'utf8',
-  );
-  // stream() starts with `public static async *stream(`
-  const streamMethodIdx = source.indexOf('public static async *stream(');
-  assert.ok(streamMethodIdx > 0, 'stream() method must still exist in CodexCliService.ts');
-  // 3000 chars: enough to span the full method body including the for-await loop.
-  const streamBody = source.slice(streamMethodIdx, streamMethodIdx + 3000);
-
-  // The fix: resetDeadline must be defined and called inside the for-await loop.
-  assert.match(streamBody, /resetDeadline\s*=\s*\(\)\s*=>/,
-    'stream() must define resetDeadline as an idle-timer reset function');
-  assert.match(streamBody, /resetDeadline\(\)/,
-    'stream() must call resetDeadline() — idle-timer must reset on each delta (wall-clock abort fix)');
-
-  // resetDeadline must be called inside the `for await` loop, before/alongside yield delta.
-  const forAwaitIdx = streamBody.indexOf('for await (const delta of deltas)');
-  assert.ok(forAwaitIdx > 0, 'stream() must still have a `for await` loop over deltas');
-  const loopBody = streamBody.slice(forAwaitIdx, forAwaitIdx + 200);
-  assert.match(loopBody, /resetDeadline\(\)/,
-    'resetDeadline() must be called inside the for-await loop body — not outside it');
-});
-
+// App Server idle-timeout and cancellation are exercised behaviorally in
+// CodexAppServerService.test.mjs instead of pinning HTTP implementation text.

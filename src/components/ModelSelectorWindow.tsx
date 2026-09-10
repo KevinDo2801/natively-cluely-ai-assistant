@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useLayoutEffect, useMemo, useRef } from 'react';
 import { Check, Loader2 } from 'lucide-react';
-import { CODEX_CLI_MODEL, CODEX_CLI_MODEL_PRESETS, codexCliSelectorId, getCodexCliModelDisplayName, isModelAllowed, litellmModelLabel, STANDARD_CLOUD_MODELS, prettifyModelId } from '../utils/modelUtils';
+import { CODEX_CLI_MODEL, codexCliSelectorId, getCodexCliModelDisplayName, isModelAllowed, litellmModelLabel, STANDARD_CLOUD_MODELS, prettifyModelId } from '../utils/modelUtils';
 import { useResolvedTheme } from '../hooks/useResolvedTheme';
 import { getMeetingInterfaceTheme, type MeetingInterfaceTheme } from '../lib/meetingInterfaceTheme';
 import {
@@ -113,11 +113,19 @@ const ModelSelectorWindow = () => {
                 // 1. Get Stored Credentials (to know which Cloud providers are active)
                 const creds = await window.electronAPI?.getStoredCredentials?.();
 
-                // 2. Custom Providers
-                const customProviders = await window.electronAPI?.getCustomProviders?.() || [];
+                // 2. Custom Providers + authoritative cloud catalogs. Discovery
+                // runs in main with stored keys, so secrets never cross IPC.
+                const [customProviders, cloudCatalogResult] = await Promise.all([
+                    window.electronAPI?.getCustomProviders?.() || [],
+                    window.electronAPI?.refreshProviderModelCatalogs?.().catch(() => null),
+                ]);
+                const cloudCatalogs = cloudCatalogResult?.models
+                    || (await window.electronAPI?.getCloudFetchedModels?.().catch(() => null))?.models
+                    || {};
 
                 // 3. Codex CLI
-                const codexCliConfig = await window.electronAPI?.getCodexCliConfig?.();
+                const codexCatalog = await window.electronAPI?.codexListModels?.();
+                const codexCliConfig = codexCatalog?.config || await window.electronAPI?.getCodexCliConfig?.();
 
                 // 4. Ollama
                 let ollamaModels: string[] = [];
@@ -160,14 +168,23 @@ const ModelSelectorWindow = () => {
                     models.push({ id: 'natively', name: 'Natively API', type: 'cloud', provider: 'natively' });
                 }
 
-                // Cloud Models — standard models + unique preferred models
+                // Cloud models — the account-specific API catalog is the source
+                // of truth. Presets only keep a provider usable while its first
+                // discovery is offline or unauthorized.
                 for (const [prov, cfg] of Object.entries(STANDARD_CLOUD_MODELS)) {
                     if (!cfg.hasKeyCheck(creds)) continue;
-                    cfg.ids.forEach((id, i) => {
-                        models.push({ id, name: cfg.names[i], type: 'cloud', provider: prov });
+                    const discovered = cloudCatalogs[prov] || [];
+                    const source = discovered.length > 0
+                        ? discovered
+                        : cfg.ids.map((id, i) => ({ id, label: cfg.names[i] || prettifyModelId(id) }));
+                    const seen = new Set<string>();
+                    source.forEach(({ id, label }) => {
+                        if (!id || seen.has(id)) return;
+                        seen.add(id);
+                        models.push({ id, name: label || prettifyModelId(id), type: 'cloud', provider: prov });
                     });
                     const pm = creds?.[cfg.pmKey];
-                    if (pm && !cfg.ids.includes(pm)) {
+                    if (pm && !seen.has(pm)) {
                         models.push({ id: pm, name: prettifyModelId(pm), type: 'cloud', provider: prov });
                     }
                 }
@@ -180,7 +197,7 @@ const ModelSelectorWindow = () => {
                 // Codex CLI
                 if (codexCliConfig?.enabled) {
                     models.push({ id: CODEX_CLI_MODEL.id, name: `${CODEX_CLI_MODEL.name} (${prettifyModelId(codexCliConfig.model)})`, type: 'codex-cli', provider: 'codex-cli' });
-                    CODEX_CLI_MODEL_PRESETS.forEach(model => {
+                    (codexCatalog?.models || []).forEach(model => {
                         const id = codexCliSelectorId(model.id);
                         models.push({ id, name: getCodexCliModelDisplayName(id) || model.name, type: 'codex-cli', provider: 'codex-cli' });
                     });

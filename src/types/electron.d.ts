@@ -174,6 +174,7 @@ export interface ElectronAPI {
   getAvailableLiteLLMModels: () => Promise<string[]>
   refreshLiteLLMModels: () => Promise<string[]>
   getCloudFetchedModels: () => Promise<{ models: Record<string, { id: string; label: string }[]>; fetchedAt: Record<string, number> }>
+  refreshProviderModelCatalogs: (options?: { force?: boolean; providers?: Array<'gemini' | 'groq' | 'openai' | 'claude' | 'deepseek' | 'nvidia_nim'> }) => Promise<{ success: boolean; models: Record<string, { id: string; label: string }[]>; fetchedAt: Record<string, number>; errors: Record<string, string> }>
   getDisabledProviders: () => Promise<string[]>
   setDisabledProviders: (providers: string[]) => Promise<{ success: boolean; error?: string }>
   setCloudEnabledModels: (provider: string, models: string[]) => Promise<{ success: boolean; error?: string }>
@@ -480,6 +481,7 @@ export interface ElectronAPI {
   codexCliLogin: (config?: any) => Promise<{ success: boolean; action: string; output?: string; error?: string; resolvedPath?: string; config?: any }>;
   codexCliDoctor: (config?: any) => Promise<{ success: boolean; action: string; output?: string; error?: string; resolvedPath?: string; config?: any }>;
   // ChatGPT OAuth (PKCE) — replaces the old `codex login` CLI subprocess.
+  codexListModels: () => Promise<{ success: boolean; models: { id: string; name: string; isDefault: boolean; efforts: string[]; defaultEffort?: string }[]; config?: any; error?: string }>;
   codexLoginStatus: () => Promise<{ success: boolean; signedIn: boolean; email?: string; expiresAt?: number; error?: string }>;
   codexStartLogin: () => Promise<{ success: boolean; email?: string; expiresAt?: number; error?: string }>;
   codexSignOut: () => Promise<{ success: boolean; error?: string }>;

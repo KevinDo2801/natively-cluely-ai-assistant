@@ -1494,8 +1494,8 @@ export class LLMHelper {
     if (this.isProviderDisabled('codex-cli')) return false;
     if (!this.codexCliConfig.enabled) return false;
     try {
-      const { CodexOAuthService } = require('./services/CodexOAuthService');
-      return CodexOAuthService.getInstance().getStatus().signedIn === true;
+      const { CodexAppServerService } = require('./services/CodexAppServerService');
+      return CodexAppServerService.getInstance().getStatus().signedIn === true;
     } catch {
       return false;
     }

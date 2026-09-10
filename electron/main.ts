@@ -2129,8 +2129,8 @@ export class AppState {
       llmHelper.setCodexCliConfig({
         enabled: !!settingsManager.get('codexCliEnabled'),
         path: settingsManager.get('codexCliPath') || 'codex',
-        model: settingsManager.get('codexCliModel') || 'gpt-5.4',
-        fastModel: settingsManager.get('codexCliFastModel') || 'gpt-5.3-codex-spark',
+        model: settingsManager.get('codexCliModel') || 'gpt-5.5',
+        fastModel: settingsManager.get('codexCliFastModel') || settingsManager.get('codexCliModel') || 'gpt-5.5',
         timeoutMs: settingsManager.get('codexCliTimeoutMs') || 60_000,
         sandboxMode: settingsManager.get('codexCliSandboxMode') || 'read-only',
         serviceTier: settingsManager.get('codexCliServiceTier') || 'default',

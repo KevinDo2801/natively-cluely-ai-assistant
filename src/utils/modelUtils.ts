@@ -57,15 +57,11 @@ export const STANDARD_CLOUD_MODELS: Record<string, {
 export const CODEX_CLI_MODEL = {
     id: 'codex-cli',
     name: 'Codex CLI',
-    desc: 'Local CLI transport',
+    desc: 'Official Codex connection',
 };
 
-export const CODEX_CLI_MODEL_PRESETS = [
-    { id: 'gpt-5.5', name: 'ChatGPT 5.5' },
-    { id: 'gpt-5.3-codex', name: 'Codex 5.3' },
-    { id: 'gpt-5.3-codex-spark', name: 'Codex Spark 5.3' },
-    { id: 'gpt-5.4', name: 'ChatGPT 5.4' },
-];
+// Filled by the official model/list IPC; no account-independent catalog.
+export const CODEX_CLI_MODEL_PRESETS: { id: string; name: string }[] = [];
 
 export const codexCliSelectorId = (modelId: string): string => `codex-cli:${modelId}`;
 

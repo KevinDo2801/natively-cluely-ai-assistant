@@ -1,7 +1,7 @@
 import React, { useState, useEffect, useRef, useCallback, useMemo } from 'react';
 import { useT } from '../../i18n';
 import { Plus, Trash2, Edit2, AlertCircle, Save, ChevronDown, Check, RefreshCw, ExternalLink, Loader2, LogOut, Cloud, Server, Eye, Info, MessageSquare, Image, FileText, User, Boxes, ClipboardList, Laptop } from 'lucide-react';
-import { CODEX_CLI_MODEL, CODEX_CLI_MODEL_PRESETS, codexCliSelectorId, isModelAllowed, isOptInModelProvider, litellmModelLabel, STANDARD_CLOUD_MODELS, prettifyModelId } from '../../utils/modelUtils';
+import { CODEX_CLI_MODEL, codexCliSelectorId, isModelAllowed, isOptInModelProvider, litellmModelLabel, STANDARD_CLOUD_MODELS, prettifyModelId } from '../../utils/modelUtils';
 import { validateCurl } from '../../lib/curl-validator';
 import { ProviderCard } from './ProviderCard';
 import { ConfirmDialog } from '../ui/ConfirmDialog';
@@ -1679,38 +1679,6 @@ const CODEX_SERVICE_TIERS = ['default', 'fast', 'flex'] as const;
 // Settings UI runs in the renderer (no direct module access to main).
 const CODEX_MODEL_REASONING_EFFORTS = ['none', 'low', 'medium', 'high', 'xhigh'] as const;
 
-// Per-model valid reasoning-effort sets (mirrors CodexCliService's
-// CODEX_MODEL_REASONING_SETS). Longest-match wins so gpt-5.4-codex beats
-// gpt-5. The dropdown hides unsupported values per the currently-selected
-// model so a user can't pick e.g. xhigh for gpt-5.3-codex (which the codex
-// CLI binary rejects with a 400).
-const CODEX_MODEL_REASONING_SETS: ReadonlyArray<readonly [string, readonly string[]]> = [
-    ['gpt-5-2025-08-07', ['low', 'medium', 'high']],
-    ['gpt-5-mini',       ['low', 'medium', 'high']],
-    ['gpt-5-nano',       ['low', 'medium', 'high']],
-    ['gpt-5',            ['low', 'medium', 'high']],
-    ['gpt-5.1',          ['none', 'low', 'medium', 'high']],
-    ['gpt-5.2',          ['none', 'low', 'medium', 'high', 'xhigh']],
-    ['gpt-5.4',          ['none', 'low', 'medium', 'high', 'xhigh']],
-    ['gpt-5.5',          ['none', 'low', 'medium', 'high', 'xhigh']],
-    ['gpt-5.5-codex',    ['low', 'medium', 'high', 'xhigh']],
-    ['gpt-5.4-codex',    ['low', 'medium', 'high', 'xhigh']],
-    ['gpt-5.3-codex-spark', ['low', 'medium', 'high']],
-    ['gpt-5.3-codex',    ['low', 'medium', 'high']],
-    ['gpt-5.2-codex',    ['low', 'medium', 'high', 'xhigh']],
-    ['gpt-5.1-codex',    ['low', 'medium', 'high']],
-    ['gpt-5-codex',      ['low', 'medium', 'high']],
-];
-
-function getValidCodexReasoningEfforts(modelId: string): readonly string[] {
-    const id = (modelId || '').toLowerCase();
-    let best: readonly [string, readonly string[]] | null = null;
-    for (const entry of CODEX_MODEL_REASONING_SETS) {
-        if (id.includes(entry[0]) && (!best || entry[0].length > best[0].length)) best = entry;
-    }
-    return best ? best[1] : ['low', 'medium', 'high'];
-}
-
 // LiteLLM max-output-token presets — the standard per-model output budgets
 // (powers of two used across the LiteLLM model registry). '' = Auto: resolve
 // each model's real budget from the proxy's /model/info, fallback 8192.
@@ -1824,23 +1792,15 @@ const ModelSelect: React.FC<ModelSelectProps> = ({ value, options, onChange, pla
 const CodexCliModelField: React.FC<{
     label: string;
     value: string;
+    options: { id: string; name: string }[];
     onSelect: (value: string) => void;
-}> = ({ label, value, onSelect }) => {
+}> = ({ label, value, options, onSelect }) => {
     const t = useT();
     return (
-    <label className="space-y-1 block min-w-0">
-        <span className="aip-label">{label}</span>
-        <ModelSelect
-            value={value}
-            options={value && !CODEX_CLI_MODEL_PRESETS.some(option => option.id === value)
-                // Keep a value that came from a previous build or a hand-edited
-                // config selectable rather than silently dropping it.
-                ? [{ id: value, name: prettifyModelId(value) }, ...CODEX_CLI_MODEL_PRESETS]
-                : CODEX_CLI_MODEL_PRESETS}
-            onChange={onSelect}
-            placeholder={t("Select a model")}
-        />
-    </label>
+        <label className="space-y-1 block min-w-0">
+            <span className="aip-label">{label}</span>
+            <ModelSelect value={value} options={options} onChange={onSelect} placeholder={t("Select a model")} />
+        </label>
     );
 };
 
@@ -2084,7 +2044,7 @@ export const AIProvidersSettings: React.FC<AIProvidersSettingsProps> = ({
     };
 
     // --- Local (Codex CLI) ---
-    const [codexCliConfig, setCodexCliConfig] = useState({ enabled: false, path: 'codex', model: 'gpt-5.4', fastModel: 'gpt-5.3-codex-spark', timeoutMs: 60000, sandboxMode: 'read-only' as string, serviceTier: 'default', modelReasoningEffort: undefined as string | undefined });
+    const [codexCliConfig, setCodexCliConfig] = useState({ enabled: false, path: 'codex', model: 'gpt-5.5', fastModel: 'gpt-5.5', timeoutMs: 60000, sandboxMode: 'read-only' as string, serviceTier: 'default', modelReasoningEffort: undefined as string | undefined });
     const [codexCliStatus, setCodexCliStatus] = useState<'idle' | 'testing' | 'success' | 'error'>('idle');
     const [codexCliError, setCodexCliError] = useState('');
     const [codexAuthAction, setCodexAuthAction] = useState<'idle' | 'status' | 'logout' | 'login' | 'doctor'>('idle');
@@ -2098,6 +2058,20 @@ export const AIProvidersSettings: React.FC<AIProvidersSettingsProps> = ({
     // without leaving Settings.
     const [codexOauthStatus, setCodexOauthStatus] = useState<{ signedIn: boolean; email?: string; expiresAt?: number }>({ signedIn: false });
     const [codexOauthInProgress, setCodexOauthInProgress] = useState(false);
+    const [codexModels, setCodexModels] = useState<{ id: string; name: string; efforts: string[] }[]>([]);
+    const [codexModelsError, setCodexModelsError] = useState('');
+    useEffect(() => {
+        let cancelled = false;
+        if (!codexOauthStatus.signedIn) { setCodexModels([]); return; }
+        window.electronAPI.codexListModels().then(result => {
+            if (cancelled) return;
+            setCodexModels(result.models || []);
+            setCodexModelsError(result.success ? '' : result.error || 'Could not load Codex models.');
+            if (result.config) setCodexCliConfig(result.config);
+        }).catch(error => { if (!cancelled) setCodexModelsError(String(error)); });
+        return () => { cancelled = true; };
+    }, [codexOauthStatus.signedIn, codexOauthStatus.email, codexCliConfig.path, codexOauthStatus]);
+
 
     // --- Default Model ---
     const [defaultModel, setDefaultModel] = useState<string>('gemini-3.7-flash');
@@ -2250,8 +2224,10 @@ export const AIProvidersSettings: React.FC<AIProvidersSettingsProps> = ({
                     if (creds.litellmPreferredModel) pm.litellm = creds.litellmPreferredModel;
                     setDisabledProviders(Array.isArray(creds.disabledProviders) ? creds.disabledProviders : []);
                     setCloudEnabledModelsState(creds.cloudEnabledModels || {});
-                    window.electronAPI?.getCloudFetchedModels?.()
-                        .then((res: { models?: Record<string, AipModelEntry[]> }) => { if (res?.models) setCloudFetchedModels(res.models); })
+                    window.electronAPI?.refreshProviderModelCatalogs?.()
+                        .then((res) => { if (res?.models) setCloudFetchedModels(res.models); })
+                        .catch(() => window.electronAPI?.getCloudFetchedModels?.()
+                            .then((res: { models?: Record<string, AipModelEntry[]> }) => { if (res?.models) setCloudFetchedModels(res.models); }))
                         .catch(() => {});
                     setPreferredModels(pm);
                 }
@@ -2352,7 +2328,12 @@ export const AIProvidersSettings: React.FC<AIProvidersSettingsProps> = ({
             seen.add(id);
             out.push({ id, label });
         };
-        preset?.ids.forEach((id, i) => push(id, preset.names[i] || id));
+        const discovered = cloudFetchedModels[provider] || [];
+        if (discovered.length > 0) {
+            discovered.forEach(m => push(m.id, m.label || m.id));
+        } else {
+            preset?.ids.forEach((id, i) => push(id, preset.names[i] || id));
+        }
         // LiteLLM has no preset table and no `cloudFetchedModels` entry — its universe
         // is whatever the proxy reported, held UNPREFIXED in `litellmModels`. Prefix it
         // here so the allow-list stores the same `litellm/<model>` ids that
@@ -2376,7 +2357,7 @@ export const AIProvidersSettings: React.FC<AIProvidersSettingsProps> = ({
             opts.push({ id: 'natively', name: 'Natively API' });
         }
 
-        for (const [prov, cfg] of Object.entries(STANDARD_CLOUD_MODELS)) {
+        for (const prov of Object.keys(STANDARD_CLOUD_MODELS)) {
             if (!hasStoredKey[prov as keyof typeof hasStoredKey]) continue;
             if (!isProviderEnabled(prov)) continue;
             // Every allow-listed model reaches the picker — not just the preferred one.
@@ -2396,7 +2377,7 @@ export const AIProvidersSettings: React.FC<AIProvidersSettingsProps> = ({
         }
         if (isCodexReady && isProviderEnabled('codex-cli')) {
             opts.push({ id: CODEX_CLI_MODEL.id, name: `${CODEX_CLI_MODEL.name} (${prettifyModelId(codexCliConfig.model)})` });
-            CODEX_CLI_MODEL_PRESETS.forEach(model => {
+            codexModels.forEach(model => {
                 const id = codexCliSelectorId(model.id);
                 if (!opts.find(o => o.id === id)) {
                     opts.push({ id, name: `${CODEX_CLI_MODEL.name}: ${model.name}` });
@@ -2433,7 +2414,7 @@ export const AIProvidersSettings: React.FC<AIProvidersSettingsProps> = ({
         const next = opts[0].id;
         setDefaultModel(next);
         window.electronAPI?.setDefaultModel?.(next).catch(console.error);
-    }, [credentialsLoaded, defaultModel, hasStoredKey, preferredModels, isCodexReady, codexCliConfig.model, customProviders, ollamaModels, litellmModels, disabledProviders, cloudEnabledModels]);
+    }, [credentialsLoaded, defaultModel, hasStoredKey, preferredModels, isCodexReady, codexCliConfig.model, codexModels, customProviders, ollamaModels, litellmModels, disabledProviders, cloudEnabledModels]);
 
     // Load LiteLLM model IDs only when the proxy is configured. The active-model
     // selector should not expose stale `litellm/...` choices after the proxy is
@@ -2985,6 +2966,12 @@ export const AIProvidersSettings: React.FC<AIProvidersSettingsProps> = ({
                 setSavedStatus(prev => ({ ...prev, [provider]: true }));
                 setHasStoredKey(prev => ({ ...prev, [provider]: true }));
                 setter('');
+                const cloudProvider = provider as CloudProviderId;
+                window.electronAPI?.refreshProviderModelCatalogs?.({ force: true, providers: [cloudProvider] })
+                    .then((catalog) => {
+                        if (catalog?.models) setCloudFetchedModels(catalog.models);
+                    })
+                    .catch((error) => console.warn(`Failed to refresh ${provider} models:`, error));
                 setTimeout(() => setSavedStatus(prev => ({ ...prev, [provider]: false })), 2000);
             }
         } catch (e) {
@@ -3563,11 +3550,14 @@ export const AIProvidersSettings: React.FC<AIProvidersSettingsProps> = ({
                         </p>
                     )}
 
+                    {codexModelsError && <p role="alert" className="text-xs aip-danger-fg">{codexModelsError}</p>}
+                    <p className="text-xs aip-muted">{t('Uses the Codex installation and ChatGPT sign-in on this computer. Signing out also signs Codex out.')}</p>
                     {/* Model + settings — only shown once signed in */}
                     {codexOauthStatus.signedIn && (
                         <>
                             <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
                                 <CodexCliModelField
+                                    options={codexModels}
                                     label={t("Model")}
                                     value={codexCliConfig.model}
                                     onSelect={(model) => {
@@ -3576,6 +3566,7 @@ export const AIProvidersSettings: React.FC<AIProvidersSettingsProps> = ({
                                     }}
                                 />
                                 <CodexCliModelField
+                                    options={codexModels}
                                     label={t("Fast Mode Model")}
                                     value={codexCliConfig.fastModel}
                                     onSelect={(fastModel) => {
@@ -3587,14 +3578,14 @@ export const AIProvidersSettings: React.FC<AIProvidersSettingsProps> = ({
                                     <span className="aip-label">{t('Reasoning Effort')}</span>
                                     <ModelSelect
                                         value={(() => {
-                                            const valid = getValidCodexReasoningEfforts(codexCliConfig.model);
+                                            const valid = codexModels.find(model => model.id === codexCliConfig.model)?.efforts || [];
                                             if (!codexCliConfig.modelReasoningEffort) return '';
                                             return valid.includes(codexCliConfig.modelReasoningEffort)
                                                 ? codexCliConfig.modelReasoningEffort
                                                 : '';
                                         })()}
                                         options={(() => {
-                                            const valid = getValidCodexReasoningEfforts(codexCliConfig.model);
+                                            const valid = codexModels.find(model => model.id === codexCliConfig.model)?.efforts || [];
                                             return [
                                                 { id: '', name: t('None (default)') },
                                                 ...CODEX_MODEL_REASONING_EFFORTS
@@ -3606,7 +3597,7 @@ export const AIProvidersSettings: React.FC<AIProvidersSettingsProps> = ({
                                         placeholder={t("None (default)")}
                                     />
                                     {(() => {
-                                        const valid = getValidCodexReasoningEfforts(codexCliConfig.model);
+                                        const valid = codexModels.find(model => model.id === codexCliConfig.model)?.efforts || [];
                                         const saved = codexCliConfig.modelReasoningEffort;
                                         if (saved && !valid.includes(saved)) {
                                             return (
