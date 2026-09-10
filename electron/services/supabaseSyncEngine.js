@@ -549,12 +549,18 @@ function localRowToCloudValues(lr, def) {
 /** Apply pulled rows + deletions + tombstones to the local SQLite. */
 function applyToLocal(db, def, actions) {
   const pk = def.pk || 'id';
-  const cols = [...def.columns, 'updated_at'];
+  // A few table definitions already mirror updated_at explicitly. Keep the
+  // INSERT column list unique while still guaranteeing every synced table
+  // receives the remote LWW timestamp.
+  const cols = [...new Set([...def.columns, 'updated_at'])];
+  const updateCols = cols.filter((c) => c !== pk);
 
   const run = db.transaction(() => {
     const insert = db.prepare(
-      `INSERT OR REPLACE INTO ${def.table} (${cols.map((c) => `"${c}"`).join(', ')})
-       VALUES (${cols.map(() => '?').join(', ')})`
+      `INSERT INTO "${def.table}" (${cols.map((c) => `"${c}"`).join(', ')})
+       VALUES (${cols.map(() => '?').join(', ')})
+       ON CONFLICT("${pk}") DO UPDATE SET
+       ${updateCols.map((c) => `"${c}" = excluded."${c}"`).join(', ')}`
     );
     for (const cr of actions.pullRows) {
       const values = cloudRowToLocalValues(cr, def);
@@ -876,6 +882,7 @@ module.exports = {
   readLocalRows,
   readLocalTombstones,
   planTableSync,
+  applyToLocal,
   syncTable,
   syncAll,
 };

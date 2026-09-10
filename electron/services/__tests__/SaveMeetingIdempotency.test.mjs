@@ -4,10 +4,10 @@
 // given meeting id. The real flow saves a meeting TWICE under the same id:
 //   1. MeetingPersistence.stopMeeting() writes a placeholder snapshot,
 //   2. MeetingPersistence.processAndSaveMeeting() writes the final record.
-// The meetings row uses INSERT OR REPLACE, but transcripts / ai_interactions are
-// append-only with autoincrement ids, so without a DELETE-before-insert the second
-// save DOUBLED every child row. Recovery / RAG reprocessing then read duplicated
-// transcripts.
+// The parent meeting must be updated in place: SQLite's INSERT OR REPLACE deletes
+// the existing parent before inserting its replacement, which activates the
+// ON DELETE CASCADE foreign keys and destroys transcript/usage rows before the
+// id-preserving child reconciliation can see them.
 //
 // This test drives an in-memory better-sqlite3 with the EXACT production schema and
 // the EXACT saveMeeting transaction body (mirroring DatabaseManager.saveMeeting,
@@ -31,6 +31,7 @@ const __dirname = path.dirname(fileURLToPath(import.meta.url));
 // Minimal slice of the production schema relevant to saveMeeting (DatabaseManager
 // runMigrations v1). Mirrors db/DatabaseManager.ts:191-222.
 function makeSchema(db) {
+  db.pragma('foreign_keys = ON');
   db.exec(`
     CREATE TABLE meetings (
       id TEXT PRIMARY KEY,
@@ -50,7 +51,8 @@ function makeSchema(db) {
       meeting_id TEXT,
       speaker TEXT,
       content TEXT,
-      timestamp_ms INTEGER
+      timestamp_ms INTEGER,
+      FOREIGN KEY(meeting_id) REFERENCES meetings(id) ON DELETE CASCADE
     );
     CREATE TABLE ai_interactions (
       id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -59,8 +61,25 @@ function makeSchema(db) {
       timestamp INTEGER,
       user_query TEXT,
       ai_response TEXT,
-      metadata_json TEXT
+      metadata_json TEXT,
+      FOREIGN KEY(meeting_id) REFERENCES meetings(id) ON DELETE CASCADE
     );
+    CREATE TABLE sync_tombstones (
+      table_name TEXT NOT NULL,
+      row_id TEXT NOT NULL,
+      deleted_at TEXT NOT NULL DEFAULT '2026-09-10T00:00:00.000Z',
+      PRIMARY KEY (table_name, row_id)
+    );
+    CREATE TRIGGER trg_transcripts_ad AFTER DELETE ON transcripts FOR EACH ROW
+    BEGIN
+      INSERT OR REPLACE INTO sync_tombstones (table_name, row_id, deleted_at)
+      VALUES ('transcripts', CAST(OLD.id AS TEXT), '2026-09-10T00:00:00.000Z');
+    END;
+    CREATE TRIGGER trg_ai_interactions_ad AFTER DELETE ON ai_interactions FOR EACH ROW
+    BEGIN
+      INSERT OR REPLACE INTO sync_tombstones (table_name, row_id, deleted_at)
+      VALUES ('ai_interactions', CAST(OLD.id AS TEXT), '2026-09-10T00:00:00.000Z');
+    END;
   `);
 }
 
@@ -71,8 +90,19 @@ function makeSchema(db) {
 // tombstones during a long live meeting).
 function saveMeeting(db, meeting, startTimeMs, durationMs) {
   const insertMeeting = db.prepare(`
-    INSERT OR REPLACE INTO meetings (id, title, start_time, duration_ms, summary_json, created_at, calendar_event_id, source, is_processed, summary_status, is_live)
+    INSERT INTO meetings (id, title, start_time, duration_ms, summary_json, created_at, calendar_event_id, source, is_processed, summary_status, is_live)
     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    ON CONFLICT(id) DO UPDATE SET
+      title = excluded.title,
+      start_time = excluded.start_time,
+      duration_ms = excluded.duration_ms,
+      summary_json = excluded.summary_json,
+      created_at = excluded.created_at,
+      calendar_event_id = excluded.calendar_event_id,
+      source = excluded.source,
+      is_processed = excluded.is_processed,
+      summary_status = excluded.summary_status,
+      is_live = excluded.is_live
   `);
   const summaryJson = JSON.stringify({ legacySummary: meeting.summary, detailedSummary: meeting.detailedSummary });
 
@@ -177,12 +207,28 @@ describe('saveMeeting idempotency (audit finding #1)', () => {
     assert.equal(iCount, 1, 'should hold exactly the 1 interaction, not 2');
 
     const mCount = db.prepare('SELECT COUNT(*) c FROM meetings WHERE id = ?').get('meeting-A').c;
-    assert.equal(mCount, 1, 'INSERT OR REPLACE keeps exactly one meeting row');
+    assert.equal(mCount, 1, 'UPSERT keeps exactly one meeting row');
 
-    // The final record's metadata wins (INSERT OR REPLACE).
+    // The final record's metadata wins without replacing the parent row.
     const row = db.prepare('SELECT title, is_processed FROM meetings WHERE id = ?').get('meeting-A');
     assert.equal(row.title, 'Intro chat');
     assert.equal(row.is_processed, 1);
+
+    assert.deepEqual(
+      db.prepare('SELECT id FROM transcripts WHERE meeting_id = ? ORDER BY id').all('meeting-A').map((r) => r.id),
+      [1, 2],
+      'parent UPSERT must preserve transcript ids',
+    );
+    assert.deepEqual(
+      db.prepare('SELECT id FROM ai_interactions WHERE meeting_id = ? ORDER BY id').all('meeting-A').map((r) => r.id),
+      [1],
+      'parent UPSERT must preserve interaction ids',
+    );
+    assert.equal(
+      db.prepare('SELECT COUNT(*) c FROM sync_tombstones').get().c,
+      0,
+      'updating a meeting must not cascade-delete children or emit tombstones',
+    );
   });
 
   test('re-saving with fewer children shrinks the child set (no stale rows)', () => {
@@ -226,6 +272,8 @@ describe('saveMeeting source guard (compiled code uses the id-preserving child r
     assert.ok(fs.existsSync(compiled), `compiled DatabaseManager.js missing — run build:electron (${compiled})`);
     const src = fs.readFileSync(compiled, 'utf8');
     assert.match(src, /rewriteMeetingChildren/, 'must use the id-preserving child rewrite');
+    assert.match(src, /ON CONFLICT\(id\) DO UPDATE SET/, 'meeting parent must use an in-place UPSERT');
+    assert.doesNotMatch(src, /INSERT OR REPLACE INTO meetings/, 'meeting parent replacement cascades away child rows');
     assert.match(src, /DELETE FROM transcripts WHERE id = \?/, 'must delete stale transcripts by id (not meeting_id)');
     assert.doesNotMatch(src, /DELETE FROM transcripts WHERE meeting_id = \?/, 'must NOT bulk-delete transcripts by meeting_id (id churn → tombstone churn)');
     assert.doesNotMatch(src, /DELETE FROM ai_interactions WHERE meeting_id = \?/, 'must NOT bulk-delete interactions by meeting_id');

@@ -1623,11 +1623,24 @@ export class DatabaseManager {
         }
 
         const insertMeeting = this.db.prepare(`
-            INSERT OR REPLACE INTO meetings (id, title, start_time, duration_ms, summary_json, created_at, calendar_event_id, source, is_processed, summary_status, user_titled, is_live, folder_id)
+            INSERT INTO meetings (id, title, start_time, duration_ms, summary_json, created_at, calendar_event_id, source, is_processed, summary_status, user_titled, is_live, folder_id)
             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            ON CONFLICT(id) DO UPDATE SET
+                title = excluded.title,
+                start_time = excluded.start_time,
+                duration_ms = excluded.duration_ms,
+                summary_json = excluded.summary_json,
+                created_at = excluded.created_at,
+                calendar_event_id = excluded.calendar_event_id,
+                source = excluded.source,
+                is_processed = excluded.is_processed,
+                summary_status = excluded.summary_status,
+                user_titled = excluded.user_titled,
+                is_live = excluded.is_live,
+                folder_id = excluded.folder_id
         `);
-        // RC-7 (2026-08-21): INSERT OR REPLACE rewrites the whole row, so a
-        // user rename made while the row still said "Processing…" (the
+        // RC-7 (2026-08-21): a later save can otherwise overwrite a user
+        // rename made while the row still said "Processing…" (the
         // placeholder → final-save window can span a slow summary generation)
         // was clobbered by the final save's generated title AND lost its
         // user_titled stamp. Pre-read the flag and let the user's title win.
@@ -1652,9 +1665,9 @@ export class DatabaseManager {
             // a meeting out of its folder.
             const folderId = meeting.folderId !== undefined ? meeting.folderId : (existing?.folder_id ?? null);
             // START-TIME FIX: created_at is the meeting's START time (the live
-            // note is created at Start with date = start time). INSERT OR
-            // REPLACE rewrites the whole row, and the old final-save path
-            // stamped `new Date()` (the END time) into meeting.date, which
+            // note is created at Start with date = start time). The old
+            // final-save path stamped `new Date()` (the END time) into
+            // meeting.date, which
             // moved created_at forward and made the launcher show the end time
             // as the start time. Preserve the existing created_at on every
             // re-save (live note → final save → RAG re-save) exactly like the
@@ -2739,4 +2752,3 @@ natively.contact@gmail.com`;
         console.log('[DatabaseManager] Seeded demo meeting.');
     }
 }
-
