@@ -19,6 +19,8 @@ test('the complete overlay family is re-hidden from the Windows taskbar', () => 
   assert.match(method, /this\.adapter\.isWindows\(\)/);
   assert.match(method, /this\.overlayWindow, this\.pillWindow, this\.toggleWindow/);
   assert.match(method, /win\.setSkipTaskbar\(true\)/);
+  assert.match(method, /setTimeout\(\(\) =>/,
+    'DWM can apply show/focusability styles after the synchronous call, so a delayed reassertion is required');
 });
 
 test('showing the overlay reasserts taskbar hiding before and after auxiliary windows appear', () => {
@@ -39,4 +41,31 @@ test('switching normal versus stealth focusability does not leak the overlay int
   const taskbarIndex = setter.indexOf('this.windowHelper.reassertOverlayTaskbarHidden()');
   assert.ok(focusIndex >= 0, 'stealth setter must still flip Windows focusability');
   assert.ok(taskbarIndex > focusIndex, 'taskbar hiding must be reasserted after focusability changes');
+});
+
+test('blur and hide transitions reassert taskbar hiding after no-activate focusability changes', () => {
+  const setupListeners = windowHelper.slice(
+    windowHelper.indexOf('private setupWindowListeners()'),
+    windowHelper.indexOf('public getMainWindow()'),
+  );
+  assert.match(
+    setupListeners,
+    /this\.overlayWindow\.on\('blur',[\s\S]*?this\.reassertOverlayTaskbarHidden\(\)/,
+    'overlay blur must repair taskbar registration after attachNoActivate changes focusability',
+  );
+
+  const auxWindows = windowHelper.slice(
+    windowHelper.indexOf('private createOverlayAuxWindows('),
+    windowHelper.indexOf('private positionOverlayAuxWindows('),
+  );
+  assert.match(
+    auxWindows,
+    /win\.on\('blur',[\s\S]*?this\.reassertOverlayTaskbarHidden\(\)/,
+    'pill/toggle blur must repair taskbar registration',
+  );
+  assert.match(
+    auxWindows,
+    /this\.overlayWindow\.on\('hide',[\s\S]*?this\.reassertOverlayTaskbarHidden\(\)/,
+    'overlay hide must repair taskbar registration after no-activate hide listeners',
+  );
 });

@@ -95,6 +95,10 @@ export class WindowHelper {
   // its own instead of forcing the main window to keep a gutter).
   private pillWindow: BrowserWindow | null = null;
   private toggleWindow: BrowserWindow | null = null;
+  // Windows may apply a focusability/show style change one compositor turn
+  // after Electron's synchronous setSkipTaskbar call. Keep one short delayed
+  // re-assertion so DWM cannot re-add overlay windows as taskbar thumbnail tabs.
+  private overlayTaskbarHideTimer: NodeJS.Timeout | null = null;
   // Windows z-order watchdog handle — see startTopmostWatchdog().
   private topmostWatchdog: NodeJS.Timeout | null = null;
   // Pill content size as reported by its renderer (w-fit). Fallback covers
@@ -339,9 +343,19 @@ export class WindowHelper {
    */
   public reassertOverlayTaskbarHidden(): void {
     if (!this.adapter.isWindows()) return;
-    for (const win of [this.overlayWindow, this.pillWindow, this.toggleWindow]) {
-      if (win && !win.isDestroyed()) win.setSkipTaskbar(true);
-    }
+    const apply = () => {
+      for (const win of [this.overlayWindow, this.pillWindow, this.toggleWindow]) {
+        if (win && !win.isDestroyed()) win.setSkipTaskbar(true);
+      }
+    };
+
+    apply();
+    if (this.overlayTaskbarHideTimer) clearTimeout(this.overlayTaskbarHideTimer);
+    this.overlayTaskbarHideTimer = setTimeout(() => {
+      this.overlayTaskbarHideTimer = null;
+      apply();
+    }, 200);
+    this.overlayTaskbarHideTimer.unref?.();
   }
 
   // Force-reapply the CURRENT content-protection state to every live window,
@@ -1122,6 +1136,9 @@ export class WindowHelper {
         if (!this.overlayWindow || this.overlayWindow.isDestroyed()) return;
         if (!this.overlayWindow.isVisible()) return;
         this.adapter.reassertAlwaysOnTop(this.overlayWindow);
+        // attachNoActivate's earlier blur listener may call setFocusable(),
+        // which can re-register the HWND as a taskbar tab on Windows.
+        this.reassertOverlayTaskbarHidden();
       });
 
       this.overlayWindow.on('close', (e) => {
@@ -1622,6 +1639,7 @@ export class WindowHelper {
       win.on('blur', () => {
         if (win.isDestroyed() || !win.isVisible()) return;
         this.adapter.reassertAlwaysOnTop(win);
+        this.reassertOverlayTaskbarHidden();
       });
       win.on('show', () => {
         if (!win.isDestroyed()) win.setSkipTaskbar(true);
@@ -1667,6 +1685,9 @@ export class WindowHelper {
     });
     this.overlayWindow.on('hide', () => {
       this.syncOverlayAuxVisibility();
+      // The no-activate hide listeners can mutate focusability before this
+      // handler runs; restore the tool-window/taskbar invariant afterwards.
+      this.reassertOverlayTaskbarHidden();
       // A hidden overlay must not leave orphaned dropdowns (or the click
       // catcher) floating over the desktop.
       this.dismissOverlayPopovers();
