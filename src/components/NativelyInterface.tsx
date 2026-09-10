@@ -1,5 +1,6 @@
 import { animate, AnimatePresence, motion, useMotionValue, useTransform } from 'framer-motion';
 import {
+  AtSign,
   ArrowRight,
   ArrowDown,
   ChevronDown,
@@ -66,41 +67,125 @@ function SkillPicker({
 function PluginPicker({
   plugins,
   selectedIndex,
-  anchorEl,
+  query,
   onSelect,
 }: {
   plugins: CodexPluginApp[];
   selectedIndex: number;
-  anchorEl: HTMLElement | null;
+  query: string;
   onSelect: (plugin: CodexPluginApp) => void;
 }) {
-  const rect = anchorEl?.getBoundingClientRect();
-  if (!rect) return null;
-  const style: React.CSSProperties = {
-    position: 'fixed',
-    left: rect.left,
-    bottom: window.innerHeight - rect.top + 6,
-    width: rect.width,
-    zIndex: 9999,
-  };
+  const t = useT();
+  const selectedRowRef = useRef<HTMLButtonElement>(null);
+
+  useEffect(() => {
+    selectedRowRef.current?.scrollIntoView({ block: 'nearest' });
+  }, [selectedIndex]);
+
   return (
-    <div style={style} className="rounded-xl border border-border-subtle bg-bg-card shadow-xl overflow-hidden max-h-56 overflow-y-auto">
-      {plugins.map((plugin, i) => (
-        <button
-          key={plugin.id}
-          onMouseDown={(event) => { event.preventDefault(); onSelect(plugin); }}
-          className={`w-full flex items-center gap-2.5 px-3 py-2 text-left transition-colors ${i === selectedIndex ? 'bg-accent-muted text-text-primary' : 'hover:bg-bg-subtle/50 text-text-secondary'}`}
-        >
-          <span className="text-[11px] font-mono text-sky-400 shrink-0">@{plugin.id}</span>
-          <span className="min-w-0 flex-1">
-            <span className="block text-[11px] font-medium truncate">{plugin.name}</span>
-            {plugin.description && (
-              <span className="block text-[10px] text-text-tertiary truncate">{plugin.description}</span>
-            )}
+    <div
+      id="codex-plugin-picker"
+      className="mt-2 overflow-hidden rounded-2xl border border-border-subtle bg-bg-card/95 shadow-[0_16px_50px_rgba(0,0,0,0.18)] backdrop-blur-xl"
+    >
+      <div className="flex items-center justify-between border-b border-border-subtle px-3.5 py-2.5">
+        <div className="flex items-center gap-2 text-[11px] font-semibold text-text-primary">
+          <span className="flex h-5 w-5 items-center justify-center rounded-md bg-sky-500/10 text-sky-400">
+            <AtSign size={12} strokeWidth={2.4} />
           </span>
-        </button>
-      ))}
+          {t('Plugins')}
+        </div>
+        <span className="text-[10px] text-text-tertiary">
+          {plugins.length > 0
+            ? `${plugins.length} ${plugins.length === 1 ? t('result') : t('results')}`
+            : t('No matches')}
+        </span>
+      </div>
+
+      <div role="listbox" aria-label={t('Connected plugins')} className="max-h-[268px] overflow-y-auto p-1.5">
+        {plugins.length === 0 ? (
+          <div className="flex flex-col items-center px-4 py-7 text-center">
+            <div className="mb-2 flex h-9 w-9 items-center justify-center rounded-xl bg-bg-input text-text-tertiary">
+              <AtSign size={17} />
+            </div>
+            <span className="text-xs font-medium text-text-secondary">{t('No plugins found')}</span>
+            <span className="mt-1 text-[10px] text-text-tertiary">
+              {t('Try a different name after')} <span className="font-mono text-sky-400">@{query}</span>
+            </span>
+          </div>
+        ) : plugins.map((plugin, i) => (
+          <button
+            key={plugin.id}
+            ref={i === selectedIndex ? selectedRowRef : undefined}
+            type="button"
+            role="option"
+            aria-selected={i === selectedIndex}
+            onMouseDown={(event) => { event.preventDefault(); onSelect(plugin); }}
+            className={`group/plugin flex w-full items-center gap-3 rounded-xl px-2.5 py-2 text-left transition-colors ${i === selectedIndex
+              ? 'bg-accent-muted text-text-primary'
+              : 'text-text-secondary hover:bg-bg-subtle/60 hover:text-text-primary'}`}
+          >
+            <PluginPickerLogo plugin={plugin} />
+            <span className="min-w-0 flex-1">
+              <span className="flex items-center gap-2">
+                <span className="truncate text-xs font-semibold">{plugin.name}</span>
+                <span className="shrink-0 rounded-full bg-emerald-500/10 px-1.5 py-0.5 text-[9px] font-semibold text-emerald-400">
+                  {t('Connected')}
+                </span>
+              </span>
+              <span className="mt-0.5 block truncate text-[10px] text-text-tertiary">
+                {plugin.description || t('Use this plugin in your chat')}
+              </span>
+            </span>
+            <span className={`shrink-0 text-[10px] font-medium text-text-tertiary transition-opacity ${i === selectedIndex ? 'opacity-100' : 'opacity-0 group-hover/plugin:opacity-100'}`}>
+              {t('Select')}
+            </span>
+          </button>
+        ))}
+      </div>
+
+      <div className="flex items-center justify-between border-t border-border-subtle px-3.5 py-2 text-[9px] text-text-tertiary">
+        <span>{t('Type to search connected plugins')}</span>
+        <span className="flex items-center gap-2 font-medium">
+          <span><kbd className="font-sans">↑↓</kbd> {t('navigate')}</span>
+          <span><kbd className="font-sans">↵</kbd> {t('select')}</span>
+          <span><kbd className="font-sans">esc</kbd> {t('close')}</span>
+        </span>
+      </div>
     </div>
+  );
+}
+
+function PluginPickerLogo({ plugin }: { plugin: CodexPluginApp }) {
+  const [failed, setFailed] = useState(false);
+  const logoUrl = (() => {
+    if (!plugin.logoUrl) return null;
+    try {
+      const parsed = new URL(plugin.logoUrl);
+      return parsed.protocol === 'https:' || parsed.protocol === 'data:' ? plugin.logoUrl : null;
+    } catch {
+      return null;
+    }
+  })();
+
+  const initials = plugin.name
+    .split(/\s+/)
+    .filter(Boolean)
+    .slice(0, 2)
+    .map(part => part[0]?.toUpperCase())
+    .join('');
+
+  return (
+    <span className="flex h-9 w-9 shrink-0 items-center justify-center overflow-hidden rounded-xl border border-border-subtle bg-white p-1.5 text-[11px] font-bold text-slate-500 shadow-sm">
+      {logoUrl && !failed ? (
+        <img
+          src={logoUrl}
+          alt=""
+          loading="lazy"
+          className="h-full w-full object-contain"
+          onError={() => setFailed(true)}
+        />
+      ) : (initials || <AtSign size={15} />)}
+    </span>
   );
 }
 
@@ -376,6 +461,11 @@ import {
   OVERLAY_OPACITY_DEFAULT,
 } from '../lib/overlayAppearance';
 import type { CodexPluginApp, DynamicActionPayload, SkillSummary } from '../types/electron';
+import {
+  isSelectedPluginMentionIntact,
+  toCodexPluginPrompt,
+  type SelectedCodexPluginMention,
+} from '../lib/codexPluginMentions';
 import { getCodexCliModelDisplayName, litellmModelLabel } from '../utils/modelUtils';
 import { getModifierSymbol, isMac, isWindows } from '../utils/platformUtils';
 import { fetchChatOverlayContext, buildReaderLanguageHint } from '../lib/chatOverlayContext';
@@ -1157,7 +1247,17 @@ const NativelyInterface: React.FC<NativelyInterfaceProps> = ({
   const filteredPluginsRef = useRef<CodexPluginApp[]>([]);
   const pluginPickerIndexRef = useRef(0);
   const [availablePlugins, setAvailablePlugins] = useState<CodexPluginApp[]>([]);
+  const [selectedPluginMention, setSelectedPluginMention] = useState<SelectedCodexPluginMention | null>(null);
   const [pluginPickerIndex, setPluginPickerIndex] = useState(0);
+
+  // The selected mention is metadata for the current visible @Name token only.
+  // Clear it whenever normal or stealth typing edits that token so stale ids can
+  // never be submitted for text that no longer names the selected plugin.
+  useEffect(() => {
+    if (selectedPluginMention && !isSelectedPluginMentionIntact(inputValue, selectedPluginMention)) {
+      setSelectedPluginMention(null);
+    }
+  }, [inputValue, selectedPluginMention]);
   const { shortcuts, isShortcutPressed } = useShortcuts();
   const [messages, setMessages] = useState<Message[]>([]);
   // Keep chat history visible once an answer lands until explicit clear / session reset.
@@ -6155,7 +6255,8 @@ Provide only the answer, nothing else.`;
   }, [inputValue]);
 
   const selectPlugin = useCallback((plugin: CodexPluginApp) => {
-    setInputValue(`@${plugin.id} `);
+    setSelectedPluginMention({ id: plugin.id, name: plugin.name });
+    setInputValue(`@${plugin.name} `);
     setPluginPickerIndex(0);
     textInputRef.current?.focus();
   }, []);
@@ -6164,6 +6265,7 @@ Provide only the answer, nothing else.`;
     if (!inputValue.trim() && attachedContext.length === 0) return;
 
     const userText = inputValue.trim();
+    const codexSubmitText = toCodexPluginPrompt(userText, selectedPluginMention);
     const nowMs = Date.now();
     if (manualSubmitInFlightRef.current) return;
     const last = lastManualSubmitRef.current;
@@ -6214,6 +6316,7 @@ Provide only the answer, nothing else.`;
 
     // Clear inputs immediately
     setInputValue('');
+    setSelectedPluginMention(null);
     setAttachedContext([]);
 
     // Seal any in-flight streaming rows from a previous turn before we
@@ -6309,7 +6412,7 @@ Provide only the answer, nothing else.`;
       // the request so "answer this" keeps working.
       await window.electronAPI.runIntelligence({
         source: 'manual_chat',
-        text: userText || 'Analyze this screenshot',
+        text: codexSubmitText || 'Analyze this screenshot',
         imagePaths: currentAttachments.length > 0 ? currentAttachments.map((s) => s.path) : undefined,
         context: conversationContextForSubmit,
         ...(useCallerOwnedPrompt ? { skipSystemPrompt: true } : {}),
@@ -7569,7 +7672,8 @@ Provide only the answer, nothing else.`;
           if (pluginPickerOpenRef.current) {
             const plugin = filteredPluginsRef.current[pluginPickerIndexRef.current];
             if (plugin) {
-              setInputValue(`@${plugin.id} `);
+              setSelectedPluginMention({ id: plugin.id, name: plugin.name });
+              setInputValue(`@${plugin.name} `);
               setPluginPickerIndex(0);
               return;
             }
@@ -8976,6 +9080,9 @@ Provide only the answer, nothing else.`;
                   <textarea
                     ref={textInputRef}
                     data-testid="overlay-chat-input"
+                    aria-autocomplete="list"
+                    aria-controls={pluginPickerQuery !== null ? 'codex-plugin-picker' : undefined}
+                    aria-expanded={pluginPickerQuery !== null}
                     rows={1}
                     wrap="soft"
                     value={inputValue}
@@ -8989,23 +9096,23 @@ Provide only the answer, nothing else.`;
                       // native multiline behavior. Stealth typing handles
                       // Return through the OS keyboard hook instead.
                       if (e.key === 'Enter' && e.shiftKey && !stealthTapActive) return;
-                      if (filteredPlugins.length > 0 && pluginPickerQuery !== null) {
-                        if (e.key === 'ArrowUp') {
-                          e.preventDefault();
-                          setPluginPickerIndex((i) => Math.max(0, i - 1));
-                          return;
-                        }
-                        if (e.key === 'ArrowDown') {
-                          e.preventDefault();
-                          setPluginPickerIndex((i) => Math.min(filteredPlugins.length - 1, i + 1));
-                          return;
-                        }
+                      if (pluginPickerQuery !== null) {
                         if (e.key === 'Escape') {
                           e.preventDefault();
                           setInputValue('');
                           return;
                         }
-                        if (e.key === 'Tab' || (e.key === 'Enter' && !e.repeat)) {
+                        if (filteredPlugins.length > 0 && e.key === 'ArrowUp') {
+                          e.preventDefault();
+                          setPluginPickerIndex((i) => Math.max(0, i - 1));
+                          return;
+                        }
+                        if (filteredPlugins.length > 0 && e.key === 'ArrowDown') {
+                          e.preventDefault();
+                          setPluginPickerIndex((i) => Math.min(filteredPlugins.length - 1, i + 1));
+                          return;
+                        }
+                        if (filteredPlugins.length > 0 && (e.key === 'Tab' || (e.key === 'Enter' && !e.repeat))) {
                           e.preventDefault();
                           selectPlugin(filteredPlugins[clampedPluginPickerIndex]);
                           return;
@@ -9108,19 +9215,6 @@ Provide only the answer, nothing else.`;
                     )
                   }
 
-                  {/* Codex plugin picker — @ becomes an App Server mention on submit. */}
-                  {filteredPlugins.length > 0 && pluginPickerQuery !== null &&
-                    createPortal(
-                      <PluginPicker
-                        plugins={filteredPlugins}
-                        selectedIndex={clampedPluginPickerIndex}
-                        anchorEl={textInputRef.current}
-                        onSelect={selectPlugin}
-                      />,
-                      document.body,
-                    )
-                  }
-
                   {/* Custom Rich Placeholder — hidden while the synthetic caret
                       is active so a focused empty input reads like a native one
                       (blinking caret, no placeholder) */}
@@ -9152,6 +9246,23 @@ Provide only the answer, nothing else.`;
                     </div>
                   )}
                 </div>
+
+                {/*
+                  Keep the plugin picker in the measured shell flow. The old
+                  fixed portal placed it above the textarea, outside the native
+                  BrowserWindow's measured bounds, so Windows clipped it even
+                  though the DOM existed. Inline layout lets ResizeObserver grow
+                  and, when needed, reposition the overlay so the whole menu is
+                  visible below the composer like ChatGPT's picker.
+                */}
+                {pluginPickerQuery !== null && (
+                  <PluginPicker
+                    plugins={filteredPlugins}
+                    selectedIndex={clampedPluginPickerIndex}
+                    query={pluginPickerQuery}
+                    onSelect={selectPlugin}
+                  />
+                )}
 
                 {/* Bottom Row */}
                 <div className="flex items-center justify-between mt-3 px-0.5">
