@@ -7,7 +7,7 @@ import {
     Camera, RotateCcw, Eye, EyeOff, Layout, MessageSquare, Crop,
     ChevronDown, ChevronUp, Check, BadgeCheck, Power, Palette, Calendar, Ghost, Sun, Moon, RefreshCw, Info, Globe, FlaskConical, Terminal, Settings, Activity, ExternalLink, Trash2,
     Sparkles, Pencil, Briefcase, Building2, Search, MapPin, CheckCircle, HelpCircle, Zap, SlidersHorizontal, PointerOff, Folder,
-    Star, AlertCircle, Gift, Smartphone, Cpu, Shield, Code2, Headphones, MessageSquareReply, Pin
+    Star, AlertCircle, Gift, Shield, Code2, Headphones, MessageSquareReply, Pin
 } from 'lucide-react';
 import { analytics } from '../lib/analytics/analytics.service';
 import { AboutSection } from './AboutSection';
@@ -410,10 +410,6 @@ const SETTINGS_NAV_ORDER = [
     'calendar',
     'audio',
     'keybinds',
-    'phone-mirror',
-    'intelligence',
-    'help',
-    'about',
 ];
 
 interface SettingsOverlayProps {
@@ -1868,38 +1864,6 @@ const SettingsOverlay: React.FC<SettingsOverlayProps> = ({
                                         <Keyboard size={16} /> {t('Keybinds')}
                                     </button>
 
-                                    <button
-                                        onClick={() => setActiveTab('phone-mirror')}
-                                        className={navItemClass(activeTab === 'phone-mirror')}
-                                    >
-                                        {activeTab === 'phone-mirror' && navActivePill}
-                                        <Smartphone size={16} /> {t('Sync')}
-                                    </button>
-
-                                    <button
-                                        onClick={() => setActiveTab('intelligence')}
-                                        className={navItemClass(activeTab === 'intelligence')}
-                                    >
-                                        {activeTab === 'intelligence' && navActivePill}
-                                        <Cpu size={16} /> {t('Intelligence')}
-                                    </button>
-
-
-                                    <button
-                                        onClick={() => setActiveTab('help')}
-                                        className={navItemClass(activeTab === 'help', 'text-[13px]')}
-                                    >
-                                        {activeTab === 'help' && navActivePill}
-                                        <HelpCircle size={16} /> {t('Setup & Help')}
-                                    </button>
-
-                                    <button
-                                        onClick={() => setActiveTab('about')}
-                                        className={navItemClass(activeTab === 'about')}
-                                    >
-                                        {activeTab === 'about' && navActivePill}
-                                        <Info size={16} /> {t('About')}
-                                    </button>
                                 </nav>
                             </div>
 
