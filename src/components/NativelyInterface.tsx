@@ -29,6 +29,11 @@ import {
 } from '../../electron/utils/rollingTranscriptState.ts';
 import { categorizeSttError } from '../lib/sttErrorMapper';
 import { splitGistLine, splitGistLineStreaming, collapseBlockGaps } from '../lib/displayMarkup';
+import {
+  createDictationLevels,
+  dictationBarHeight,
+  pushDictationLevel,
+} from '../lib/dictationWaveform.mjs';
 
 function SkillPicker({
   skills,
@@ -1486,7 +1491,7 @@ const NativelyInterface: React.FC<NativelyInterfaceProps> = ({
   const [isExpanded, setIsExpanded] = useState(true);
   const [inputValue, setInputValue] = useState('');
   const [dictationState, setDictationState] = useState<'idle' | 'starting' | 'recording' | 'transcribing'>('idle');
-  const [dictationLevels, setDictationLevels] = useState<number[]>(() => Array(44).fill(0.08));
+  const [dictationLevels, setDictationLevels] = useState<number[]>(() => createDictationLevels());
   const [dictationError, setDictationError] = useState('');
   // Which composer action is mid-flight, so the spinner lands on the button the
   // user actually pressed rather than on a fixed slot. Without this, stopping
@@ -1514,13 +1519,12 @@ const NativelyInterface: React.FC<NativelyInterfaceProps> = ({
     dictationActiveRef.current = false;
     setDictationStopIntent(null);
     setDictationState('idle');
-    setDictationLevels(Array(44).fill(0.08));
+    setDictationLevels(createDictationLevels());
   }, []);
 
   useEffect(() => {
     const removeLevel = window.electronAPI?.onDictationLevel?.((level) => {
-      const normalized = Math.max(0.04, Math.min(1, Number.isFinite(level) ? level : 0));
-      setDictationLevels((levels) => [...levels.slice(1), normalized]);
+      setDictationLevels((levels) => pushDictationLevel(levels, level));
     });
     const removeFinished = window.electronAPI?.onDictationFinished?.((result) => {
       dictationOperationRef.current += 1;
@@ -1540,7 +1544,7 @@ const NativelyInterface: React.FC<NativelyInterfaceProps> = ({
     dictationSendPendingRef.current = false;
     setDictationError('');
     setDictationStopIntent(null);
-    setDictationLevels(Array(44).fill(0.08));
+    setDictationLevels(createDictationLevels());
     setDictationState('starting');
     const deviceId = localStorage.getItem('preferredInputDeviceId') || undefined;
     try {
@@ -1597,7 +1601,7 @@ const NativelyInterface: React.FC<NativelyInterfaceProps> = ({
     dictationSendPendingRef.current = false;
     setDictationStopIntent(null);
     setDictationState('idle');
-    setDictationLevels(Array(44).fill(0.08));
+    setDictationLevels(createDictationLevels());
     setDictationError('');
     void window.electronAPI.cancelDictation();
   }, []);
@@ -1621,8 +1625,20 @@ const NativelyInterface: React.FC<NativelyInterfaceProps> = ({
   //   • the send slot becomes an UP ARROW             → stop, transcribe, and
   //     submit immediately (the "just answer it" path).
   // The recording row above therefore carries only Cancel + the waveform.
-  const dictateSlotBusy = dictationState === 'starting'
-    || (dictationState === 'transcribing' && dictationStopIntent !== 'send');
+  //
+  // FLICKER FIX — two separate flags, on purpose:
+  //   • `dictationActive` (icons) flips the INSTANT the button is pressed, so the
+  //     press always has immediate feedback and the icons only ever change once.
+  //     Keying them on 'recording' painted a spinner first and swapped to Pause
+  //     a moment later, once the native microphone had opened — a visible blink.
+  //   • `dictationRowVisible` (the waveform bar) waits for 'recording'. Mounting
+  //     it during 'starting' showed a bar full of flat dots for as long as the
+  //     microphone took to open, which reads as an empty gap where the waveform
+  //     should be.
+  // Nothing blanks out the input until the row is actually there to replace it.
+  const dictationActive = dictationState !== 'idle';
+  const dictationRowVisible = dictationState === 'recording' || dictationState === 'transcribing';
+  const dictateSlotBusy = dictationState === 'transcribing' && dictationStopIntent !== 'send';
   const sendSlotBusy = dictationState === 'transcribing' && dictationStopIntent === 'send';
   const dictateSlotEnabled = dictationState === 'idle' || dictationState === 'recording';
   const sendSlotEnabled = dictationState === 'recording'
@@ -6927,14 +6943,17 @@ Provide only the answer, nothing else.`;
   // PREVIOUS draft — or nothing, when the composer was empty.
   useEffect(() => {
     if (!dictationSendPendingRef.current) return;
-    if (dictationState !== 'idle') return;
+    if (dictationActive) return;
     dictationSendPendingRef.current = false;
     // An empty transcript means the words never arrived (silence, a provider
     // drop, or a cancel) — finishDictation already reported why, so do not
     // fire an empty submit.
     if (!inputValue.trim()) return;
     void handleManualSubmitRef.current();
-  }, [inputValue, dictationState]);
+    // `dictationActive` is derived from `dictationState`, so it cannot change
+    // independently — listed only because the lint rule cannot see through the
+    // derivation and would otherwise report a missing dependency.
+  }, [inputValue, dictationState, dictationActive]);
 
   // ── Terminal-style chat history navigation ────────────────────────────────
   // dir = -1 walks OLDER (↑), dir = +1 walks NEWER (↓). Cursor semantics:
@@ -9720,7 +9739,7 @@ Provide only the answer, nothing else.`;
                     // mousedown listener (capture phase) already engaged
                     // the CGEventTap, so typing routes through that path.
                     onMouseDown={blockInputFocus}
-                    readOnly={stealthTapActive || dictationState !== 'idle'}
+                    readOnly={stealthTapActive || dictationRowVisible}
                     // Engaged-session appearance. On macOS the input takes real
                     // DOM focus on click (the panel can hold key focus without
                     // activating), so it shows the aurora glow and the green
@@ -9731,17 +9750,41 @@ Provide only the answer, nothing else.`;
                     // since every click there engages the stealth hook. Drive
                     // the same aurora glow with a class instead, and drop the
                     // green, so both platforms look identical on click.
-                    className={`w-full min-h-[42px] max-h-[120px] resize-none overflow-y-auto whitespace-pre-wrap break-words [field-sizing:content] border rounded-xl pl-3 pr-10 py-2.5 text-[13px] leading-relaxed ${inputClass} ${dictationState !== 'idle' ? 'opacity-0 pointer-events-none' : ''} ${stealthTapActive && isWindows ? 'aurora-focus-active' : ''} ${stealthTapActive && !isWindows ? 'ring-2 ring-emerald-400/30 border-emerald-400/40 shadow-[0_0_12px_rgba(52,211,153,0.15)]' : ''}`}
+                    className={`w-full min-h-[42px] max-h-[120px] resize-none overflow-y-auto whitespace-pre-wrap break-words [field-sizing:content] border rounded-xl pl-3 pr-10 py-2.5 text-[13px] leading-relaxed ${inputClass} ${dictationRowVisible ? 'opacity-0 pointer-events-none' : ''} ${stealthTapActive && isWindows ? 'aurora-focus-active' : ''} ${stealthTapActive && !isWindows ? 'ring-2 ring-emerald-400/30 border-emerald-400/40 shadow-[0_0_12px_rgba(52,211,153,0.15)]' : ''}`}
                     style={{
                       ...appearance.inputStyle,
                       ...(selectedPluginMentionInset ? { paddingLeft: selectedPluginMentionInset } : {}),
+                      // While the waveform row covers the input, pin the textarea
+                      // to the collapsed single-line height. It stays in flow (the
+                      // row is `absolute inset-0`, so the row tracks this box), and
+                      // without the pin a MULTI-LINE draft would stretch the box —
+                      // leaving the 28px waveform floating in the middle of a tall
+                      // empty bar, which is the gap this removes. Inline rather
+                      // than a utility class because `max-h-[42px]` and the
+                      // existing `max-h-[120px]` are the same specificity and
+                      // their order in the generated stylesheet is not ours to
+                      // rely on.
+                      ...(dictationRowVisible ? { height: '42px', minHeight: '42px', maxHeight: '42px' } : {}),
                     }}
                   />
 
-                  {dictationState !== 'idle' && (
+                  {dictationRowVisible && (
                     <div
                       className={`absolute inset-0 flex min-h-[42px] items-center gap-2 rounded-xl border px-2 ${inputClass}`}
-                      style={appearance.inputStyle}
+                      // `position: absolute` MUST be inline, not left to the
+                      // `absolute` utility class in the className above.
+                      // `inputClass` carries `aurora-focus`, and index.css
+                      // declares `.aurora-focus { position: relative; ... }`
+                      // AFTER `@tailwind utilities`. Same specificity, later
+                      // source order → the CSS file WINS over Tailwind's
+                      // `.absolute`, so the class alone silently left this row
+                      // in normal flow. It then stacked BELOW the (transparent)
+                      // textarea and added its own 42px to the composer, pushing
+                      // the waveform down and leaving a 42px empty band above it
+                      // — measured at the OS window level: 115px idle vs 156px
+                      // while dictating. Inline styles outrank any class rule, so
+                      // this cannot be undone by a stylesheet reorder.
+                      style={{ ...appearance.inputStyle, position: 'absolute' }}
                       // `group`, not `status`: this row contains buttons, and an
                       // interactive descendant inside a live region is announced
                       // inconsistently (some readers swallow the controls). The
@@ -9762,12 +9805,16 @@ Provide only the answer, nothing else.`;
                         <X className="h-3.5 w-3.5" />
                       </button>
 
-                      <div className="flex h-7 min-w-0 flex-1 items-center justify-center gap-[2px] overflow-hidden" aria-hidden="true">
+                      {/* The track spans the bar's full inner height (42px row
+                          minus its 1px border) and the bars are sized against
+                          that, so the waveform fills the bar instead of floating
+                          as a hairline in the middle of it. */}
+                      <div className="flex h-full min-w-0 flex-1 items-center justify-center gap-[2px] overflow-hidden" aria-hidden="true">
                         {dictationLevels.map((level, index) => (
                           <span
                             key={index}
                             className="w-[2px] shrink-0 rounded-full bg-current text-sky-400/80 transition-[height] duration-75 ease-out"
-                            style={{ height: `${Math.max(3, 3 + level * 23)}px` }}
+                            style={{ height: `${dictationBarHeight(level)}px` }}
                           />
                         ))}
                       </div>
@@ -9781,7 +9828,7 @@ Provide only the answer, nothing else.`;
                       text with identical font metrics (Tailwind preflight makes
                       <input> inherit the app font, so this span matches 1:1)
                       and blink a real caret after it. */}
-                  {stealthTapActive && dictationState === 'idle' && (
+                  {stealthTapActive && !dictationRowVisible && (
                     <div
                       aria-hidden="true"
                       className="absolute right-10 top-2.5 pointer-events-none select-none overflow-hidden whitespace-pre-wrap break-words text-[13px] leading-relaxed"
@@ -9808,7 +9855,7 @@ Provide only the answer, nothing else.`;
                   {/* Custom Rich Placeholder — hidden while the synthetic caret
                       is active so a focused empty input reads like a native one
                       (blinking caret, no placeholder) */}
-                  {!inputValue && !selectedPluginMention && !stealthTapActive && dictationState === 'idle' && (
+                  {!inputValue && !selectedPluginMention && !stealthTapActive && !dictationRowVisible && (
                     <div className="absolute left-3 top-1/2 -translate-y-1/2 flex items-center gap-1.5 pointer-events-none text-[13px] overlay-text-muted">
                       <span>{t('Ask anything on screen or conversation, or')}</span>
                       <div className="flex items-center gap-1 opacity-80">
@@ -9835,7 +9882,7 @@ Provide only the answer, nothing else.`;
                       the dictate button briefly lived here, and moving it to
                       the bottom row next to Send left this slot empty, which
                       would have silently dropped the hint. */}
-                  {!inputValue && dictationState === 'idle' && (
+                  {!inputValue && !dictationRowVisible && (
                     <div className="absolute right-3 top-1/2 -translate-y-1/2 flex items-center gap-1 pointer-events-none opacity-20">
                       <span className="text-[10px]">↵</span>
                     </div>
@@ -10048,7 +10095,7 @@ Provide only the answer, nothing else.`;
                     >
                       {dictateSlotBusy
                         ? <RefreshCw className="h-3.5 w-3.5 animate-spin" />
-                        : dictationState !== 'idle'
+                        : dictationActive
                           ? <Pause className="h-3.5 w-3.5 fill-current" />
                           : <Mic className="h-3.5 w-3.5" />}
                     </button>
@@ -10090,7 +10137,7 @@ Provide only the answer, nothing else.`;
                     >
                       {sendSlotBusy
                         ? <RefreshCw className="w-3.5 h-3.5 animate-spin" />
-                        : dictationState !== 'idle'
+                        : dictationActive
                           ? <ArrowUp className="w-3.5 h-3.5" />
                           : <ArrowRight className="w-3.5 h-3.5" />}
                     </button>

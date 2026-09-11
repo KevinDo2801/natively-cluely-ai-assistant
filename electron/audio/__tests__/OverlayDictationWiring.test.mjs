@@ -50,16 +50,17 @@ test('the composer exposes both a review-only and a transcribe-and-send stop', (
 
   // Icon swap: Mic → Pause → spinner on the dictate slot, ArrowRight → ArrowUp
   // → spinner on the send slot. The Pause/ArrowUp branch keys on
-  // `dictationState !== 'idle'` (not `=== 'recording'`) so the icon does not flip
-  // back during the brief transcription window that follows a stop.
+  // `dictationActive` (state !== 'idle'), NOT on 'recording', so the icon does not
+  // flash a spinner while the native microphone is still opening, nor flip back
+  // during the transcription that follows a stop.
   assert.match(
     renderer,
-    /dictateSlotBusy\s*\?\s*<RefreshCw[\s\S]{0,140}?dictationState !== 'idle'[\s\S]{0,140}?<Pause[\s\S]{0,140}?<Mic/,
+    /dictateSlotBusy\s*\?\s*<RefreshCw[\s\S]{0,140}?:\s*dictationActive[\s\S]{0,140}?<Pause[\s\S]{0,140}?<Mic/,
     'the dictate slot must render Mic → Pause → spinner',
   );
   assert.match(
     renderer,
-    /sendSlotBusy\s*\?\s*<RefreshCw[\s\S]{0,140}?dictationState !== 'idle'[\s\S]{0,140}?<ArrowUp[\s\S]{0,140}?<ArrowRight/,
+    /sendSlotBusy\s*\?\s*<RefreshCw[\s\S]{0,140}?:\s*dictationActive[\s\S]{0,140}?<ArrowUp[\s\S]{0,140}?<ArrowRight/,
     'the send slot must render ArrowRight → ArrowUp → spinner',
   );
 
@@ -95,7 +96,7 @@ test('the composer exposes both a review-only and a transcribe-and-send stop', (
 test('the recording row holds only the cancel button and the waveform', () => {
   const renderer = read('src/components/NativelyInterface.tsx');
 
-  const rowStart = renderer.indexOf("{dictationState !== 'idle' && (");
+  const rowStart = renderer.indexOf('{dictationRowVisible && (');
   const waveIdx = renderer.indexOf('dictationLevels.map');
   assert.ok(rowStart > 0 && waveIdx > rowStart, 'the recording row must exist');
 
@@ -113,6 +114,57 @@ test('the recording row holds only the cancel button and the waveform', () => {
   const stopSendIdx = renderer.indexOf('runStopDictation(true)');
   assert.ok(stopReviewIdx > waveIdx, 'the review stop must live in the composer row, not the recording row');
   assert.ok(stopSendIdx > waveIdx, 'the send stop must live in the composer row, not the recording row');
+});
+
+// Two separate gates, and they must stay separate. Pressing the button swaps the
+// icons immediately, but the waveform row waits until the microphone is actually
+// recording — mounting it during 'starting' painted a bar of flat dots for
+// however long the native capture took to open, which reads as a blink followed
+// by an empty gap.
+test('the recording row waits for recording while the icons swap immediately', () => {
+  const renderer = read('src/components/NativelyInterface.tsx');
+
+  assert.match(
+    renderer,
+    /const dictationActive = dictationState !== 'idle';/,
+    'the icon gate must react to the press, not to the session being live',
+  );
+  assert.match(
+    renderer,
+    /const dictationRowVisible = dictationState === 'recording' \|\| dictationState === 'transcribing';/,
+    'the row gate must exclude the starting state',
+  );
+  assert.match(
+    renderer,
+    /\{dictationRowVisible && \(/,
+    'the recording row must be gated on dictationRowVisible',
+  );
+  assert.ok(
+    !/\{dictationActive && \(\s*<div\s+className=\{`absolute inset-0/.test(renderer),
+    'the row must NOT be gated on dictationActive — that re-introduces the empty-bar frame',
+  );
+
+  // The textarea is pinned to the collapsed single-line height while the row
+  // covers it, so a multi-line draft cannot stretch the box and leave the
+  // waveform floating in the middle of a tall empty bar.
+  assert.match(
+    renderer,
+    /dictationRowVisible \? \{ height: '42px', minHeight: '42px', maxHeight: '42px' \} : \{\}/,
+    'the textarea height must be pinned while the waveform row is shown',
+  );
+
+  // Bars come from the shared shaping module (unit-tested) rather than inline
+  // arithmetic that silently compressed real speech into a few pixels.
+  assert.match(renderer, /height: `\$\{dictationBarHeight\(level\)\}px`/);
+  assert.match(renderer, /import \{[\s\S]{0,120}?dictationBarHeight[\s\S]{0,120}?from '\.\.\/lib\/dictationWaveform\.mjs'/);
+  assert.match(renderer, /setDictationLevels\(\(levels\) => pushDictationLevel\(levels, level\)\)/);
+  // The track must span the bar, not sit at a fixed 28px inside a 42px bar —
+  // that left the waveform floating as a hairline with dead space above it.
+  assert.match(
+    renderer,
+    /flex h-full min-w-0 flex-1 items-center justify-center gap-\[2px\] overflow-hidden/,
+    'the waveform track must fill the bar height',
+  );
 });
 
 // The dictate control sits in the composer's bottom row, grouped with the send
@@ -152,8 +204,42 @@ test('the dictate button sits in the composer row, immediately left of send', ()
   // …and the ↵ affordance it displaced must be back in the textarea's right slot.
   assert.match(
     renderer,
-    /!inputValue && dictationState === 'idle' && \([\s\S]{0,300}?absolute right-3[\s\S]{0,200}?<span className="text-\[10px\]">↵<\/span>/,
+    /!inputValue && !dictationRowVisible && \([\s\S]{0,300}?absolute right-3[\s\S]{0,200}?<span className="text-\[10px\]">↵<\/span>/,
     'the Enter-to-send hint must be restored in the slot the dictate button vacated',
+  );
+});
+
+// The recording row must pin its own position INLINE.
+//
+// `inputClass` carries `aurora-focus`, and src/index.css declares
+// `.aurora-focus { position: relative; ... }` AFTER `@tailwind utilities`. Same
+// specificity, later source order — so the CSS file beats Tailwind's `.absolute`
+// utility and the row silently fell into NORMAL FLOW, stacking below the
+// (opacity-0) textarea and adding its own 42px to the composer. Measured at the
+// OS window level via the window rect: 115px idle vs 156px while dictating, with
+// the extra 41px appearing as an empty band directly above the waveform.
+test('the recording row pins its absolute position inline, defeating aurora-focus', () => {
+  const renderer = read('src/components/NativelyInterface.tsx');
+  const css = read('src/index.css');
+
+  // The trap itself, so this test fails loudly if the CSS rule is ever moved
+  // (rather than silently stopping to guard anything).
+  assert.match(
+    css,
+    /\.aurora-focus\s*\{[\s\S]{0,120}?position:\s*relative/,
+    '.aurora-focus must still be the rule that overrides Tailwind utilities',
+  );
+  assert.match(
+    renderer,
+    /style=\{\{ \.\.\.appearance\.inputStyle, position: 'absolute' \}\}/,
+    'the recording row must set position inline — the `absolute` class alone is overridden',
+  );
+  // …while still borrowing the input surface look, which is why inputClass is
+  // there in the first place.
+  assert.match(
+    renderer,
+    /className=\{`absolute inset-0 flex min-h-\[42px\][\s\S]{0,120}?\$\{inputClass\}`\}/,
+    'the row must keep the input surface styling',
   );
 });
 
