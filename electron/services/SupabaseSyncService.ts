@@ -2,12 +2,39 @@
  * SupabaseSyncService — cloud-first sync between the local SQLite database and
  * the Supabase project for the signed-in user.
  *
+ * Design notes (v4 — incremental, skew-proof):
+ *   - Every reconcile is INCREMENTAL. Each table carries a `sync_watermarks`
+ *     row (local migrations v35 + v36) holding the newest local and cloud marks
+ *     it has already reconciled; the engine reads only the cloud rows and
+ *     tombstones after the cloud watermark, considers only the keys that changed
+ *     on either side plus any key the retry ledger re-offers, and writes only
+ *     those. A steady-state pass therefore costs two small filtered reads per
+ *     table and zero writes.
+ *   - The cloud watermark is preferably a server-assigned monotonic SEQUENCE
+ *     (`sync_seq`, cloud migration 0005), which is exact and cannot be delayed by
+ *     a machine's clock. A timestamp watermark (`updated_at`) is the fallback for
+ *     a project without 0005 and for a table that has not yet produced a
+ *     sequence; it is only as good as the clocks that feed it.
+ *   - A row whose push fails is recorded in `sync_retry` and re-offered on an
+ *     exponential backoff instead of holding the watermark back — one unpushable
+ *     row used to pin the watermark and degrade every later pass into a wide
+ *     scan, i.e. straight back into the egress problem. Nothing is ever silently
+ *     dropped.
+ *   - Why this exists: the previous engine read EVERY row of EVERY table on
+ *     every pass. Measured on this repo's dev database that was 2.35 MB of rows
+ *     plus 3.44 MB of tombstones per pass — ~5.8 MB per minute, ~8 GB/day while
+ *     signed in, with a SINGLE user, which exceeded the Supabase free-plan
+ *     egress quota. Egress scaled with database size, never with user count.
+ *   - Incremental reads are an optimisation, not the correctness argument: the
+ *     engine still reads a table whole on its first pass and once every
+ *     FULL_RESCAN_INTERVAL_MS (12h), so a watermark that skipped a row heals.
+ *
  * Design notes (v3 — Supabase is the source of truth):
  *   - While signed in, the cloud is authoritative. Every local write to a
  *     synced table is detected by SQLite triggers (v34 — a per-table monotonic
  *     `sync_dirty` seq) and pushed to Supabase by the dirty-poll loop within
  *     ~DIRTY_POLL_MS (write-through). The local SQLite rows are a cache mirror
- *     that reads stay fast on; a periodic full reconcile every PULL_INTERVAL_MS
+ *     that reads stay fast on; a periodic reconcile every PULL_INTERVAL_MS
  *     brings down changes made on other devices. When Realtime is enabled, a
  *     postgres_changes subscription also reconciles a table within
  *     ~REALTIME_DEBOUNCE_MS of another device changing it, and the periodic
@@ -64,6 +91,13 @@ export interface SupabaseSyncStatus {
     lastCounts?: { rows: number; pushed: number; pulled: number; deleted: number; failed: number };
     /** Error message from the last failed sync. */
     lastError?: string;
+    /**
+     * Measured local-clock offset against Supabase, in ms (positive = this
+     * machine is ahead), when the probe could reach the server. Surfaced so a
+     * skewed clock is visible in the UI and not only in the logs — a device whose
+     * clock is far ahead wins every last-write-wins conflict it takes part in.
+     */
+    clockSkewMs?: number;
 }
 
 /** How often the cloud is pulled for changes from other devices while signed in. */
@@ -92,8 +126,40 @@ const SYNC_MAX_DURATION_MS = Number(process.env.SUPABASE_SYNC_MAX_MS) || 60_000;
  * fall back to polling only (graceful — a dead socket is never fatal).
  */
 const REALTIME_ENABLED = (process.env.SUPABASE_REALTIME_ENABLED ?? '1').trim() !== '0';
+/**
+ * Clock-skew warning threshold. Propagation no longer depends on clocks (the
+ * delta is a server-assigned sequence), but CONFLICT RESOLUTION still does:
+ * `updated_at` is the last-write-wins key, and it is stamped by whichever machine
+ * made the edit. A device whose clock is far ahead therefore wins every conflict
+ * it takes part in until the clock is corrected — the one failure mode in this
+ * design that a device can inflict on itself, and the only one that is invisible
+ * from the sync logs.
+ *
+ * It cannot be removed without changing what "newer" means, and every candidate
+ * for that change trades this risk for a worse one (see the note in
+ * supabaseSyncEngine.js on why clamping a future-dated write is not viable). What
+ * IS achievable — and what this probe does — is making it impossible to miss:
+ * one cheap request per session compares the two clocks and says so loudly.
+ */
+const CLOCK_SKEW_WARN_MS = Number(process.env.SUPABASE_SYNC_CLOCK_SKEW_WARN_MS) || 5 * 60 * 1000;
+const CLOCK_SKEW_PROBE_TIMEOUT_MS = 10_000;
+
 /** Coalesce a burst of realtime events on one table into a single targeted sync. */
 const REALTIME_DEBOUNCE_MS = Number(process.env.SUPABASE_REALTIME_DEBOUNCE_MS) || 2_500;
+
+/**
+ * Self-echo window. Supabase postgres_changes broadcasts EVERY committed change
+ * matching the subscription, including the ones this client just pushed, and
+ * offers no server-side "don't echo to the writer" filter. Without this, every
+ * write-through push came straight back as an event and triggered another pass
+ * over the same table — roughly doubling the sync work for our own writes.
+ *
+ * A table that received a successful push is therefore ignored by the realtime
+ * path for this long. A change made by ANOTHER device inside the window is not
+ * lost, only deferred to the next reconcile (60s poll, or the next realtime
+ * event after the window), so the window must stay far below the poll interval.
+ */
+const REALTIME_SELF_ECHO_MS = Number(process.env.SUPABASE_REALTIME_SELF_ECHO_MS) || 5_000;
 
 /** Table names mirrored to Supabase (the set the realtime stream filters on). */
 const SYNC_TABLE_NAMES = new Set<string>(TABLE_DEFS.map((d) => d.table));
@@ -140,6 +206,10 @@ export class SupabaseSyncService extends EventEmitter {
     private realtimeToken: string | null = null;
     private realtimeHadSubscribed = false;
     private realtimePending = new Map<string, NodeJS.Timeout>();
+    /** Per table, epoch ms of the last pass that pushed rows to the cloud. */
+    private lastPushAt = new Map<string, number>();
+    /** Measured local-clock offset vs Supabase in ms; null until probed. */
+    private clockSkewMs: number | null = null;
 
     private constructor() {
         super();
@@ -167,6 +237,8 @@ export class SupabaseSyncService extends EventEmitter {
         this.started = false;
         this.running = false;
         this.status = { state: 'idle' };
+        this.lastPushAt.clear();
+        this.clockSkewMs = null;
     }
 
     // ---------------------------------------------------------------------------
@@ -281,6 +353,18 @@ export class SupabaseSyncService extends EventEmitter {
 
     /** Coalesce a burst of events for one table into a single targeted sync. */
     private handleRealtimeEvent(table: string): void {
+        // Ignore the echo of our own push (see REALTIME_SELF_ECHO_MS). The
+        // pending debounce is dropped too, so a burst that started before the
+        // push does not fire a pass over a table we just finished writing.
+        const pushedAt = this.lastPushAt.get(table) || 0;
+        if (Date.now() - pushedAt < REALTIME_SELF_ECHO_MS) {
+            const queued = this.realtimePending.get(table);
+            if (queued) {
+                clearTimeout(queued);
+                this.realtimePending.delete(table);
+            }
+            return;
+        }
         const existing = this.realtimePending.get(table);
         if (existing) clearTimeout(existing);
         this.realtimePending.set(
@@ -307,7 +391,64 @@ export class SupabaseSyncService extends EventEmitter {
 
     /** Synchronous status read. Safe to call from IPC without a network round-trip. */
     public getStatus(): SupabaseSyncStatus {
-        return { ...this.status };
+        return this.clockSkewMs === null
+            ? { ...this.status }
+            : { ...this.status, clockSkewMs: this.clockSkewMs };
+    }
+
+    /**
+     * Compare this machine's clock with Supabase's, once per session.
+     *
+     * Nothing about PROPAGATION depends on this any more (the cloud delta is a
+     * server-assigned sequence), but CONFLICT RESOLUTION still does: `updated_at`
+     * is the last-write-wins key and it is stamped by whichever machine made the
+     * edit, so a device whose clock runs far ahead wins every conflict it takes
+     * part in. That is the last failure mode in this design that a device can
+     * inflict on itself, and the only one no sync log would ever show.
+     *
+     * Removed properly it cannot be — that means changing what "newer" means, and
+     * every candidate for that trades this risk for a worse one. Made IMPOSSIBLE
+     * TO MISS it can be, and that is what this does: one cheap request per
+     * session, and a loud warning when the gap is wide enough to matter.
+     *
+     * Diagnostic only: any failure is swallowed and never touches sync.
+     */
+    private async probeClockSkew(): Promise<void> {
+        const url = this.getUrl();
+        const anonKey = this.getAnonKey();
+        if (!url || !anonKey) return;
+        try {
+            // The auth health endpoint is the cheapest responder on the project
+            // that still returns a dated HTTP response.
+            const res = await fetch(`${url.replace(/\/+$/, '')}/auth/v1/health`, {
+                headers: { apikey: anonKey },
+                signal: AbortSignal.timeout(CLOCK_SKEW_PROBE_TIMEOUT_MS),
+            });
+            const header = res.headers.get('date');
+            if (!header) return;
+            const serverMs = Date.parse(header);
+            if (!Number.isFinite(serverMs)) return;
+            // HTTP dates have 1-second resolution — irrelevant against a 5-minute
+            // threshold.
+            const skewMs = Date.now() - serverMs;
+            this.clockSkewMs = skewMs;
+            if (Math.abs(skewMs) > CLOCK_SKEW_WARN_MS) {
+                const direction = skewMs > 0 ? 'AHEAD of' : 'BEHIND';
+                console.warn(
+                    `[SupabaseSyncService] SYSTEM CLOCK IS ${Math.round(Math.abs(skewMs) / 1000)}s ${direction} SUPABASE. ` +
+                    'Conflict resolution is last-write-wins on row timestamps, so this machine ' +
+                    (skewMs > 0
+                        ? 'will WIN every conflicting edit from another device until the clock is corrected.'
+                        : 'will LOSE every conflicting edit from another device until the clock is corrected.') +
+                    ' Sync the system clock (Windows: Settings > Time & language > Date & time > Sync now).',
+                );
+            } else {
+                console.log(`[SupabaseSyncService] clock skew vs Supabase: ${Math.round(skewMs / 1000)}s`);
+            }
+        } catch (e) {
+            // Never fatal, never cached as a result — the next session retries.
+            console.warn('[SupabaseSyncService] clock-skew probe skipped:', (e as Error)?.message || e);
+        }
     }
 
     /**
@@ -330,6 +471,7 @@ export class SupabaseSyncService extends EventEmitter {
         this.dirtyTimer = setInterval(() => {
             void this.syncDirtyNow();
         }, DIRTY_POLL_MS);
+        void this.probeClockSkew();
         void this.syncNow();
     }
 
@@ -344,6 +486,7 @@ export class SupabaseSyncService extends EventEmitter {
             clearInterval(this.dirtyTimer);
             this.dirtyTimer = null;
         }
+        this.lastPushAt.clear();
         this.teardownRealtime();
     }
 
@@ -463,6 +606,16 @@ export class SupabaseSyncService extends EventEmitter {
                 );
             }
 
+            // Remember which tables this pass wrote to, so the realtime echo of
+            // our own push does not immediately trigger another pass over the
+            // same table (Supabase postgres_changes has no writer exclusion).
+            const nowMs = Date.now();
+            for (const t of summary.tables) {
+                if (t.pushed > 0 || t.deletedCloud > 0 || t.tombstonesPushed > 0) {
+                    this.lastPushAt.set(t.table, nowMs);
+                }
+            }
+
             // The tables this pass covered are clean now — unless a write
             // bumped their seq again while we were syncing.
             if (opts.seqs) {
@@ -488,6 +641,15 @@ export class SupabaseSyncService extends EventEmitter {
                 console.log(
                     `[SupabaseSyncService] ${opts.silent ? 'write-through' : 'sync'} ok: ` +
                     `↑${counts.pushed} ↓${counts.pulled} ✕${counts.deleted} for ${session.user.email || session.user.id}` +
+                    // `candidates` is the incremental engine's cost signal: keys it
+                    // actually had to consider. A steady-state reconcile reports 0
+                    // (no rows downloaded), which is the quickest way to confirm
+                    // from the log that a pass is not reading the database again.
+                    ` [${summary.incremental ? 'incremental' : 'full'}, ${summary.totalCandidates} candidate(s)` +
+                    // Outstanding rows whose push failed and are waiting out their
+                    // backoff. The watermark is not held back for them any more, so
+                    // this is the only place a stuck row is visible.
+                    (summary.totalRetrying ? `, ${summary.totalRetrying} retrying` : '') + ']' +
                     (opts.tables ? ` (${opts.tables.join(', ')})` : ''),
                 );
             }

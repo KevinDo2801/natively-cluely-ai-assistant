@@ -4,13 +4,22 @@
  * Runs under Electron's Node runtime so the repo's better-sqlite3 (compiled
  * for Electron's ABI) loads:
  *
- *     npm run supabase:sync                # full two-way (LWW) sync
+ *     npm run supabase:sync                # two-way (LWW) sync, incremental
+ *     npm run supabase:sync -- --full      # force a FULL reconcile (v34 behaviour)
  *     npm run supabase:sync -- --dry-run   # plan only, no writes
  *     npm run supabase:sync -- --push-only # local wins, no cloud reads
  *     npm run supabase:sync -- --pull-only # cloud wins, no local reads
  *     npm run supabase:sync -- --cutover   # cloud-first cutover (see below)
  *     npm run supabase:sync -- --user-email you@example.com
  *     npm run supabase:sync -- --db-path C:\path\natively.db
+ *
+ * Since v35 the engine is INCREMENTAL: it reads only the rows and tombstones
+ * stamped after each table's watermark (`sync_watermarks`), so a reconcile no
+ * longer costs O(database size) in Supabase egress. `--full` ignores the
+ * watermarks and reads every table whole — use it when you want the old
+ * behaviour explicitly, e.g. to audit what a full pass would move. The app also
+ * does a full read on its own once every FULL_RESCAN_INTERVAL_MS (12h), which is
+ * the correctness net behind the incremental path.
  *
  * --cutover performs the same one-time cloud-first cutover the app runs on
  * first sign-in: safety-merge local → cloud, wipe the local business tables
@@ -37,6 +46,7 @@ function parseArgs(argv) {
   const args = {};
   for (const a of argv) {
     if (a === '--dry-run') args.dryRun = true;
+    else if (a === '--full') args.full = true;
     else if (a === '--push-only') args.direction = 'push';
     else if (a === '--pull-only') args.direction = 'pull';
     else if (a === '--cutover') args.cutover = true;
@@ -88,7 +98,7 @@ async function main() {
   const args = parseArgs(scriptIdx >= 0 ? argv.slice(scriptIdx + 1) : argv);
 
   if (args.help) {
-    console.log('Usage: npm run supabase:sync [-- --dry-run] [-- --push-only|--pull-only|--cutover] [-- --user-email you@example.com] [-- --db-path C:\\path\\natively.db] [-- --batch 500]');
+    console.log('Usage: npm run supabase:sync [-- --dry-run] [-- --full] [-- --push-only|--pull-only|--cutover] [-- --user-email you@example.com] [-- --db-path C:\\path\\natively.db] [-- --batch 500]');
     return 0;
   }
 
@@ -126,7 +136,7 @@ async function main() {
   const user = await resolveUserId(client, args.userEmail || process.env.SUPABASE_SYNC_USER_EMAIL);
   console.log(`Target user: ${user.email} (${user.id})`);
   console.log(`Local DB:   ${dbPath}`);
-  console.log(`Direction:  ${args.cutover ? 'cutover (merge → wipe local → pull)' : args.direction || 'both'}${args.dryRun ? ' (DRY RUN — no writes)' : ''}`);
+  console.log(`Direction:  ${args.cutover ? 'cutover (merge → wipe local → pull)' : args.direction || 'both'}${args.dryRun ? ' (DRY RUN — no writes)' : ''}${args.full ? ' [FULL rescan]' : ''}`);
 
   const db = new Database(dbPath, { fileMustExist: true });
   try {
@@ -169,6 +179,7 @@ async function main() {
       direction: args.direction || 'both',
       dryRun: !!args.dryRun,
       batchSize: Number.isFinite(args.batch) && args.batch > 0 ? args.batch : undefined,
+      fullRescan: !!args.full,
       onProgress,
     });
 

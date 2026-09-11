@@ -1879,4 +1879,122 @@ export const MIGRATIONS: MigrationStep[] = [
         },
     },
 
+    {
+        id: 'v34-to-v35-incremental-sync-watermarks',
+        up(ctx) {
+            const { db, version } = ctx;
+        // Version 34 → 35: incremental (watermark-based) sync.
+        //
+        // Why: the v2/v3 engine reconciled by reading EVERY row of EVERY table
+        // from Supabase on every pass (`readCloudRows` had no filter). With a
+        // 60s reconcile that cost was O(database size) per minute — for this
+        // repo's own dev database, ~2.35 MB of rows plus ~3.44 MB of tombstones
+        // per pass, i.e. ~5.8 MB/min ≈ 8 GB/day while signed in, which blew the
+        // Supabase free-plan egress quota with a SINGLE user. Egress (not user
+        // count) is the cost driver, so the fix is to read only what changed.
+        //
+        //   * `sync_watermarks` — per synced table, the high-water marks of the
+        //     incremental pass:
+        //       - `local_ms`: newest LOCAL `updated_at` already reconciled. A
+        //         local row (or tombstone) is a candidate for pushing only when
+        //         its stamp is newer.
+        //       - `cloud_ms`: newest CLOUD `updated_at`/`deleted_at` already
+        //         pulled. The cloud delta query is `updated_at > cloud_ms`.
+        //       - `full_ms`: when the table was last read WITHOUT a filter. The
+        //         engine re-does an unfiltered read every FULL_RESCAN_INTERVAL_MS
+        //         so pathological clock skew between machines cannot make the
+        //         watermarks skip a row permanently — the incremental path is an
+        //         optimisation, the periodic full read stays the correctness net.
+        //       - `gc_ms`: when tombstones were last garbage-collected, so the
+        //         per-table GC delete no longer runs on every single pass.
+        //
+        // A watermark of 0 means "never synced" and makes the engine read that
+        // table in full, so an existing install's first pass after this upgrade
+        // behaves exactly like v34 and then goes incremental.
+        //
+        // ADDITIVE + IDEMPOTENT (same policy as v32→v33 / v33→v34).
+        db.exec(`
+            CREATE TABLE IF NOT EXISTS sync_watermarks (
+                table_name TEXT PRIMARY KEY,
+                local_ms   INTEGER NOT NULL DEFAULT 0,
+                cloud_ms   INTEGER NOT NULL DEFAULT 0,
+                full_ms    INTEGER NOT NULL DEFAULT 0,
+                gc_ms      INTEGER NOT NULL DEFAULT 0
+            );
+        `);
+
+        if (version < 35) {
+            db.pragma('user_version = 35');
+        }
+            return true;
+        },
+    },
+
+    {
+        id: 'v35-to-v36-skew-proof-watermarks-and-retry-ledger',
+        up(ctx) {
+            const { db, version } = ctx;
+        // Version 35 → 36: two hardening steps for the v35 incremental engine.
+        //
+        // 1. `sync_watermarks.cloud_seq` — a SECOND, skew-proof cloud watermark.
+        //
+        //    v35 compares cloud `updated_at` against `passStart - margin`. That is
+        //    a clock-based watermark, and no clock-based watermark can be
+        //    skew-proof: a writer whose clock runs behind ours stamps rows BELOW
+        //    the watermark, so those rows are never in a delta and were only
+        //    caught when the 12h full rescan came round. The margin only decides
+        //    how far behind a clock may be before rows start being delayed.
+        //
+        //    Cloud migration 0005 adds a server-assigned monotonic `sync_seq`
+        //    (one sequence, bumped by a trigger on every insert/update) to every
+        //    synced table and to `sync_tombstones`. The delta then becomes
+        //    `sync_seq > cloud_seq`, which is exact: a row written later ALWAYS
+        //    has a higher sequence, whatever any clock says. It needs no margin
+        //    and no wall-clock comparison, so the 12h worst case disappears.
+        //    `updated_at` keeps its job — it is still the LWW conflict key.
+        //
+        //    `cloud_seq` stays 0 until 0005 has been applied to the project; the
+        //    engine probes for the column once and falls back to the timestamp
+        //    watermark, so installing this build before running the SQL is safe.
+        //
+        // 2. `sync_retry` — a durable per-row retry ledger.
+        //
+        //    v35 handled a failed push by HOLDING THE WATERMARK BACK to the
+        //    failed row's stamp, so the next pass re-scoped from there. Correct
+        //    (nothing is skipped) but a single row that can never be pushed — a
+        //    dangling FK, a value the cloud rejects — pinned the watermark for
+        //    ever and every pass degraded back to a wide scan, i.e. straight back
+        //    to the egress problem v35 exists to fix.
+        //
+        //    The ledger decouples the two concerns: the watermark advances
+        //    normally, and the failed rows are re-offered as candidates on an
+        //    exponential backoff (30s → 30min) until they succeed. A poisoned row
+        //    costs a couple of requests per half hour instead of a table scan per
+        //    second, and it is still never silently dropped.
+        //
+        // ADDITIVE + IDEMPOTENT.
+        try {
+            db.exec(`ALTER TABLE sync_watermarks ADD COLUMN cloud_seq INTEGER NOT NULL DEFAULT 0`);
+        } catch (_e) { /* Column already exists */ }
+
+        db.exec(`
+            CREATE TABLE IF NOT EXISTS sync_retry (
+                table_name      TEXT NOT NULL,
+                row_id          TEXT NOT NULL,
+                attempts        INTEGER NOT NULL DEFAULT 1,
+                next_attempt_ms INTEGER NOT NULL DEFAULT 0,
+                last_error      TEXT,
+                updated_at      TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now')),
+                PRIMARY KEY (table_name, row_id)
+            );
+            CREATE INDEX IF NOT EXISTS idx_sync_retry_due ON sync_retry(table_name, next_attempt_ms);
+        `);
+
+        if (version < 36) {
+            db.pragma('user_version = 36');
+        }
+            return true;
+        },
+    },
+
 ];
