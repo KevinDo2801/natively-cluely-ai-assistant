@@ -118,7 +118,14 @@ describe('RC-7: the compiled DatabaseManager carries the guards (drift pins)', (
   test('saveMeeting pre-reads the flag and writes the user_titled column', () => {
     // v32 folders: the pre-read also carries folder_id so INSERT OR REPLACE
     // re-saves preserve the folder assignment (same RC-7 lesson).
-    assert.match(compiled, /SELECT title, COALESCE\(user_titled, 0\) AS user_titled, folder_id FROM meetings WHERE id = \?/);
+    //
+    // The pre-read also carries created_at, which this pin did not have: the
+    // regex below was updated to the statement the compiled DatabaseManager
+    // actually contains. The column was added to the read list deliberately and
+    // the pin was simply not updated with it, leaving this suite red on HEAD — a
+    // permanently failing test hides real regressions. Keep the pin exact: if the
+    // read list changes on purpose, update it here in the same commit.
+    assert.match(compiled, /SELECT title, COALESCE\(user_titled, 0\) AS user_titled, folder_id, created_at FROM meetings WHERE id = \?/);
     assert.match(compiled, /is_processed, summary_status, user_titled/);
   });
   test('the user_titled ALTER is applied UNCONDITIONALLY, not version-gated (live incident 2026-08-23)', () => {
