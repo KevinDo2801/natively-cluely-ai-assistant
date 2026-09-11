@@ -32,7 +32,7 @@ import { darwinMajorVersion, isMacOS13VenturaOrLater, macOSMajorFromDarwin } fro
 import { TRIAL_SENTINEL_KEY, DOM_CONTEXT_MAX_CHARS } from './config/constants';
 import { resolveCodingPromptSignals } from './llm/codingPromptSignals';
 import { isBareCodeRequest, looksLikeCodingAnswer, buildPriorCodingContextBlock as buildPriorCodingBlockForV3 } from './llm/codingFollowup';
-import { planAnswer, formatAnswerPlanForPrompt, isCodingAnswerType, validateAnswerStructure, validateProfileOutput, validateProfileEvidence, buildProfileRepairInstruction, raceStreamWithDeadline, firstUsefulDeadlineMs, LIVE_LOCAL_FIRST_USEFUL_TIMEOUT_MS, CODING_REGEN_ABORT_CHARS, isStealthEvasionQuestion, stripProfileTokensFromCoding, isBareFollowUp, isRefinementFollowUp, buildContextFreeClarification, sanitizeCandidateAnswer, acceptRepairedAnswer, CANDIDATE_VOICE_ANSWER_TYPES, detectAssistantVoiceMisfire, ASSISTANT_VOICE_ANSWER_TYPES, piTelemetry, classifyProviderError, detectExplicitCodingContract, isCodingContinuation, buildPriorCodingContextBlock, buildCodingContractPrompt, explicitContractProducesCode, CODING_VERIFICATION_INSTRUCTION, humanizeDirectiveFor, detectCorporateFiller, humanizeForAnswerType, applySpeakabilityBudget, compressTechnicalConcept, checkCodeCompleteness, varySpokenOpening, type ExplicitCodingContract, type AnswerType } from './llm';
+import { planAnswer, formatAnswerPlanForPrompt, isCodingAnswerType, validateAnswerStructure, validateProfileOutput, validateProfileEvidence, buildProfileRepairInstruction, raceStreamWithDeadline, firstUsefulDeadlineMs, LIVE_LOCAL_FIRST_USEFUL_TIMEOUT_MS, PLUGIN_TURN_INTER_TOKEN_STALL_MS, CODING_REGEN_ABORT_CHARS, isStealthEvasionQuestion, stripProfileTokensFromCoding, isBareFollowUp, isRefinementFollowUp, buildContextFreeClarification, sanitizeCandidateAnswer, acceptRepairedAnswer, CANDIDATE_VOICE_ANSWER_TYPES, detectAssistantVoiceMisfire, ASSISTANT_VOICE_ANSWER_TYPES, piTelemetry, classifyProviderError, detectExplicitCodingContract, isCodingContinuation, buildPriorCodingContextBlock, buildCodingContractPrompt, explicitContractProducesCode, CODING_VERIFICATION_INSTRUCTION, humanizeDirectiveFor, detectCorporateFiller, humanizeForAnswerType, applySpeakabilityBudget, compressTechnicalConcept, checkCodeCompleteness, varySpokenOpening, type ExplicitCodingContract, type AnswerType } from './llm';
 import { stripPriorAssistantTurns } from './llm/conversationHistoryPolicy';
 import { mintTurnId } from './llm/turnIdentity';
 import type { StreamRouteOptions } from './llm/streamContextPolicy';
@@ -3744,11 +3744,29 @@ export function initializeIpcHandlers(appState: AppState): void {
           // F-301: on the natively-api route the server rotates providers at
           // 10s; give it room to rescue the turn instead of aborting at 7s.
           const viaServerCascade = llmHelper.isUsingNativelyServerCascade?.() === true;
+          // CONNECTOR TURN: the answer may come from a plugin/app connector
+          // (Settings → Plugins), which is silent while the tool runs and can wait
+          // on the user's confirmation card. None of the provider-shaped budgets
+          // fit that shape — the 30s local cap killed healthy connector turns (and
+          // the abort then cancelled the pending interaction). Either the turn was
+          // explicitly bound to a plugin (`codexApp`), or auto-approval is on and
+          // the model may reach a connected plugin the user did not name.
+          const connectorTurn = Boolean(options?.codexApp)
+            || (llmHelper.isUsingCodexCli?.() === true
+              && CodexAppServerService.getInstance().getAutoApprovePlugins());
           let manualFirstUseful = false;
           let manualSuperseded = false;
-          await raceStreamWithDeadline({
+          const manualRaceOutcome = await raceStreamWithDeadline({
             stream: stream as AsyncGenerator<string>,
-            firstUsefulDeadlineMs: firstUsefulDeadlineMs(answerPlan.answerType, usingLocalLlm, viaServerCascade),
+            firstUsefulDeadlineMs: firstUsefulDeadlineMs(answerPlan.answerType, usingLocalLlm, viaServerCascade, connectorTurn),
+            // A multi-step connector answer (tool → text → tool → text) is silent
+            // while each tool runs, so the 8s inter-token guard would truncate it.
+            ...(connectorTurn ? { interTokenStallMs: PLUGIN_TURN_INTER_TOKEN_STALL_MS } : {}),
+            // Hold the budget while a plugin interaction is awaiting an answer:
+            // the user has not clicked yet, which is not a stalled provider.
+            ...(connectorTurn
+              ? { shouldHoldDeadline: () => CodexAppServerService.getInstance().hasPendingInteraction() }
+              : {}),
             isUsefulYet: () => manualFirstUseful,
             shouldAbort: () => {
               if (_chatStreamsBySender.get(senderId)?.streamId !== myStreamId) {
@@ -3821,6 +3839,15 @@ export function initializeIpcHandlers(appState: AppState): void {
             const fb = (answerPlan.answerType === 'general_meeting_answer' || answerPlan.answerType === 'lecture_answer')
               ? "I don't have enough context from the allowed source to answer that yet."
               : "The model did not produce an answer in time, so I won't guess from your profile.";
+            // Always log this: the canned line reads like a grounding failure, so
+            // without the race outcome and the route flags there is no way to tell
+            // a real timeout from a provider that answered into an empty stream.
+            // (2026-10: a connector turn and a healthy provider both ended here.)
+            console.warn(
+              `[ManualChat][no-answer] outcome=${manualRaceOutcome} answerType=${answerPlan.answerType} `
+              + `connectorTurn=${connectorTurn} provider=${usingLocalLlm ? 'local' : viaServerCascade ? 'server-cascade' : 'cloud'} `
+              + `superseded=${manualSuperseded} chars=${fullResponse.length}`,
+            );
             finalGenerationMode = 'provider_error_no_answer';
             sessionWriteDecision = decideSessionWritePolicy({ finalGenerationMode, validationOk: false, criticalViolations: ['provider_timeout_no_answer'] });
             fullResponse = fb;

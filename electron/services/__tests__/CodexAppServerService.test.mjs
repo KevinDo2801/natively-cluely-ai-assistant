@@ -525,3 +525,117 @@ test('without auto-approval an unnamed turn stays fail-closed', async () => {
   assert.equal(thread.approvalsReviewer, undefined);
   assert.match(thread.developerInstructions, /only when the user explicitly mentions that app/);
 });
+
+// ── Connector turns are slow: they must not be killed mid-tool ──────────────
+
+test('hasPendingInteraction tracks the card a renderer is showing', async () => {
+  const service = new CodexAppServerService();
+  const requests = [];
+  service.send = () => {};
+  service.on('plugin-interaction', request => requests.push(request));
+  assert.equal(service.hasPendingInteraction(), false);
+  service.receive({
+    id: 21,
+    method: 'item/tool/requestUserInput',
+    params: {
+      threadId: 'thread-1',
+      questions: [{ id: 'title', header: 'Title', question: 'Event title?', options: [] }],
+    },
+  });
+  assert.equal(service.hasPendingInteraction(), true, 'an unanswered card is a pending interaction');
+  assert.equal(service.hasPendingInteraction('thread-1'), true);
+  assert.equal(service.hasPendingInteraction('thread-other'), false,
+    'a different turn must not be held by another turn\'s card');
+  await service.resolvePluginInteraction(requests[0].requestId, { action: 'accept', values: { title: 'LeetCode' } });
+  assert.equal(service.hasPendingInteraction(), false, 'answering the card releases the hold');
+});
+
+test('a connector turn survives past the configured chat timeout', async () => {
+  // codexCliTimeoutMs defaults to 60s; the inner idle timer would fail a healthy
+  // connector turn (a running tool emits nothing). A connector turn gets the
+  // interaction budget instead, so the turn is still alive well past 40ms.
+  const { service } = fixture(s => setTimeout(() => emit(s, 'turn/completed', { turn: { status: 'completed' } }), 140));
+  service.setAutoApprovePlugins(true);
+  assert.equal(await collect(service, { ...options, timeoutMs: 40 }), '',
+    'the turn must complete instead of failing with "Codex response timed out."');
+});
+
+test('a non-connector turn still honors the configured chat timeout', async () => {
+  const { service } = fixture(s => setTimeout(() => emit(s, 'turn/completed', { turn: { status: 'completed' } }), 140));
+  await assert.rejects(collect(service, { ...options, timeoutMs: 40 }), /timed out/,
+    'ordinary chat keeps its tight timeout — only connector turns are extended');
+});
+
+// ── Connector artifacts must reach the answer ───────────────────────────────
+
+test('a connector artifact is attached when the model only says "as above"', async () => {
+  const { service } = fixture(s => {
+    emit(s, 'item/agentMessage/delta', { delta: 'Đã vẽ chú chó hình vuông như trên.' });
+    // The artifact travels as a structured item, not as answer text.
+    emit(s, 'item/completed', { item: { type: 'image', imageUrl: 'https://cdn.canva.com/dog-500.png' } });
+    emit(s, 'turn/completed', { turn: { status: 'completed' } });
+  });
+  service.listApps = async () => [{
+    id: 'connector_canva',
+    name: 'Canva',
+    isAccessible: true,
+    isEnabled: true,
+    callable: true,
+    pluginDisplayNames: [],
+  }];
+  const text = await collect(service, { ...options, app: { id: 'connector_canva', name: 'Canva' } });
+  assert.match(text, /Đã vẽ chú chó hình vuông như trên\./);
+  assert.match(text, /!\[dog-500\.png\]\(https:\/\/cdn\.canva\.com\/dog-500\.png\)/,
+    'the image the user was told to look at must actually be in the answer');
+});
+
+test('an artifact URL the model already printed is never repeated', async () => {
+  const { service } = fixture(s => {
+    emit(s, 'item/agentMessage/delta', { delta: 'Xong: ![dog](https://cdn.canva.com/dog-500.png)' });
+    emit(s, 'item/completed', { item: { type: 'image', imageUrl: 'https://cdn.canva.com/dog-500.png' } });
+    emit(s, 'turn/completed', { turn: { status: 'completed' } });
+  });
+  service.listApps = async () => [{
+    id: 'connector_canva',
+    name: 'Canva',
+    isAccessible: true,
+    isEnabled: true,
+    callable: true,
+    pluginDisplayNames: [],
+  }];
+  const text = await collect(service, { ...options, app: { id: 'connector_canva', name: 'Canva' } });
+  assert.equal(text.match(/dog-500\.png/g)?.length, 1, 'the same URL must not be appended twice');
+});
+
+test('an ordinary answer with no artifacts is untouched', async () => {
+  const { service } = fixture(s => {
+    emit(s, 'item/agentMessage/delta', { delta: 'Just prose, no links.' });
+    emit(s, 'turn/completed', { turn: { status: 'completed' } });
+  });
+  assert.equal(await collect(service), 'Just prose, no links.');
+});
+
+// REGRESSION PIN (live 2026-10): `item/completed` can arrive BEFORE the deltas
+// that carry the same text. Injecting it on arrival duplicated the whole answer
+// ("Đã chuẩn bị bản vẽ chú chó đáng yêu trong Canva.Đã chuẩn bị bản vẽ chú chó…"),
+// glued with no separator, because the recovery ran mid-turn and the deltas then
+// appended the same sentence again.
+test('a finished item arriving before its deltas never duplicates the answer', async () => {
+  const sentence = 'Đã chuẩn bị bản vẽ chú chó đáng yêu trong Canva.';
+  const { service } = fixture(s => {
+    emit(s, 'item/completed', { item: { type: 'agentMessage', text: sentence } });
+    emit(s, 'item/agentMessage/delta', { delta: sentence });
+    emit(s, 'turn/completed', { turn: { status: 'completed' } });
+  });
+  const text = await collect(service);
+  assert.equal(text, sentence, 'the sentence must appear exactly once');
+  assert.equal(text.match(/Canva\./g)?.length, 1);
+});
+
+test('a message that only ever arrived as an item is still delivered', async () => {
+  const { service } = fixture(s => {
+    emit(s, 'item/completed', { item: { type: 'agentMessage', text: 'Answered without any deltas.' } });
+    emit(s, 'turn/completed', { turn: { status: 'completed' } });
+  });
+  assert.equal(await collect(service), 'Answered without any deltas.');
+});

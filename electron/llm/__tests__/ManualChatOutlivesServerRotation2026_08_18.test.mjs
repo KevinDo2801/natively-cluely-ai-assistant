@@ -71,8 +71,8 @@ test('routes with no server cascade keep their original budgets', () => {
 
 test('the manual-chat call site passes the server-cascade flag', () => {
   const src = fs.readFileSync(path.join(root, 'electron/ipcHandlers.ts'), 'utf8');
-  assert.ok(/firstUsefulDeadlineMs\(answerPlan\.answerType,\s*usingLocalLlm,\s*viaServerCascade\)/.test(src),
-    'the manual-chat handler must pass viaServerCascade into firstUsefulDeadlineMs (F-301)');
+  assert.ok(/firstUsefulDeadlineMs\(answerPlan\.answerType,\s*usingLocalLlm,\s*viaServerCascade,\s*connectorTurn\)/.test(src),
+    'the manual-chat handler must pass viaServerCascade into firstUsefulDeadlineMs (F-301) — and, as of the connector-turn fix, the connector flag as the 4th argument');
   assert.ok(/isUsingNativelyServerCascade\?\.\(\)/.test(src),
     'viaServerCascade must be derived from the LLMHelper route predicate');
 });

@@ -4,6 +4,7 @@ import fs from 'fs';
 import os from 'os';
 import path from 'path';
 import { buildAutoApprovalResponse } from './codexPluginAutoApproval.mjs';
+import { buildMediaBlock, collectMediaFromNotification, recoverAgentMessageText } from './codexNotificationMedia.mjs';
 
 // Developer instructions handed to the managed App Server thread. Both variants
 // keep the same hard bans (no shell, no local files, no delegation); they differ
@@ -13,6 +14,24 @@ import { buildAutoApprovalResponse } from './codexPluginAutoApproval.mjs';
 // silently granted connector writes they did not ask for.
 const CODEX_DEVELOPER_INSTRUCTIONS_BASE =
   'Ask only for details required by the connector. Once the required details are known, call the connector directly. '
+  // Live capture 2026-10: a Canva turn produced an image item and the model
+  // answered "Đã vẽ chú chó hình vuông như trên" while the chat showed nothing —
+  // the chat only displays what the model WRITES, and connector artifacts used to
+  // be dropped. Requiring the URL in the reply is the cheap half of the fix (the
+  // other half appends any URL the connector returned, see codexNotificationMedia).
+  + 'When a connector produces something the user must SEE or OPEN (an image, a design, a file, a page), '
+  + 'always include its full https URL in your reply — as a markdown image for media, as a markdown link otherwise. '
+  // Live 2026-10: with only the "as above" ban, the model invented a UI instead —
+  // "Canva đã mở phần tạo thiết kế ngay trong cuộc trò chuyện. Hãy chọn phong cách
+  // trong khung Canva" — describing a panel that does not exist, so the user was
+  // told to click something they could not see. Nothing renders inside the chat
+  // except what Natively draws itself, so claiming a connector UI is open there is
+  // always false.
+  + 'Never claim that a panel, editor, frame, widget, preview, or connector UI has opened in this chat: '
+  + 'no connector interface is ever rendered inside the conversation. If a connector produced an artifact, give its URL; '
+  + 'if it produced nothing you can link, say that plainly instead of describing a screen the user cannot see. '
+  + 'Never say "shown above", "as above" or "the attached file": the chat only displays what you write. '
+  + 'Do not claim to have sent, saved, or uploaded anything unless a connector confirmed it in this turn. '
   + 'Do not claim that a browser is unavailable when an app connector is selected. '
   + 'Do not call shell tools, run commands, read local files, or delegate work.';
 const CODEX_DEVELOPER_INSTRUCTIONS_EXPLICIT_APP =
@@ -24,6 +43,23 @@ const CODEX_DEVELOPER_INSTRUCTIONS_AUTO_APPROVED_APP =
   + 'when several connectors could fit, pick the one whose name, description, or capabilities match the request best. '
   + 'Natively approves connector actions automatically, so never ask the user for permission or a prose confirmation — perform the action and report the result. '
   + CODEX_DEVELOPER_INSTRUCTIONS_BASE;
+
+/**
+ * How long a plugin interaction may wait for a decision, and the floor for a
+ * connector turn's total silence budget. One number for both so the renderer's
+ * card timer and the App Server's idle timer cannot disagree about how long the
+ * user has to answer.
+ */
+const PLUGIN_INTERACTION_TIMEOUT_MS = 5 * 60_000;
+
+/**
+ * NATIVELY_CODEX_DEBUG_NOTIFICATIONS=1 logs every raw App Server notification
+ * (method + truncated params). Off by default: it is verbose, and it exists so a
+ * connector turn can be diagnosed from `natively_debug.log` alone — which item
+ * methods the App Server emits and where an artifact URL lives — instead of
+ * guessing at the schema.
+ */
+const DEBUG_NOTIFICATIONS = process.env.NATIVELY_CODEX_DEBUG_NOTIFICATIONS === '1';
 
 export interface CodexModelInfo {
   id: string;
@@ -111,6 +147,21 @@ export class CodexAppServerService extends EventEmitter {
   getStatus() { return { ...this.status }; }
   getAutoApprovePlugins() { return this.autoApprovePlugins; }
   setAutoApprovePlugins(enabled: boolean) { this.autoApprovePlugins = enabled === true; }
+  /**
+   * True while a plugin interaction (approval / elicitation) is waiting for an
+   * answer. The live-deadline guard holds a turn's first-useful budget while this
+   * is true: a card the user has not clicked yet is not a stalled provider, and
+   * letting the guard fire would abort the turn AND cancel the very interaction
+   * the user was about to approve.
+   */
+  hasPendingInteraction(threadId?: string): boolean {
+    if (this.pluginInteractions.size === 0) return false;
+    if (!threadId) return true;
+    for (const pending of this.pluginInteractions.values()) {
+      if (String(pending.params?.threadId || '') === threadId) return true;
+    }
+    return false;
+  }
   getAppsCatalogStatus() { return { limited: this.appsCatalogLimited, source: this.appsCatalogSource }; }
   adoptAppsCatalog(apps: CodexAppInfo[]) {
     this.apps = apps.map(app => ({ ...app, pluginDisplayNames: [...app.pluginDisplayNames] }));
@@ -292,7 +343,7 @@ export class CodexAppServerService extends EventEmitter {
         }
         const timer = setTimeout(() => {
           void this.resolvePluginInteraction(requestId, { action: 'cancel' }).catch(() => {});
-        }, 5 * 60_000);
+        }, PLUGIN_INTERACTION_TIMEOUT_MS);
         this.pluginInteractions.set(requestId, {
           rpcId: message.id,
           method: message.method,
@@ -701,20 +752,93 @@ export class CodexAppServerService extends EventEmitter {
     let wake: (() => void) | undefined;
     let timer: ReturnType<typeof setTimeout>;
     const finish = (error?: Error) => { failure = error; done = true; wake?.(); };
-    const resetTimer = (delay = options.timeoutMs) => { clearTimeout(timer); timer = setTimeout(() => finish(new Error('Codex response timed out.')), delay); };
+    // Connector turns are slow by nature: the App Server emits nothing while a
+    // tool runs, and a write that needs a decision waits on the user's card. The
+    // configured chat budget (codexCliTimeoutMs, 60s default) would fail a
+    // healthy turn, so a connector turn gets at least the interaction budget —
+    // the same wall-clock promise the renderer's card timer makes.
+    const turnTimeoutMs = connectorTurnsAllowed
+      ? Math.max(options.timeoutMs, PLUGIN_INTERACTION_TIMEOUT_MS)
+      : options.timeoutMs;
+    const resetTimer = (delay = turnTimeoutMs) => { clearTimeout(timer); timer = setTimeout(() => finish(new Error('Codex response timed out.')), delay); };
     const onAbort = () => finish(new Error('Codex request aborted.'));
     const onDisconnect = (error: Error) => finish(error);
+    // Connector artifacts (images, designs, files) arrive as structured ITEMS,
+    // not as answer text — the live capture that produced "Đã vẽ chú chó hình
+    // vuông như trên" with nothing on screen. Collect them for the turn and append
+    // what the model did not already write, so the bubble shows the thing the
+    // connector made. See codexNotificationMedia.
+    const turnMedia: ReturnType<typeof collectMediaFromNotification> = [];
+    // Last finished-message item of the turn. Held (never streamed) so a
+    // completion that arrives before its deltas cannot duplicate the answer.
+    let lastFinishedMessageItem: any = null;
+    // Diagnostics for the "turn ended with zero text" case (the canned
+    // "I don't have enough context…" line): which notifications actually arrived,
+    // how many carried deltas, and whether any were dropped by the thread filter.
+    let notificationCount = 0;
+    let deltaCount = 0;
+    let mismatchedThreadCount = 0;
+    let lastNotificationMethod = '';
     const onNotification = (message: any) => {
       const p = message.params;
-      if (p?.threadId !== threadId) return;
+      if (p?.threadId !== threadId) { mismatchedThreadCount++; return; }
+      notificationCount++;
+      lastNotificationMethod = String(message.method || '');
       const isPluginInteraction = message.method === 'item/tool/requestUserInput'
         || message.method === 'mcpServer/elicitation/request';
-      resetTimer(isPluginInteraction ? Math.max(options.timeoutMs, 5 * 60_000) : options.timeoutMs);
-      if (message.method === 'item/agentMessage/delta') { chunks.push(p.delta); wake?.(); }
+      resetTimer(isPluginInteraction ? Math.max(turnTimeoutMs, PLUGIN_INTERACTION_TIMEOUT_MS) : turnTimeoutMs);
+      if (DEBUG_NOTIFICATIONS) {
+        // Diagnosing a connector needs the RAW notification shape: which item
+        // methods it emits and where a URL/artifact lives. Gate with
+        // NATIVELY_CODEX_DEBUG_NOTIFICATIONS=1 (verbose — one line per event).
+        try {
+          console.log(`[CodexAppServer][notify] ${message.method} ${JSON.stringify(message.params ?? {}).slice(0, 1500)}`);
+        } catch { /* diagnostics must never break the turn */ }
+      }
+      if (message.method === 'item/agentMessage/delta') {
+        deltaCount++;
+        chunks.push(p.delta);
+        wake?.();
+      } else {
+        // A finished message can also arrive as an ITEM instead of deltas. HOLD
+        // it — do NOT push it here: an `item/completed` can land BEFORE the deltas
+        // that carry the same text, and injecting it mid-turn duplicated the whole
+        // answer ("…trong Canva.Đã chuẩn bị bản vẽ…", live 2026-10). It is only
+        // used at turn/completed, and only for text the stream never delivered.
+        if (message.method === 'item/completed' || message.method === 'item/updated') {
+          lastFinishedMessageItem = message;
+        }
+        // Never mine the answer-text channel: that would duplicate every URL the
+        // model itself wrote.
+        for (const entry of collectMediaFromNotification(message)) {
+          if (!turnMedia.some(existing => existing.url === entry.url)) turnMedia.push(entry);
+        }
+      }
       if (message.method === 'turn/completed') {
         if (p.turn.status === 'failed') finish(new Error(p.turn.error?.message || 'Codex turn failed.'));
         else if (p.turn.status === 'interrupted') finish(new Error('Codex request aborted.'));
-        else finish();
+        else {
+          // The turn is over: now it is safe to fill a message that arrived as an
+          // item (no later delta can repeat it).
+          const recovered = recoverAgentMessageText(lastFinishedMessageItem, chunks.join(''));
+          if (recovered) {
+            chunks.push(recovered);
+            console.log(`[CodexAppServer] Recovered ${recovered.length} chars of answer text from ${lastFinishedMessageItem?.method}`);
+          }
+          if (!chunks.join('').trim()) {
+            console.warn(
+              `[CodexAppServer][empty-turn] status=${p.turn.status ?? 'completed'} notifications=${notificationCount} deltas=${deltaCount} `
+              + `droppedByThreadFilter=${mismatchedThreadCount} lastMethod=${lastNotificationMethod || 'none'} connectorTurn=${connectorTurnsAllowed} `
+              + `— the turn produced no text; the chat will show the no-answer fallback`,
+            );
+          }
+          const mediaBlock = buildMediaBlock(chunks.join(''), turnMedia);
+          if (mediaBlock) {
+            chunks.push(mediaBlock);
+            if (connectorTurnsAllowed) console.log(`[CodexAppServer] Attached ${turnMedia.length} connector artifact link(s) to the answer`);
+          }
+          finish();
+        }
       }
     };
     this.on('notification', onNotification); this.on('disconnected', onDisconnect);

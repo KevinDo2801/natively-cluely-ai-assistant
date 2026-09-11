@@ -56,6 +56,46 @@ export const LIVE_PROVIDER_FIRST_USEFUL_COMPLEX_TIMEOUT_MS = 7000;
 export const LIVE_LOCAL_FIRST_USEFUL_TIMEOUT_MS = 30000;
 
 /**
+ * First-useful cap for a turn that may run a CONNECTOR (ChatGPT app / plugin from
+ * Settings → Plugins).
+ *
+ * The 7s cloud cap and the 30s local cap both assume the provider starts emitting
+ * text as soon as it is warm. A connector turn breaks that assumption completely:
+ * the App Server emits NO `item/agentMessage/delta` while a tool call runs, and
+ * the call itself is slow (design/image generation, a mailbox scan, a calendar
+ * write) — so a healthy turn looks exactly like a hung provider. Worse, a write
+ * that needs a decision stalls until the user answers the confirmation card,
+ * which has its own 5-minute budget (CodexAppServerService).
+ *
+ * Observed 2026-10 (chat overlay): "Canva vẽ cho tôi ảnh con dog 500x500" was
+ * killed at the 30s local cap with ZERO tokens — the user got the canned
+ * "I don't have enough context from the allowed source to answer that yet."
+ * line while the connector was still working, and the abort then cancelled the
+ * in-flight plugin interaction, so the action could never complete.
+ *
+ * 5 minutes matches the plugin-interaction budget in CodexAppServerService:
+ * whichever side gives up first, it is the same wall-clock promise. The inner
+ * App Server idle timer still fails a genuinely dead child, so this does not
+ * remove hang detection — it stops the client from guillotining WORK.
+ */
+export const PLUGIN_TURN_FIRST_USEFUL_TIMEOUT_MS = 5 * 60_000;
+
+/**
+ * After the first token of a connector turn has streamed, the same reasoning
+ * applies to the inter-token guard: a multi-step connector answer (tool → text →
+ * tool → text) can sit silently for far longer than the 8s stall guard while the
+ * next tool call runs.
+ */
+export const PLUGIN_TURN_INTER_TOKEN_STALL_MS = 5 * 60_000;
+
+/**
+ * Re-check cadence while a deadline is being HELD (see `shouldHoldDeadline`).
+ * Holding is for "the provider is legitimately busy right now", so the check is
+ * a poll; 1s keeps it cheap while staying responsive to the hold ending.
+ */
+export const DEADLINE_HOLD_RECHECK_MS = 1000;
+
+/**
  * Is `text` a COMPLETE short answer, as opposed to a truncated fragment?
  *
  * The live path replaces a sub-threshold buffer with a canned "no answer" line
@@ -215,12 +255,18 @@ const COMPLEX_TYPES = new Set<AnswerType>([
  * local model may need to cold-load its weights first, so a local provider gets the
  * far longer LIVE_LOCAL_FIRST_USEFUL_TIMEOUT_MS regardless of answer type. The
  * caller passes llmHelper.isUsingOllama(). Defaults false (cloud) for back-compat.
+ * `isConnectorTurn` (a turn that may call a plugin/app connector) wins over both:
+ * its silent period is the tool call, not provider warm-up.
  */
 export function firstUsefulDeadlineMs(
   answerType: AnswerType,
   isLocal: boolean = false,
   viaServerCascade: boolean = false,
+  isConnectorTurn: boolean = false,
 ): number {
+  // A connector turn outranks every other cap: its silent period is the tool
+  // call, not provider slowness, so none of the provider-shaped budgets fit it.
+  if (isConnectorTurn) return PLUGIN_TURN_FIRST_USEFUL_TIMEOUT_MS;
   if (isLocal) return LIVE_LOCAL_FIRST_USEFUL_TIMEOUT_MS;
   // F-301: on the natively-api route the SERVER runs a sequential cascade and
   // cuts over to the next provider at AI_TTFT_BUDGET_MS (10s). Aborting at the
@@ -265,6 +311,20 @@ export async function raceStreamWithDeadline(opts: {
   /** Bail predicate (e.g. superseded by a newer generation). */
   shouldAbort?: () => boolean;
   /**
+   * While this returns true a fired deadline is RE-ARMED instead of honored
+   * (re-checked every DEADLINE_HOLD_RECHECK_MS).
+   *
+   * For work that is genuinely in progress but silent: a connector tool call, or
+   * an approval waiting for the user — both emit no provider tokens for minutes
+   * while being perfectly healthy. Without this, the guard that exists to protect
+   * users from a hung provider kills exactly the turns they asked for (observed:
+   * "Canva vẽ ảnh…" aborted at 30s with zero tokens, and the abort cancelled the
+   * pending plugin interaction).
+   *
+   * MUST be cheap and MUST NOT throw — it is called on the stream's hot path.
+   */
+  shouldHoldDeadline?: () => boolean;
+  /**
    * Called once when the loop ends. The reason distinguishes normal completion
    * from a timeout/stall/supersession, so callers can abort an underlying HTTP
    * request only when it still needs cancellation. Fire-and-forget iterator
@@ -276,11 +336,26 @@ export async function raceStreamWithDeadline(opts: {
   const {
     stream, firstUsefulDeadlineMs: fuMs, interTokenStallMs = LIVE_INTER_TOKEN_STALL_MS,
     isSpeculative = false, onToken, isUsefulYet, onFirstUsefulTimeout, onStallTimeout, shouldAbort, onCleanup,
+    shouldHoldDeadline,
   } = opts;
   const iterator = (stream as AsyncIterable<string>)[Symbol.asyncIterator]();
   const start = Date.now();
   let lastTokenAt = start;
   let useful = false;
+  // While a deadline is held, the next re-check is scheduled from here (see
+  // shouldHoldDeadline). Without it the elapsed-budget math yields ~50ms and the
+  // hold would spin at 20Hz for the whole tool call.
+  let holdRearmAt = 0;
+  // The in-flight next() is kept ACROSS iterations. A held deadline returns to
+  // the top of the loop, and calling iterator.next() again would race two
+  // concurrent pulls: the abandoned one would still resolve and its value would
+  // be dropped — silently losing the first token of exactly the connector turns
+  // the hold exists to protect.
+  let pending: Promise<IteratorResult<string>> | null = null;
+  const holds = () => {
+    if (!shouldHoldDeadline) return false;
+    try { return shouldHoldDeadline() === true; } catch { return false; }
+  };
   // Fire-and-forget cleanup. A generator stuck in `await sleep()` (a hung
   // provider) will NOT honor iterator.return() until its await unblocks, so we
   // must NOT `await` the cleanup on the deadline path — that would re-introduce
@@ -298,8 +373,8 @@ export async function raceStreamWithDeadline(opts: {
       if (!isSpeculative) {
         if (!useful) useful = isUsefulYet();
         const remaining = !useful
-          ? Math.max(50, fuMs - (Date.now() - start))
-          : Math.max(50, interTokenStallMs - (Date.now() - lastTokenAt));
+          ? Math.max(50, Math.max(fuMs - (Date.now() - start), holdRearmAt - Date.now()))
+          : Math.max(50, Math.max(interTokenStallMs - (Date.now() - lastTokenAt), holdRearmAt - Date.now()));
         let timer: ReturnType<typeof setTimeout> | undefined;
         const deadline = new Promise<typeof DEADLINE>((r) => { timer = setTimeout(() => r(DEADLINE), remaining); });
         // DEFUSE the racing next() promise: if the deadline wins, this promise is
@@ -307,11 +382,18 @@ export async function raceStreamWithDeadline(opts: {
         // rejects (timeout / 429 / socket reset) it would surface as an
         // unhandledRejection (fatal in Electron main). Attach a no-op catch so the
         // loser can never be an unhandled rejection (code-review 2026-06-05, HIGH).
-        const nextP = iterator.next();
+        const nextP: Promise<IteratorResult<string>> = pending ?? iterator.next();
+        pending = nextP;
         nextP.catch(() => { /* loser of the race — defused */ });
         res = await Promise.race([nextP, deadline]);
         if (timer) clearTimeout(timer);
         if (res === DEADLINE) {
+          // Held: something is legitimately in progress (connector tool call /
+          // pending approval). Re-arm instead of firing the guard.
+          if (holds()) {
+            holdRearmAt = Date.now() + DEADLINE_HOLD_RECHECK_MS;
+            continue;
+          }
           if (!useful) {
             cleanup('first_useful_timeout');
             onFirstUsefulTimeout?.();
@@ -321,6 +403,8 @@ export async function raceStreamWithDeadline(opts: {
           onStallTimeout?.();
           return 'stall_timeout';
         }
+        // A real value arrived — retire the in-flight pull.
+        pending = null;
       } else {
         res = await iterator.next();
       }
