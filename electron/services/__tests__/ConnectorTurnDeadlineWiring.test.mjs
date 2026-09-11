@@ -63,15 +63,15 @@ describe('connector artifacts vs the text-only stream', () => {
     assert.match(serviceSource, /import \{ buildMediaBlock, collectMediaFromNotification, recoverAgentMessageText \} from '\.\/codexNotificationMedia\.mjs';/);
     assert.match(serviceSource, /else \{[\s\S]*?collectMediaFromNotification\(message\)[\s\S]*?turnMedia\.push\(entry\)/,
       'media must be collected from item notifications (never from the answer-text delta)');
-    assert.match(serviceSource, /const mediaBlock = buildMediaBlock\(chunks\.join\(''\), turnMedia\);[\s\S]*?if \(mediaBlock\) \{[\s\S]*?chunks\.push\(mediaBlock\);/,
+    assert.match(serviceSource, /const mediaBlock = buildMediaBlock\(streamedText, turnMedia\);[\s\S]*?if \(mediaBlock\) \{[\s\S]*?chunks\.push\(mediaBlock\);/,
       'the artifact block must be appended once the turn completes');
   });
 
   test('a message delivered as an item is recovered instead of showing the no-answer line', () => {
     assert.match(serviceSource, /lastFinishedMessageItem = message;/,
       'the finished item must be HELD, not streamed on arrival');
-    assert.match(serviceSource, /const recovered = recoverAgentMessageText\(lastFinishedMessageItem, chunks\.join\(''\)\);/,
-      'recovery must run at turn/completed only — running it on arrival duplicated the answer');
+    assert.match(serviceSource, /let streamedText = '';[\s\S]*?streamedText \+= delta;[\s\S]*?const recovered = recoverAgentMessageText\(lastFinishedMessageItem, streamedText\);/,
+      'recovery must compare against a durable transcript, not the drained delivery queue');
     assert.match(serviceSource, /\[CodexAppServer\]\[empty-turn\] status=/,
       'a zero-token turn must leave a diagnostic naming what actually arrived');
     assert.match(ipcSource, /\[ManualChat\]\[no-answer\] outcome=\$\{manualRaceOutcome\}/,

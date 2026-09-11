@@ -746,7 +746,11 @@ export class CodexAppServerService extends EventEmitter {
     const threadId = created.thread.id;
     if (activeApp) this.threadApps.set(threadId, activeApp);
     let turnId: string | undefined;
+    // `chunks` is a delivery queue and is continuously drained by the async
+    // generator below. Keep the full streamed transcript separately so an
+    // item/completed snapshot cannot be mistaken for text that never arrived.
     const chunks: string[] = [];
+    let streamedText = '';
     let done = false;
     let failure: Error | undefined;
     let wake: (() => void) | undefined;
@@ -797,7 +801,11 @@ export class CodexAppServerService extends EventEmitter {
       }
       if (message.method === 'item/agentMessage/delta') {
         deltaCount++;
-        chunks.push(p.delta);
+        const delta = typeof p.delta === 'string' ? p.delta : '';
+        if (delta) {
+          chunks.push(delta);
+          streamedText += delta;
+        }
         wake?.();
       } else {
         // A finished message can also arrive as an ITEM instead of deltas. HOLD
@@ -820,21 +828,23 @@ export class CodexAppServerService extends EventEmitter {
         else {
           // The turn is over: now it is safe to fill a message that arrived as an
           // item (no later delta can repeat it).
-          const recovered = recoverAgentMessageText(lastFinishedMessageItem, chunks.join(''));
+          const recovered = recoverAgentMessageText(lastFinishedMessageItem, streamedText);
           if (recovered) {
             chunks.push(recovered);
+            streamedText += recovered;
             console.log(`[CodexAppServer] Recovered ${recovered.length} chars of answer text from ${lastFinishedMessageItem?.method}`);
           }
-          if (!chunks.join('').trim()) {
+          if (!streamedText.trim()) {
             console.warn(
               `[CodexAppServer][empty-turn] status=${p.turn.status ?? 'completed'} notifications=${notificationCount} deltas=${deltaCount} `
               + `droppedByThreadFilter=${mismatchedThreadCount} lastMethod=${lastNotificationMethod || 'none'} connectorTurn=${connectorTurnsAllowed} `
               + `— the turn produced no text; the chat will show the no-answer fallback`,
             );
           }
-          const mediaBlock = buildMediaBlock(chunks.join(''), turnMedia);
+          const mediaBlock = buildMediaBlock(streamedText, turnMedia);
           if (mediaBlock) {
             chunks.push(mediaBlock);
+            streamedText += mediaBlock;
             if (connectorTurnsAllowed) console.log(`[CodexAppServer] Attached ${turnMedia.length} connector artifact link(s) to the answer`);
           }
           finish();
