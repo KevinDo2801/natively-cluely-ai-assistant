@@ -2,6 +2,7 @@ import { animate, AnimatePresence, motion, useMotionValue, useTransform } from '
 import {
   AtSign,
   ArrowRight,
+  ArrowUp,
   ArrowDown,
   ChevronDown,
   Code,
@@ -14,6 +15,7 @@ import {
   List,
   MessageSquare,
   Mic,
+  Pause,
   Pencil,
   PointerOff,
   RefreshCw,
@@ -1483,6 +1485,150 @@ const NativelyInterface: React.FC<NativelyInterfaceProps> = ({
   const t = useT();
   const [isExpanded, setIsExpanded] = useState(true);
   const [inputValue, setInputValue] = useState('');
+  const [dictationState, setDictationState] = useState<'idle' | 'starting' | 'recording' | 'transcribing'>('idle');
+  const [dictationLevels, setDictationLevels] = useState<number[]>(() => Array(44).fill(0.08));
+  const [dictationError, setDictationError] = useState('');
+  // Which composer action is mid-flight, so the spinner lands on the button the
+  // user actually pressed rather than on a fixed slot. Without this, stopping
+  // via the send arrow would spin the dictate slot and vice versa — the user
+  // would think the click missed.
+  const [dictationStopIntent, setDictationStopIntent] = useState<null | 'review' | 'send'>(null);
+  const dictationActiveRef = useRef(false);
+  const dictationOperationRef = useRef(0);
+  // Set when the user ended dictation with the green send arrow. The dictated
+  // text has to land in `inputValue` through setState BEFORE handleManualSubmit
+  // reads it, so the submit is deferred to an effect instead of being issued
+  // inline — calling it here would run the CURRENT render's closure, which still
+  // sees the pre-update input (the previous draft, or nothing at all).
+  const dictationSendPendingRef = useRef(false);
+
+  const finishDictation = useCallback((result: { text: string; error?: string }, options?: { send?: boolean }) => {
+    const spokenText = result.text?.trim() || '';
+    if (spokenText) {
+      setInputValue((current) => current.trimEnd() ? `${current.trimEnd()} ${spokenText}` : spokenText);
+      if (options?.send) dictationSendPendingRef.current = true;
+    }
+    setDictationError(
+      result.error || (!spokenText ? 'No speech was detected. Check your microphone and try again.' : ''),
+    );
+    dictationActiveRef.current = false;
+    setDictationStopIntent(null);
+    setDictationState('idle');
+    setDictationLevels(Array(44).fill(0.08));
+  }, []);
+
+  useEffect(() => {
+    const removeLevel = window.electronAPI?.onDictationLevel?.((level) => {
+      const normalized = Math.max(0.04, Math.min(1, Number.isFinite(level) ? level : 0));
+      setDictationLevels((levels) => [...levels.slice(1), normalized]);
+    });
+    const removeFinished = window.electronAPI?.onDictationFinished?.((result) => {
+      dictationOperationRef.current += 1;
+      finishDictation(result);
+    });
+    return () => {
+      removeLevel?.();
+      removeFinished?.();
+      if (dictationActiveRef.current) void window.electronAPI?.cancelDictation?.();
+    };
+  }, [finishDictation]);
+
+  const startDictation = useCallback(async () => {
+    if (dictationActiveRef.current) return;
+    const operation = ++dictationOperationRef.current;
+    dictationActiveRef.current = true;
+    dictationSendPendingRef.current = false;
+    setDictationError('');
+    setDictationStopIntent(null);
+    setDictationLevels(Array(44).fill(0.08));
+    setDictationState('starting');
+    const deviceId = localStorage.getItem('preferredInputDeviceId') || undefined;
+    try {
+      const result = await window.electronAPI.startDictation(deviceId);
+      if (dictationOperationRef.current !== operation) {
+        if (result.success) void window.electronAPI.cancelDictation();
+        return;
+      }
+      if (!result.success) throw new Error(result.error || 'Could not start dictation.');
+      setDictationState('recording');
+    } catch (error) {
+      if (dictationOperationRef.current !== operation) return;
+      dictationActiveRef.current = false;
+      setDictationState('idle');
+      setDictationError(error instanceof Error ? error.message : String(error));
+    }
+  }, []);
+
+  /**
+   * Stop the recording and transcribe it.
+   *
+   * `send` = false → the text is placed in the composer for review; the user
+   * presses the normal send arrow when satisfied.
+   * `send` = true  → the text is submitted as soon as it lands (the green arrow).
+   *
+   * Takes an explicit flag rather than being four separate handlers because the
+   * two paths differ ONLY in that argument; wrapping it at each call site (rather
+   * than passing it as the onClick handler directly) also keeps the click event
+   * from arriving as a truthy `send`.
+   */
+  const runStopDictation = useCallback(async (send: boolean) => {
+    if (!dictationActiveRef.current) return;
+    const operation = dictationOperationRef.current;
+    setDictationStopIntent(send ? 'send' : 'review');
+    setDictationState('transcribing');
+    try {
+      const result = await window.electronAPI.stopDictation();
+      if (dictationOperationRef.current !== operation) return;
+      if (!result.success && !result.text) throw new Error(result.error || 'Could not transcribe the recording.');
+      finishDictation(result, { send });
+    } catch (error) {
+      if (dictationOperationRef.current !== operation) return;
+      dictationActiveRef.current = false;
+      dictationSendPendingRef.current = false;
+      setDictationStopIntent(null);
+      setDictationState('idle');
+      setDictationError(error instanceof Error ? error.message : String(error));
+    }
+  }, [finishDictation]);
+
+  const cancelDictation = useCallback(() => {
+    dictationOperationRef.current += 1;
+    dictationActiveRef.current = false;
+    dictationSendPendingRef.current = false;
+    setDictationStopIntent(null);
+    setDictationState('idle');
+    setDictationLevels(Array(44).fill(0.08));
+    setDictationError('');
+    void window.electronAPI.cancelDictation();
+  }, []);
+
+  // Cmd+B collapses the shell (and hides the OS window) without unmounting it,
+  // so the unmount cleanup above never runs. Without this the microphone would
+  // keep recording behind a hidden, `inert` panel: the waveform the user was
+  // watching disappears while the mic stays live until the 5-minute ceiling —
+  // the one state a dictation UI must never reach.
+  useEffect(() => {
+    if (isExpanded || !dictationActiveRef.current) return;
+    console.warn('[Dictation] Overlay collapsed — cancelling the in-flight recording.');
+    cancelDictation();
+  }, [isExpanded, cancelDictation]);
+
+  // ── Composer dictation slots ───────────────────────────────────────────────
+  // One dictation session is driven by the composer's EXISTING two controls
+  // rather than by a second row of its own:
+  //   • the dictate slot (left of send) becomes PAUSE  → stop, transcribe, and
+  //     put the text in the composer so it can be reviewed or edited;
+  //   • the send slot becomes an UP ARROW             → stop, transcribe, and
+  //     submit immediately (the "just answer it" path).
+  // The recording row above therefore carries only Cancel + the waveform.
+  const dictateSlotBusy = dictationState === 'starting'
+    || (dictationState === 'transcribing' && dictationStopIntent !== 'send');
+  const sendSlotBusy = dictationState === 'transcribing' && dictationStopIntent === 'send';
+  const dictateSlotEnabled = dictationState === 'idle' || dictationState === 'recording';
+  const sendSlotEnabled = dictationState === 'recording'
+    || (dictationState === 'idle' && inputValue.trim().length > 0);
+  const sendSlotPrimary = dictationState === 'recording'
+    || (dictationState === 'idle' && inputValue.trim().length > 0);
   // Terminal-style chat history: every submitted message is pushed onto this
   // stack, and ↑/↓ walk it (like a shell's history). The cursor is the index
   // into `chatHistoryRef.current` being shown, or -1 when the user is composing
@@ -6773,6 +6919,23 @@ Provide only the answer, nothing else.`;
   // stale snapshot from first render.
   handleManualSubmitRef.current = handleManualSubmit;
 
+  // Deferred submit for the green dictation arrow. Placed here on purpose: it
+  // must run AFTER the render that wrote the dictated text into `inputValue`
+  // (setInputValue is async), because handleManualSubmit reads inputValue from
+  // its closure and the ref above is re-pointed at the newest closure on every
+  // render. Issuing the submit from the dictation handler itself would send the
+  // PREVIOUS draft — or nothing, when the composer was empty.
+  useEffect(() => {
+    if (!dictationSendPendingRef.current) return;
+    if (dictationState !== 'idle') return;
+    dictationSendPendingRef.current = false;
+    // An empty transcript means the words never arrived (silence, a provider
+    // drop, or a cancel) — finishDictation already reported why, so do not
+    // fire an empty submit.
+    if (!inputValue.trim()) return;
+    void handleManualSubmitRef.current();
+  }, [inputValue, dictationState]);
+
   // ── Terminal-style chat history navigation ────────────────────────────────
   // dir = -1 walks OLDER (↑), dir = +1 walks NEWER (↓). Cursor semantics:
   //   -1 → composing fresh text; the current input is the "draft"
@@ -8162,7 +8325,23 @@ Provide only the answer, nothing else.`;
 
     const onMouseDown = (e: MouseEvent) => {
       const target = e.target as HTMLElement | null;
-      const isStealthEngageTarget = Boolean(target?.closest?.('[data-stealth-engage="true"]'));
+      // The composer's dictation controls (mic / cancel / pause / send) sit
+      // INSIDE the `data-stealth-engage` wrapper, because the recording row is
+      // drawn over the textarea. They are transport controls, not a text-entry
+      // affordance: engaging the CGEventTap on them would re-introduce exactly
+      // the ROUND 3 bug above (tap engaged → the next window the user opens
+      // can't be typed into, e.g. Settings' API-key field). They are marked
+      // `data-dictation-control` and excluded here.
+      //
+      // Deliberately NOT keyed on `data-stealth-ignore`: that attribute predates
+      // the opt-IN inversion and is still present on the plugin-mention chip
+      // inside this same wrapper. Honouring it here would silently stop THAT
+      // chip from engaging the tap — an unrelated, pre-existing behaviour change
+      // this feature has no business making.
+      const isStealthEngageTarget = Boolean(
+        target?.closest?.('[data-stealth-engage="true"]') &&
+        !target?.closest?.('[data-dictation-control="true"]'),
+      );
       if (
         !shouldFireStealthTapStart({
           stealthTapActive: stealthTapActiveRef.current,
@@ -9541,7 +9720,7 @@ Provide only the answer, nothing else.`;
                     // mousedown listener (capture phase) already engaged
                     // the CGEventTap, so typing routes through that path.
                     onMouseDown={blockInputFocus}
-                    readOnly={stealthTapActive}
+                    readOnly={stealthTapActive || dictationState !== 'idle'}
                     // Engaged-session appearance. On macOS the input takes real
                     // DOM focus on click (the panel can hold key focus without
                     // activating), so it shows the aurora glow and the green
@@ -9552,12 +9731,48 @@ Provide only the answer, nothing else.`;
                     // since every click there engages the stealth hook. Drive
                     // the same aurora glow with a class instead, and drop the
                     // green, so both platforms look identical on click.
-                    className={`w-full min-h-[42px] max-h-[120px] resize-none overflow-y-auto whitespace-pre-wrap break-words [field-sizing:content] border rounded-xl pl-3 pr-10 py-2.5 text-[13px] leading-relaxed ${inputClass} ${stealthTapActive && isWindows ? 'aurora-focus-active' : ''} ${stealthTapActive && !isWindows ? 'ring-2 ring-emerald-400/30 border-emerald-400/40 shadow-[0_0_12px_rgba(52,211,153,0.15)]' : ''}`}
+                    className={`w-full min-h-[42px] max-h-[120px] resize-none overflow-y-auto whitespace-pre-wrap break-words [field-sizing:content] border rounded-xl pl-3 pr-10 py-2.5 text-[13px] leading-relaxed ${inputClass} ${dictationState !== 'idle' ? 'opacity-0 pointer-events-none' : ''} ${stealthTapActive && isWindows ? 'aurora-focus-active' : ''} ${stealthTapActive && !isWindows ? 'ring-2 ring-emerald-400/30 border-emerald-400/40 shadow-[0_0_12px_rgba(52,211,153,0.15)]' : ''}`}
                     style={{
                       ...appearance.inputStyle,
                       ...(selectedPluginMentionInset ? { paddingLeft: selectedPluginMentionInset } : {}),
                     }}
                   />
+
+                  {dictationState !== 'idle' && (
+                    <div
+                      className={`absolute inset-0 flex min-h-[42px] items-center gap-2 rounded-xl border px-2 ${inputClass}`}
+                      style={appearance.inputStyle}
+                      // `group`, not `status`: this row contains buttons, and an
+                      // interactive descendant inside a live region is announced
+                      // inconsistently (some readers swallow the controls). The
+                      // transcribing state is conveyed by the button labels.
+                      role="group"
+                      aria-label={dictationState === 'transcribing' ? 'Transcribing dictation' : 'Recording dictation'}
+                    >
+                      <button
+                        type="button"
+                        data-dictation-control="true"
+                        onClick={cancelDictation}
+                        disabled={dictationState === 'transcribing'}
+                        className="flex h-7 w-7 shrink-0 items-center justify-center rounded-full overlay-icon-surface overlay-text-interactive interaction-base interaction-press disabled:cursor-wait disabled:opacity-35"
+                        style={appearance.iconStyle}
+                        title="Cancel dictation"
+                        aria-label="Cancel dictation"
+                      >
+                        <X className="h-3.5 w-3.5" />
+                      </button>
+
+                      <div className="flex h-7 min-w-0 flex-1 items-center justify-center gap-[2px] overflow-hidden" aria-hidden="true">
+                        {dictationLevels.map((level, index) => (
+                          <span
+                            key={index}
+                            className="w-[2px] shrink-0 rounded-full bg-current text-sky-400/80 transition-[height] duration-75 ease-out"
+                            style={{ height: `${Math.max(3, 3 + level * 23)}px` }}
+                          />
+                        ))}
+                      </div>
+                    </div>
+                  )}
 
                   {/* Synthetic caret — the input can never take real DOM focus
                       while the stealth tap is active (Windows no-activate
@@ -9566,7 +9781,7 @@ Provide only the answer, nothing else.`;
                       text with identical font metrics (Tailwind preflight makes
                       <input> inherit the app font, so this span matches 1:1)
                       and blink a real caret after it. */}
-                  {stealthTapActive && (
+                  {stealthTapActive && dictationState === 'idle' && (
                     <div
                       aria-hidden="true"
                       className="absolute right-10 top-2.5 pointer-events-none select-none overflow-hidden whitespace-pre-wrap break-words text-[13px] leading-relaxed"
@@ -9593,7 +9808,7 @@ Provide only the answer, nothing else.`;
                   {/* Custom Rich Placeholder — hidden while the synthetic caret
                       is active so a focused empty input reads like a native one
                       (blinking caret, no placeholder) */}
-                  {!inputValue && !selectedPluginMention && !stealthTapActive && (
+                  {!inputValue && !selectedPluginMention && !stealthTapActive && dictationState === 'idle' && (
                     <div className="absolute left-3 top-1/2 -translate-y-1/2 flex items-center gap-1.5 pointer-events-none text-[13px] overlay-text-muted">
                       <span>{t('Ask anything on screen or conversation, or')}</span>
                       <div className="flex items-center gap-1 opacity-80">
@@ -9615,12 +9830,23 @@ Provide only the answer, nothing else.`;
                     </div>
                   )}
 
-                  {!inputValue && (
+                  {/* Enter-to-send hint, occupying the slot the textarea's
+                      `pr-10` reserves. This is the PRE-EXISTING affordance —
+                      the dictate button briefly lived here, and moving it to
+                      the bottom row next to Send left this slot empty, which
+                      would have silently dropped the hint. */}
+                  {!inputValue && dictationState === 'idle' && (
                     <div className="absolute right-3 top-1/2 -translate-y-1/2 flex items-center gap-1 pointer-events-none opacity-20">
                       <span className="text-[10px]">↵</span>
                     </div>
                   )}
                 </div>
+
+                {dictationError && (
+                  <div className="mt-1.5 px-1 text-[10px] leading-snug text-red-400" role="alert">
+                    {dictationError}
+                  </div>
+                )}
 
                 {/*
                   Keep the plugin picker in the measured shell flow. The old
@@ -9786,22 +10012,89 @@ Provide only the answer, nothing else.`;
                     </div>
                   </div>
 
-                  <button
-                    onClick={handleManualSubmit}
-                    disabled={!inputValue.trim()}
-                    className={`
+                  {/* Right-hand cluster. Both slots are dual-purpose: the
+                      dictate slot becomes PAUSE while a session is live, and the
+                      send slot becomes the "transcribe and send" up arrow. */}
+                  <div className="flex items-center gap-1.5">
+                    <button
+                      type="button"
+                      data-dictation-control="true"
+                      onClick={() => {
+                        if (dictationState === 'idle') { void startDictation(); return; }
+                        if (dictationState === 'recording') void runStopDictation(false);
+                      }}
+                      disabled={!dictateSlotEnabled}
+                      className={`
+                                    w-7 h-7 flex items-center justify-center rounded-full
+                                    interaction-base interaction-press
+                                    ${
+                                      dictationState === 'recording'
+                                        ? 'bg-[#1592EA] text-white shadow-sm shadow-sky-500/25'
+                                        : 'overlay-icon-surface overlay-icon-surface-hover overlay-text-interactive'
+                                    }
+                                    ${!dictateSlotEnabled ? 'cursor-wait opacity-60' : ''}
+                                `}
+                      style={dictationState === 'recording' ? undefined : appearance.iconStyle}
+                      title={
+                        dictationState === 'idle' ? 'Dictate'
+                          : dictationState === 'recording' ? 'Pause and transcribe'
+                            : 'Transcribing…'
+                      }
+                      aria-label={
+                        dictationState === 'idle' ? 'Dictate'
+                          : dictationState === 'recording' ? 'Pause and transcribe'
+                            : 'Transcribing dictation'
+                      }
+                    >
+                      {dictateSlotBusy
+                        ? <RefreshCw className="h-3.5 w-3.5 animate-spin" />
+                        : dictationState !== 'idle'
+                          ? <Pause className="h-3.5 w-3.5 fill-current" />
+                          : <Mic className="h-3.5 w-3.5" />}
+                    </button>
+
+                    <button
+                      type="button"
+                      data-dictation-control="true"
+                      onClick={() => {
+                        if (dictationState === 'idle') { void handleManualSubmit(); return; }
+                        if (dictationState === 'recording') void runStopDictation(true);
+                      }}
+                      // While a session is live this slot IS the send action —
+                      // and it stays disabled mid-transcription and while the
+                      // composer is empty in the idle state.
+                      disabled={!sendSlotEnabled}
+                      title={
+                        dictationState === 'idle' ? undefined
+                          : dictationState === 'recording' ? 'Transcribe and send'
+                            : 'Transcribing…'
+                      }
+                      aria-label={
+                        dictationState === 'idle' ? 'Send'
+                          : dictationState === 'recording' ? 'Transcribe and send'
+                            : 'Transcribing dictation'
+                      }
+                      className={`
                                     w-7 h-7 rounded-full flex items-center justify-center
                                     interaction-base interaction-press
                                     ${
-                                      inputValue.trim()
-                                        ? 'bg-[#007AFF] text-white shadow-lg shadow-blue-500/20 hover:bg-[#0071E3]'
+                                      sendSlotPrimary
+                                        ? dictationState === 'recording'
+                                          ? 'bg-[#30D158] text-white shadow-lg shadow-emerald-500/25 hover:bg-[#28B94E]'
+                                          : 'bg-[#007AFF] text-white shadow-lg shadow-blue-500/20 hover:bg-[#0071E3]'
                                         : 'overlay-icon-surface overlay-text-muted cursor-not-allowed'
                                     }
+                                    ${sendSlotBusy ? 'cursor-wait' : ''}
                                 `}
-                    style={inputValue.trim() ? undefined : appearance.iconStyle}
-                  >
-                    <ArrowRight className="w-3.5 h-3.5" />
-                  </button>
+                      style={sendSlotPrimary ? undefined : appearance.iconStyle}
+                    >
+                      {sendSlotBusy
+                        ? <RefreshCw className="w-3.5 h-3.5 animate-spin" />
+                        : dictationState !== 'idle'
+                          ? <ArrowUp className="w-3.5 h-3.5" />
+                          : <ArrowRight className="w-3.5 h-3.5" />}
+                    </button>
+                  </div>
                 </div>
               </div>
             </motion.div>

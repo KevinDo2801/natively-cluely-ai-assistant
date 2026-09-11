@@ -277,9 +277,17 @@ test('AppState routes both public entry points through the queue', async () => {
     const fs = await import('node:fs');
     const mainSource = fs.readFileSync(path.resolve(__dirname, '../../main.ts'), 'utf8');
 
+    // `public async` and a bounded prologue are allowed: startMeeting now
+    // releases the one-shot composer dictation (which owns the same microphone
+    // and user-channel STT provider) BEFORE entering the queue. The delegation
+    // must still be what the wrapper RETURNS, so the caller awaits the queued
+    // transition itself and cannot observe a settled promise while the ordered
+    // body is still running. The prologue is length-bounded (600 chars) and the
+    // thinness guard below independently forbids transition work in the wrapper,
+    // so this cannot quietly become an inline implementation.
     assert.match(
         mainSource,
-        /public startMeeting\([^)]*\): Promise<void> \{\s*return this\._meetingLifecycle\.start\(/,
+        /public async startMeeting\([^)]*\): Promise<void> \{[\s\S]{0,600}?return this\._meetingLifecycle\.start\(/,
         'startMeeting must delegate to the lifecycle queue'
     );
     assert.match(

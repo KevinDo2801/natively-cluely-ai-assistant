@@ -9726,6 +9726,42 @@ export function initializeIpcHandlers(appState: AppState): void {
     return { success: true };
   });
 
+  // One-shot overlay dictation. PCM stays in the main process; the renderer
+  // receives only normalized meter levels and the final text.
+  safeHandle('dictation:start', async (event, deviceId?: string) => {
+    try {
+      const send = (channel: string, payload: unknown) => {
+        if (!event.sender.isDestroyed()) event.sender.send(channel, payload);
+      };
+      await appState.startDictation(
+        typeof deviceId === 'string' ? deviceId : undefined,
+        (level) => send('dictation:level', level),
+        (result) => send('dictation:finished', result),
+      );
+      return { success: true };
+    } catch (error: any) {
+      return { success: false, error: error?.message || String(error) };
+    }
+  });
+
+  safeHandle('dictation:stop', async () => {
+    try {
+      const result = await appState.stopDictation();
+      return { success: true, ...result };
+    } catch (error: any) {
+      return { success: false, text: '', error: error?.message || String(error) };
+    }
+  });
+
+  safeHandle('dictation:cancel', async () => {
+    try {
+      await appState.cancelDictation();
+      return { success: true };
+    } catch (error: any) {
+      return { success: false, error: error?.message || String(error) };
+    }
+  });
+
   safeHandle('set-recognition-language', async (_, key: string) => {
     appState.setRecognitionLanguage(key);
     // Keep every window (launcher quick-toggle, settings dropdown) in sync:

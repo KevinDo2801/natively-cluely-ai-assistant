@@ -555,6 +555,11 @@ export interface ElectronAPI {
   // the same startAudioTest lifecycle.
   onAudioTestSystemLevel: (callback: (level: number) => void) => () => void;
   onAudioTestSystemError: (callback: (errorMessage: string) => void) => () => void;
+  startDictation: (deviceId?: string) => Promise<{ success: boolean; error?: string }>;
+  stopDictation: () => Promise<{ success: boolean; text: string; error?: string }>;
+  cancelDictation: () => Promise<{ success: boolean; error?: string }>;
+  onDictationLevel: (callback: (level: number) => void) => () => void;
+  onDictationFinished: (callback: (result: { text: string; error?: string }) => void) => () => void;
 
   // Database
   flushDatabase: () => Promise<{ success: boolean }>;

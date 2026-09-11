@@ -661,6 +661,11 @@ interface ElectronAPI {
   // emitted during the same startAudioTest lifecycle.
   onAudioTestSystemLevel: (callback: (level: number) => void) => () => void;
   onAudioTestSystemError: (callback: (errorMessage: string) => void) => () => void;
+  startDictation: (deviceId?: string) => Promise<{ success: boolean; error?: string }>;
+  stopDictation: () => Promise<{ success: boolean; text: string; error?: string }>;
+  cancelDictation: () => Promise<{ success: boolean; error?: string }>;
+  onDictationLevel: (callback: (level: number) => void) => () => void;
+  onDictationFinished: (callback: (result: { text: string; error?: string }) => void) => () => void;
 
   // Database
   flushDatabase: () => Promise<{ success: boolean }>;
@@ -2101,6 +2106,21 @@ contextBridge.exposeInMainWorld('electronAPI', {
     return () => {
       ipcRenderer.removeListener('audio-test-system-error', subscription);
     };
+  },
+
+  // Chat-overlay dictation: audio remains main-side; only levels/text cross IPC.
+  startDictation: (deviceId?: string) => ipcRenderer.invoke('dictation:start', deviceId),
+  stopDictation: () => ipcRenderer.invoke('dictation:stop'),
+  cancelDictation: () => ipcRenderer.invoke('dictation:cancel'),
+  onDictationLevel: (callback: (level: number) => void) => {
+    const subscription = (_: any, level: number) => callback(level);
+    ipcRenderer.on('dictation:level', subscription);
+    return () => ipcRenderer.removeListener('dictation:level', subscription);
+  },
+  onDictationFinished: (callback: (result: { text: string; error?: string }) => void) => {
+    const subscription = (_: any, result: { text: string; error?: string }) => callback(result);
+    ipcRenderer.on('dictation:finished', subscription);
+    return () => ipcRenderer.removeListener('dictation:finished', subscription);
   },
 
   // Database

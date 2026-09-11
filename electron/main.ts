@@ -1198,6 +1198,7 @@ import { IntelligenceStreamBus, IntelligenceStreamBatcher } from "./intelligence
 import type { IntelligenceStreamEvent } from "./intelligence/unified/types"
 import { SystemAudioCapture } from "./audio/SystemAudioCapture"
 import { MicrophoneCapture } from "./audio/MicrophoneCapture"
+import { createDictationSession, type DictationResult, type DictationSession } from "./audio/dictationSession.mjs"
 import { AudioDevices } from "./audio/AudioDevices"
 import { loadNativeModule } from "./audio/nativeModuleLoader"
 import { GoogleSTT } from "./audio/GoogleSTT"
@@ -3053,6 +3054,8 @@ export class AppState {
   private microphoneCapture: MicrophoneCapture | null = null;
   private audioTestCapture: MicrophoneCapture | null = null; // For audio settings test
   private _audioTestStarting = false;               // P2-12: in-flight guard against concurrent calls
+  private dictationSession: DictationSession | null = null;
+  private _dictationStopPromise: Promise<{ text: string; error?: string }> | null = null;
   private googleSTT: STTProvider | null = null; // Interviewer
   private googleSTT_User: STTProvider | null = null; // User
   // ── AUTO ANSWER (Settings > General, default OFF) ────────────────────────
@@ -5509,6 +5512,88 @@ export class AppState {
     });
   }
 
+  /**
+   * Start a bounded composer dictation using the same native microphone capture
+   * and configured user-channel STT provider as a meeting. The renderer owns
+   * presentation only; raw audio never crosses IPC.
+   */
+  public async startDictation(
+    deviceId: string | undefined,
+    emitLevel: (level: number) => void,
+    onAutoStop: (result: { text: string; error?: string }) => void,
+  ): Promise<void> {
+    if (this.isMeetingActive || this._isDraining || this._pendingTeardown) {
+      throw new Error('Dictation is unavailable while a meeting is active. End the meeting first, then try again.');
+    }
+    if (this.audioTestCapture || this.audioTestSystemCapture || this._audioTestStarting) {
+      throw new Error('Dictation is unavailable while the microphone test is running. Close Audio settings, then try again.');
+    }
+    if (this.dictationSession || this._dictationStopPromise) {
+      throw new Error('Dictation is already running.');
+    }
+    if (!(await ensureMacMicrophoneAccess('dictation'))) {
+      throw new Error(`${permissionTitleKey('mic-denied')}: ${formatPermissionMessage('mic-denied')}`);
+    }
+
+    // The permission prompt yields the event loop; re-check every exclusive
+    // owner before opening a native input handle.
+    if (this.isMeetingActive || this.audioTestCapture || this.dictationSession || this._dictationStopPromise) {
+      throw new Error('The microphone became busy before dictation could start. Try again when recording has stopped.');
+    }
+
+    const serialize = (result: DictationResult): { text: string; error?: string } => ({
+      text: result.text,
+      ...(result.error ? { error: result.error.message || String(result.error) } : {}),
+    });
+    let session!: DictationSession;
+    session = createDictationSession({
+      createCapture: (requestedDeviceId?: string) => new MicrophoneCapture(requestedDeviceId),
+      createStt: () => this.createSTTProvider('user'),
+      emitLevel,
+      onAutoStop: (result) => {
+        if (this.dictationSession === session) this.dictationSession = null;
+        onAutoStop(serialize(result));
+      },
+    });
+
+    try {
+      session.start(deviceId || undefined);
+      this.dictationSession = session;
+    } catch (error) {
+      this.dictationSession = null;
+      throw error;
+    }
+  }
+
+  public async stopDictation(): Promise<{ text: string; error?: string }> {
+    if (this._dictationStopPromise) return this._dictationStopPromise;
+    const session = this.dictationSession;
+    if (!session) return { text: '' };
+
+    const stopPromise = session.stop()
+      .then((result) => ({
+        text: result.text,
+        ...(result.error ? { error: result.error.message || String(result.error) } : {}),
+      }))
+      .finally(() => {
+        if (this.dictationSession === session) this.dictationSession = null;
+        if (this._dictationStopPromise === stopPromise) this._dictationStopPromise = null;
+      });
+    this._dictationStopPromise = stopPromise;
+    return stopPromise;
+  }
+
+  public async cancelDictation(): Promise<void> {
+    if (this._dictationStopPromise) {
+      await this._dictationStopPromise.catch(() => undefined);
+      return;
+    }
+    const session = this.dictationSession;
+    if (!session) return;
+    this.dictationSession = null;
+    await session.cancel();
+  }
+
 
   public async startAudioTest(deviceId?: string): Promise<void> {
     // P2-12: guard against two concurrent calls both passing the async permission check
@@ -5524,6 +5609,9 @@ export class AppState {
     // their mic is broken.
     if (this.isMeetingActive) {
       throw new Error('Audio test is unavailable while a meeting is active. End the meeting first, then test your microphone.');
+    }
+    if (this.dictationSession || this._dictationStopPromise) {
+      throw new Error('Audio test is unavailable while dictation is active. Stop dictation first, then test your microphone.');
     }
     this._audioTestStarting = true;
     try {
@@ -5844,7 +5932,13 @@ export class AppState {
    * interleaving. The ordered body below is unchanged — see
    * MeetingLifecycleQueue for why this wrapper is the only thing added.
    */
-  public startMeeting(metadata?: any): Promise<void> {
+  public async startMeeting(metadata?: any): Promise<void> {
+    // Dictation and meetings both own the microphone + user-channel STT
+    // provider. Release the one-shot composer session before the meeting queue
+    // constructs its long-lived audio pipeline.
+    if (this.dictationSession || this._dictationStopPromise) {
+      await this.cancelDictation();
+    }
     return this._meetingLifecycle.start(() => this.startMeetingTransition(metadata));
   }
 
@@ -9458,9 +9552,10 @@ if (process.env.THINKING_MATRIX === '1') {
     // orange mic-in-use indicator briefly visible in the macOS menu bar after
     // the process exits. Idempotent (no-op if no test is running).
     try {
+      void appState.cancelDictation();
       appState.stopAudioTest();
     } catch (e) {
-      console.error('[main] Failed to stop audio test during shutdown:', e);
+      console.error('[main] Failed to stop dictation/audio test during shutdown:', e);
     }
 
     // Tear down the Phone Mirror service so the OS port is freed cleanly.
