@@ -433,6 +433,7 @@ export interface ElectronAPI {
     screenContext?: unknown
     promptInstruction?: string
     skill?: { id: string; name: string; promptBlock: string }
+    codexApp?: { id: string; name: string }
     pinnedModeId?: string | null
     followUpIntent?: string
     confidence?: number
@@ -490,6 +491,12 @@ export interface ElectronAPI {
   codexPluginSetEnabled: (id: string, enabled: boolean) => Promise<{ success: boolean; error?: string }>;
   codexPluginConnect: (id: string) => Promise<{ success: boolean; opened: boolean; error?: string }>;
   onCodexPluginsChanged: (callback: () => void) => () => void;
+  onCodexPluginInteraction: (callback: (request: CodexPluginInteractionRequest) => void) => () => void;
+  onCodexPluginInteractionClosed: (callback: (requestId: string) => void) => () => void;
+  resolveCodexPluginInteraction: (requestId: string, response: CodexPluginInteractionResponse) => Promise<{ success: boolean; error?: string }>;
+  /** Settings → Plugins → "Approve plugin actions automatically". ON by default. */
+  getCodexAutoApprovePlugins: () => Promise<{ enabled: boolean }>;
+  setCodexAutoApprovePlugins: (enabled: boolean) => Promise<{ success: boolean; enabled?: boolean; error?: string }>;
   onCodexLoginComplete: (callback: (info: { email?: string }) => void) => () => void;
   onCodexLoginFailed: (callback: (info: { message: string }) => void) => () => void;
   onCodexSignedOut: (callback: () => void) => () => void;
@@ -975,6 +982,30 @@ export interface CodexPluginApp {
   marketplaceName?: string;
   pluginName?: string;
   pluginDisplayNames: string[];
+}
+
+export interface CodexPluginInteractionRequest {
+  requestId: string;
+  kind: 'user_input' | 'elicitation';
+  app?: { id: string; name: string };
+  message?: string;
+  serverName?: string;
+  mode?: string;
+  url?: string;
+  questions?: Array<{
+    id: string;
+    header: string;
+    question: string;
+    isOther: boolean;
+    isSecret: boolean;
+    options?: Array<{ label: string; description: string }>;
+  }>;
+  requestedSchema?: unknown;
+}
+
+export interface CodexPluginInteractionResponse {
+  action: 'accept' | 'decline' | 'cancel';
+  values?: Record<string, unknown>;
 }
 
 // ---------------------------------------------------------------------------

@@ -53,7 +53,14 @@ export interface AppSettings {
     // is permissive (the per-model VALID set is enforced at runtime so e.g.
     // xhigh on gpt-5.3-codex is silently downgraded). 'none' means "don't pass
     // -c model_reasoning_effort at all" — distinct from omitting the setting.
-    codexCliModelReasoningEffort?: 'none' | 'low' | 'medium' | 'high' | 'xhigh';
+    codexCliModelReasoningEffort?: 'none' | 'low' | 'high' | 'medium' | 'xhigh';
+    // Settings → Plugins → "Approve plugin actions automatically". When ON, a
+    // connector interaction that is only a yes/no confirmation is answered by
+    // the main process instead of waiting for a click, and the chat model may
+    // also reach a connector the user did not name. Default ON at the IPC wiring
+    // site (undefined reads as enabled); interactions that need user data still
+    // surface the confirmation card. Turn OFF to approve every action by hand.
+    codexAutoApprovePlugins?: boolean;
     // Hindsight long-term memory server (optional, user-provisioned sidecar — Cloud OR
     // local). baseUrl empty by default → feature off. Env (HINDSIGHT_BASE_URL) overrides
     // these for dev. apiKey only for Hindsight Cloud. autoStart/serverCommand reserved for

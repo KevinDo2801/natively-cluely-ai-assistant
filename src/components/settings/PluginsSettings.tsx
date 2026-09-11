@@ -66,6 +66,41 @@ export const PluginsSettings: React.FC = () => {
     const [error, setError] = useState<string | null>(null);
     const [notice, setNotice] = useState<string | null>(null);
     const [updatingIds, setUpdatingIds] = useState<Set<string>>(new Set());
+    // Settings → Plugins → "Approve plugin actions automatically". ON unless the
+    // user turned it off: a confirm-only connector action is answered by the main
+    // process instead of waiting for a click, and the chat model may also reach a
+    // connector the user did not name. Actions that need user data still show the
+    // confirmation card in the overlay.
+    const [autoApprove, setAutoApprove] = useState(true);
+    const [savingAutoApprove, setSavingAutoApprove] = useState(false);
+
+    const loadAutoApprove = useCallback(async () => {
+        if (typeof window.electronAPI?.getCodexAutoApprovePlugins !== 'function') return;
+        try {
+            const result = await window.electronAPI.getCodexAutoApprovePlugins();
+            setAutoApprove(result?.enabled !== false);
+        } catch { /* keep the optimistic default */ }
+    }, []);
+
+    const toggleAutoApprove = async () => {
+        if (typeof window.electronAPI?.setCodexAutoApprovePlugins !== 'function') {
+            setError(bridgeMissing);
+            return;
+        }
+        const next = !autoApprove;
+        setSavingAutoApprove(true);
+        setError(null);
+        setNotice(null);
+        try {
+            const result = await window.electronAPI.setCodexAutoApprovePlugins(next);
+            if (!result?.success) throw new Error(result?.error || 'Could not update plugin approval.');
+            setAutoApprove(result.enabled !== false);
+        } catch (updateError: any) {
+            setError(updateError?.message || 'Could not update plugin approval.');
+        } finally {
+            setSavingAutoApprove(false);
+        }
+    };
 
     const loadPlugins = useCallback(async (force = false) => {
         if (typeof window.electronAPI?.codexPluginsList !== 'function') {
@@ -95,6 +130,7 @@ export const PluginsSettings: React.FC = () => {
 
     useEffect(() => {
         void loadPlugins(false);
+        void loadAutoApprove();
         const onFocus = () => void loadPlugins(true);
         const unsubscribeChanged = window.electronAPI?.onCodexPluginsChanged?.(() => {
             void loadPlugins(true);
@@ -104,7 +140,7 @@ export const PluginsSettings: React.FC = () => {
             window.removeEventListener('focus', onFocus);
             unsubscribeChanged?.();
         };
-    }, [loadPlugins]);
+    }, [loadPlugins, loadAutoApprove]);
 
     const visiblePlugins = useMemo(() => {
         const needle = query.trim().toLowerCase();
@@ -226,6 +262,31 @@ export const PluginsSettings: React.FC = () => {
                     <span className="font-semibold text-text-primary">{t('How to use:')}</span>{' '}
                     {t('type')} <span className="rounded bg-blue-500/15 px-1.5 py-0.5 font-mono font-semibold text-blue-400">@</span> {t('at the beginning of a chat message, select a connected plugin, then write your request.')}
                 </div>
+            </div>
+
+            {/* Auto-approval. The switch owns a persisted setting read by the main
+                process (SettingsManager.codexAutoApprovePlugins); it does NOT gate
+                the plugin list above, so flipping it never reloads the catalog. */}
+            <div className="flex items-start justify-between gap-4 rounded-xl border border-border-subtle bg-bg-card px-3.5 py-3">
+                <div className="min-w-0">
+                    <div className="flex items-center gap-2 text-xs font-semibold text-text-primary">
+                        <CheckCircle2 size={14} className="shrink-0 text-emerald-400" />
+                        {t('Approve plugin actions automatically')}
+                    </div>
+                    <p className="mt-1 text-[11px] leading-relaxed text-text-secondary">
+                        {t('Natively confirms connector actions for you instead of asking on every write, and the chat may use a connected plugin even when you do not name it. Requests that need information from you — like a title, a time, or a secret — still ask.')}
+                    </p>
+                </div>
+                <button
+                    role="switch"
+                    aria-checked={autoApprove}
+                    aria-label={t('Approve plugin actions automatically')}
+                    onClick={() => void toggleAutoApprove()}
+                    disabled={savingAutoApprove}
+                    className={`relative mt-0.5 h-5 w-9 shrink-0 rounded-full transition-colors disabled:opacity-50 ${autoApprove ? 'bg-emerald-500' : 'border border-border-muted bg-bg-input'}`}
+                >
+                    <span className={`absolute left-0.5 top-0.5 h-4 w-4 rounded-full bg-white shadow-sm transition-transform ${autoApprove ? 'translate-x-4' : 'translate-x-0'}`} />
+                </button>
             </div>
 
             {!signedIn && (

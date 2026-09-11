@@ -30,6 +30,18 @@ interface CodexPluginApp {
   pluginDisplayNames: string[];
 }
 
+interface CodexPluginInteractionRequest {
+  requestId: string;
+  kind: 'user_input' | 'elicitation';
+  app?: { id: string; name: string };
+  message?: string;
+  serverName?: string;
+  mode?: string;
+  url?: string;
+  questions?: Array<{ id: string; header: string; question: string; isOther: boolean; isSecret: boolean; options?: Array<{ label: string; description: string }> }>;
+  requestedSchema?: unknown;
+}
+
 // Types for the exposed Electron API
 interface ElectronAPI {
   updateContentDimensions: (dimensions: { width: number; height: number }) => Promise<void>;
@@ -601,6 +613,11 @@ interface ElectronAPI {
   codexPluginSetEnabled: (id: string, enabled: boolean) => Promise<{ success: boolean; error?: string }>;
   codexPluginConnect: (id: string) => Promise<{ success: boolean; opened: boolean; error?: string }>;
   onCodexPluginsChanged: (callback: () => void) => () => void;
+  onCodexPluginInteraction: (callback: (request: CodexPluginInteractionRequest) => void) => () => void;
+  onCodexPluginInteractionClosed: (callback: (requestId: string) => void) => () => void;
+  resolveCodexPluginInteraction: (requestId: string, response: { action: 'accept' | 'decline' | 'cancel'; values?: Record<string, unknown> }) => Promise<{ success: boolean; error?: string }>;
+  getCodexAutoApprovePlugins: () => Promise<{ enabled: boolean }>;
+  setCodexAutoApprovePlugins: (enabled: boolean) => Promise<{ success: boolean; enabled?: boolean; error?: string }>;
 
   // Supabase auth (email + password) — Settings "Account" tab
   authGetStatus: () => Promise<{ success: boolean; signedIn: boolean; email?: string; userId?: string; error?: string }>;
@@ -1975,6 +1992,20 @@ contextBridge.exposeInMainWorld('electronAPI', {
     ipcRenderer.on('codex:plugins:changed', subscription);
     return () => { ipcRenderer.removeListener('codex:plugins:changed', subscription); };
   },
+  onCodexPluginInteraction: (callback: (request: CodexPluginInteractionRequest) => void) => {
+    const subscription = (_: any, request: CodexPluginInteractionRequest) => callback(request);
+    ipcRenderer.on('codex:plugin-interaction', subscription);
+    return () => { ipcRenderer.removeListener('codex:plugin-interaction', subscription); };
+  },
+  onCodexPluginInteractionClosed: (callback: (requestId: string) => void) => {
+    const subscription = (_: any, requestId: string) => callback(requestId);
+    ipcRenderer.on('codex:plugin-interaction-closed', subscription);
+    return () => { ipcRenderer.removeListener('codex:plugin-interaction-closed', subscription); };
+  },
+  resolveCodexPluginInteraction: (requestId: string, response: { action: 'accept' | 'decline' | 'cancel'; values?: Record<string, unknown> }) =>
+    ipcRenderer.invoke('codex:plugin-interaction-resolve', requestId, response),
+  getCodexAutoApprovePlugins: () => ipcRenderer.invoke('get-codex-auto-approve-plugins'),
+  setCodexAutoApprovePlugins: (enabled: boolean) => ipcRenderer.invoke('set-codex-auto-approve-plugins', enabled),
   onCodexLoginComplete: (callback: (info: { email?: string }) => void) => {
     const subscription = (_: any, info: any) => callback(info || {});
     ipcRenderer.on('codex:login:complete', subscription);

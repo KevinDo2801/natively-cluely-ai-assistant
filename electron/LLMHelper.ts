@@ -1672,7 +1672,7 @@ export class LLMHelper {
     });
   }
 
-  private async *streamWithCodexCli(userContent: string, systemPrompt?: string, fastMode = false, imagePaths?: string[], signal?: AbortSignal): AsyncGenerator<string, void, unknown> {
+  private async *streamWithCodexCli(userContent: string, systemPrompt?: string, fastMode = false, imagePaths?: string[], signal?: AbortSignal, app?: { id: string; name: string }): AsyncGenerator<string, void, unknown> {
     if (!this.isCodexAvailable()) throw new Error('Codex CLI transport is disabled or ChatGPT is signed out.');
     // Codex routes to chatgpt.com/backend-api — it is a CLOUD provider, and it
     // needs the same local-only last boundary every other cloud provider has.
@@ -1699,6 +1699,7 @@ export class LLMHelper {
       serviceTier: this.codexCliConfig.serviceTier,
       modelReasoningEffort: this.codexCliConfig.modelReasoningEffort,
       signal,
+      app,
     });
   }
 
@@ -6966,7 +6967,7 @@ let isMultimodal = !!(imagePaths?.length);
       if (this.isCodexAvailable()) {
         console.log(`[LLMHelper] ⚡️ Fast Text Mode Active (Streaming). Routing to Codex CLI...`);
         try {
-          yield* this.trackCommit(this.streamWithCodexCli(userContent, finalSystemPrompt, true, undefined, abortSignal), commit);
+          yield* this.trackCommit(this.streamWithCodexCli(userContent, finalSystemPrompt, true, undefined, abortSignal, routeOptions?.codexApp), commit);
           return;
         } catch (e: any) {
           if (commit.emitted) {
@@ -7034,7 +7035,7 @@ let isMultimodal = !!(imagePaths?.length);
     }
 
     if (this.isCodexCliModel(this.currentModelId) && this.isCodexAvailable()) {
-      yield* this.streamWithCodexCli(userContent, finalSystemPrompt, false, imagePaths, abortSignal);
+      yield* this.streamWithCodexCli(userContent, finalSystemPrompt, false, imagePaths, abortSignal, routeOptions?.codexApp);
       return;
     }
 

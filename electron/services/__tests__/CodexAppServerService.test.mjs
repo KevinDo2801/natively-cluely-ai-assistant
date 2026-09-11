@@ -29,9 +29,12 @@ test('streams only its thread, preserves images and instructions, and releases t
   const thread = calls.find(c => c.method === 'thread/start').params;
   assert.equal(thread.ephemeral, true);
   assert.equal(thread.sandbox, 'read-only');
+  assert.equal(thread.approvalPolicy, 'never');
+  assert.equal(thread.approvalsReviewer, undefined);
   assert.equal(thread.baseInstructions, 'Be concise.');
   assert.deepEqual(thread.environments, []);
   const turn = calls.find(c => c.method === 'turn/start').params;
+  assert.equal(turn.approvalPolicy, 'never');
   assert.equal(turn.effort, 'low');
   assert.deepEqual(turn.input[1], { type: 'image', url: 'data:image/png;base64,test' });
   assert.equal(calls.at(-1).method, 'thread/unsubscribe');
@@ -113,10 +116,43 @@ test('turn input includes the Codex app mention selected with @', async () => {
   }];
   await collect(service, { ...options, prompt: '@google-drive find the project notes' });
   const turn = calls.find(c => c.method === 'turn/start').params;
+  const thread = calls.find(c => c.method === 'thread/start').params;
+  assert.equal(thread.approvalPolicy, 'on-request');
+  assert.equal(thread.approvalsReviewer, 'user');
   assert.deepEqual(turn.input.slice(0, 2), [
     { type: 'text', text: '$google-drive find the project notes', text_elements: [] },
     { type: 'mention', name: 'Google Drive', path: 'app://google-drive' },
   ]);
+});
+
+test('structured app selection survives wrapped conversation context', async () => {
+  const { service, calls } = fixture(s => emit(s, 'turn/completed', { turn: { status: 'completed' } }));
+  service.listApps = async () => [{
+    id: 'connector_calendar',
+    name: 'Google Calendar',
+    isAccessible: true,
+    isEnabled: true,
+    callable: true,
+    pluginDisplayNames: [],
+  }];
+  const prompt = 'CONTEXT:\nUser: create a meeting\n\nUSER QUESTION:\ntoday at 5 PM';
+  await collect(service, {
+    ...options,
+    prompt,
+    app: { id: 'connector_calendar', name: 'Google Calendar' },
+  });
+  const turn = calls.find(c => c.method === 'turn/start').params;
+  const thread = calls.find(c => c.method === 'thread/start').params;
+  assert.equal(thread.approvalPolicy, 'on-request');
+  assert.equal(thread.approvalsReviewer, 'user');
+  assert.equal(turn.approvalPolicy, 'on-request');
+  assert.equal(turn.approvalsReviewer, 'user');
+  assert.equal(turn.input[0].text, `$connector_calendar ${prompt}`);
+  assert.deepEqual(turn.input[1], {
+    type: 'mention',
+    name: 'Google Calendar',
+    path: 'app://connector_calendar',
+  });
 });
 
 test('a disconnected app mention fails before a thread is created', async () => {
@@ -355,10 +391,137 @@ test('rejects server tool and permission requests', () => {
   assert.equal(replies[0].error.code, -32601);
 });
 
-test('plugin actions that need confirmation fail closed', () => {
+test('plugin user-input requests wait for and forward the renderer response', async () => {
   const service = new CodexAppServerService();
   const replies = [];
+  const requests = [];
+  const closed = [];
   service.send = reply => replies.push(reply);
-  service.receive({ id: 8, method: 'item/tool/requestUserInput', params: {} });
-  assert.match(replies[0].error.message, /needs confirmation/);
+  service.threadApps.set('thread-1', { id: 'connector_calendar', name: 'Google Calendar' });
+  service.on('plugin-interaction', request => requests.push(request));
+  service.on('plugin-interaction-closed', requestId => closed.push(requestId));
+  service.receive({
+    id: 8,
+    method: 'item/tool/requestUserInput',
+    params: {
+      threadId: 'thread-1',
+      questions: [{ id: 'confirm', header: 'Create event', question: 'Create LeetCode?', isOther: false, isSecret: false, options: [{ label: 'Yes', description: 'Create it' }] }],
+    },
+  });
+  assert.equal(replies.length, 0);
+  assert.equal(requests[0].app.name, 'Google Calendar');
+  await service.resolvePluginInteraction(requests[0].requestId, { action: 'accept', values: { confirm: 'Yes' } });
+  assert.deepEqual(replies[0], { id: 8, result: { answers: { confirm: { answers: ['Yes'] } } } });
+  assert.deepEqual(closed, [requests[0].requestId]);
+});
+
+test('plugin elicitation requests support an explicit decline', async () => {
+  const service = new CodexAppServerService();
+  const replies = [];
+  const requests = [];
+  service.send = reply => replies.push(reply);
+  service.on('plugin-interaction', request => requests.push(request));
+  service.receive({
+    id: 9,
+    method: 'mcpServer/elicitation/request',
+    params: { threadId: 'thread-1', serverName: 'calendar', mode: 'form', message: 'Create event?', requestedSchema: { type: 'object', properties: {} } },
+  });
+  await service.resolvePluginInteraction(requests[0].requestId, { action: 'decline' });
+  assert.deepEqual(replies[0], { id: 9, result: { action: 'decline', content: null, _meta: null } });
+});
+
+// ── Settings → Plugins → "Approve plugin actions automatically" ─────────────
+// The service default stays OFF (direct construction, tests, background recovery
+// instances). The app turns it ON from the persisted setting at IPC wiring time.
+
+test('sets the approval policy on the request it receives', () => {
+  const service = new CodexAppServerService();
+  assert.equal(service.getAutoApprovePlugins(), false);
+  service.setAutoApprovePlugins(true);
+  assert.equal(service.getAutoApprovePlugins(), true);
+  // Anything that is not exactly `true` must not enable it.
+  service.setAutoApprovePlugins(1);
+  assert.equal(service.getAutoApprovePlugins(), false);
+});
+
+test('auto-approval answers a plugin confirmation without the renderer', () => {
+  const service = new CodexAppServerService();
+  const replies = [];
+  const requests = [];
+  service.send = reply => replies.push(reply);
+  service.setAutoApprovePlugins(true);
+  service.threadApps.set('thread-1', { id: 'connector_calendar', name: 'Google Calendar' });
+  service.on('plugin-interaction', request => requests.push(request));
+  service.receive({
+    id: 11,
+    method: 'item/tool/requestUserInput',
+    params: {
+      threadId: 'thread-1',
+      questions: [{
+        id: 'confirm',
+        header: 'Create event',
+        question: 'Create LeetCode?',
+        isOther: false,
+        isSecret: false,
+        options: [{ label: 'Yes', description: 'Create it' }, { label: 'No', description: 'Cancel it' }],
+      }],
+    },
+  });
+  assert.deepEqual(replies, [{ id: 11, result: { answers: { confirm: { answers: ['Yes'] } } } }]);
+  assert.equal(requests.length, 0, 'the card must not be shown when the policy already answered');
+  assert.equal(service.pluginInteractions.size, 0, 'nothing may be left pending');
+});
+
+test('auto-approval accepts a plain elicitation but still surfaces data requests', async () => {
+  const service = new CodexAppServerService();
+  const replies = [];
+  const requests = [];
+  service.send = reply => replies.push(reply);
+  service.setAutoApprovePlugins(true);
+  service.receive({
+    id: 12,
+    method: 'mcpServer/elicitation/request',
+    params: { threadId: 'thread-1', serverName: 'calendar', mode: 'form', requestedSchema: { type: 'object', properties: {} } },
+  });
+  assert.deepEqual(replies, [{ id: 12, result: { action: 'accept', content: {}, _meta: null } }]);
+
+  service.on('plugin-interaction', request => requests.push(request));
+  service.receive({
+    id: 13,
+    method: 'mcpServer/elicitation/request',
+    params: { threadId: 'thread-1', serverName: 'calendar', mode: 'form', requestedSchema: { type: 'object', required: ['title'] } },
+  });
+  assert.equal(replies.length, 1, 'a requisition for user data must not be auto-answered');
+  assert.equal(requests.length, 1, 'the card carries the data request to the user');
+  // The data request stays pending for the user (and holds the 5-minute
+  // timeout); resolve it here so the test process is not kept alive by it.
+  await service.resolvePluginInteraction(requests[0].requestId, { action: 'cancel' });
+  assert.deepEqual(replies.at(-1), { id: 13, result: { action: 'cancel', content: null, _meta: null } });
+});
+
+test('auto-approval lets an unnamed turn reach a connector, without faking a mention', async () => {
+  const { service, calls } = fixture(s => emit(s, 'turn/completed', { turn: { status: 'completed' } }));
+  service.setAutoApprovePlugins(true);
+  const prompt = 'thêm event từ 5h đến 6h chiều nay làm leetcode';
+  await collect(service, { ...options, prompt });
+  const thread = calls.find(c => c.method === 'thread/start').params;
+  const turn = calls.find(c => c.method === 'turn/start').params;
+  assert.equal(thread.approvalPolicy, 'on-request', 'a connector write must be allowed to ask instead of being refused');
+  assert.equal(thread.approvalsReviewer, 'user');
+  assert.equal(turn.approvalPolicy, 'on-request');
+  assert.match(thread.developerInstructions, /even when the user does not name it/);
+  assert.match(thread.developerInstructions, /never ask the user for permission/);
+  assert.match(thread.developerInstructions, /Do not call shell tools, run commands, read local files, or delegate work\./,
+    'the shell/file ban must survive the relaxed connector rule');
+  assert.deepEqual(turn.input, [{ type: 'text', text: prompt, text_elements: [] }],
+    'no app mention may be invented for a plugin the user never named');
+});
+
+test('without auto-approval an unnamed turn stays fail-closed', async () => {
+  const { service, calls } = fixture(s => emit(s, 'turn/completed', { turn: { status: 'completed' } }));
+  await collect(service, { ...options, prompt: 'thêm event từ 5h đến 6h chiều nay làm leetcode' });
+  const thread = calls.find(c => c.method === 'thread/start').params;
+  assert.equal(thread.approvalPolicy, 'never');
+  assert.equal(thread.approvalsReviewer, undefined);
+  assert.match(thread.developerInstructions, /only when the user explicitly mentions that app/);
 });

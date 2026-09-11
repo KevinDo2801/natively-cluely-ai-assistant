@@ -26,6 +26,9 @@ import type { AnswerType, ContextLayer } from './AnswerPlanner';
  * (default answer type, no extra exclusion) so no existing caller breaks.
  */
 export interface StreamRouteOptions {
+  /** Connected Codex app selected in the chat overlay. Transported separately
+   * from prompt text so context wrapping cannot hide the structured mention. */
+  codexApp?: { id: string; name: string };
   /** The plan's answer type — drives custom-context sensitivity scoping. */
   answerType?: AnswerType;
   /** The plan's forbidden context layers — the authoritative exclusion list. */

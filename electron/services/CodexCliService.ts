@@ -207,6 +207,8 @@ export interface CodexCliRunOptions {
    * SESSION_ID (one per process) is used.
    */
   sessionId?: string;
+  /** Structured Codex App Server mention selected by the renderer. */
+  app?: { id: string; name: string };
 }
 
 // Default fast model: gpt-5.3-codex works with both ChatGPT-account and API-key
@@ -351,6 +353,7 @@ export class CodexCliService {
       model: options.model, prompt: options.prompt, instructions: options.instructions,
       images, timeoutMs: options.timeoutMs, signal: options.signal,
       effort: options.modelReasoningEffort, serviceTier: options.serviceTier,
+      app: options.app,
     }, _path || 'codex');
   }
 

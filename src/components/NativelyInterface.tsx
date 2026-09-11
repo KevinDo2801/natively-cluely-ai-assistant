@@ -155,17 +155,19 @@ function PluginPicker({
   );
 }
 
+function getSafePluginLogoUrl(logoUrl?: string): string | null {
+  if (!logoUrl) return null;
+  try {
+    const parsed = new URL(logoUrl);
+    return parsed.protocol === 'https:' || parsed.protocol === 'data:' ? logoUrl : null;
+  } catch {
+    return null;
+  }
+}
+
 function PluginPickerLogo({ plugin }: { plugin: CodexPluginApp }) {
   const [failed, setFailed] = useState(false);
-  const logoUrl = (() => {
-    if (!plugin.logoUrl) return null;
-    try {
-      const parsed = new URL(plugin.logoUrl);
-      return parsed.protocol === 'https:' || parsed.protocol === 'data:' ? plugin.logoUrl : null;
-    } catch {
-      return null;
-    }
-  })();
+  const logoUrl = getSafePluginLogoUrl(plugin.logoUrl);
 
   const initials = plugin.name
     .split(/\s+/)
@@ -186,6 +188,236 @@ function PluginPickerLogo({ plugin }: { plugin: CodexPluginApp }) {
         />
       ) : (initials || <AtSign size={15} />)}
     </span>
+  );
+}
+
+function CodexPluginInteractionCard({
+  request,
+  onRespond,
+}: {
+  request: CodexPluginInteractionRequest;
+  onRespond: (response: CodexPluginInteractionResponse) => Promise<void>;
+}) {
+  type SchemaOption = { const: string; title?: string };
+  type SchemaField = {
+    type?: string;
+    title?: string;
+    description?: string;
+    enum?: unknown[];
+    enumNames?: string[];
+    oneOf?: SchemaOption[];
+    items?: { enum?: unknown[]; anyOf?: SchemaOption[] };
+    default?: unknown;
+    format?: string;
+    minimum?: number;
+    maximum?: number;
+  };
+  const t = useT();
+  const [values, setValues] = useState<Record<string, unknown>>(() => {
+    const initial: Record<string, unknown> = {};
+    for (const question of request.questions || []) {
+      const first = question.options?.[0]?.label;
+      if (first) initial[question.id] = first;
+    }
+    const schema = request.requestedSchema as { properties?: Record<string, SchemaField> } | undefined;
+    for (const [key, property] of Object.entries(schema?.properties || {})) {
+      if (property?.default !== undefined) initial[key] = property.default;
+    }
+    return initial;
+  });
+  const [submitting, setSubmitting] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const schema = request.requestedSchema as {
+    properties?: Record<string, SchemaField>;
+    required?: string[];
+  } | undefined;
+  const properties = Object.entries(schema?.properties || {});
+  const appName = request.app?.name || request.serverName || t('Plugin');
+  const requiredKeys = new Set(schema?.required || []);
+  const missingQuestion = (request.questions || []).some(question => {
+    const value = values[question.id];
+    return value === undefined || value === null || String(value).trim() === '';
+  });
+  const missingRequiredField = properties.some(([key]) => {
+    if (!requiredKeys.has(key)) return false;
+    const value = values[key];
+    if (Array.isArray(value)) return value.length === 0;
+    return value === undefined || value === null || String(value).trim() === '';
+  });
+  const canAccept = !missingQuestion && !missingRequiredField;
+
+  const respond = async (action: CodexPluginInteractionResponse['action']) => {
+    if (submitting || (action === 'accept' && !canAccept)) return;
+    setSubmitting(true);
+    setError(null);
+    try {
+      await onRespond({ action, values: action === 'accept' ? values : undefined });
+    } catch (responseError: any) {
+      setError(responseError?.message || t('Could not answer the plugin request.'));
+      setSubmitting(false);
+    }
+  };
+
+  return (
+    <div className="mt-2 overflow-hidden rounded-2xl border border-amber-500/25 bg-bg-card/95 shadow-[0_16px_50px_rgba(0,0,0,0.18)] backdrop-blur-xl">
+      <div className="flex items-start gap-3 px-3.5 py-3">
+        <span className="flex h-9 w-9 shrink-0 items-center justify-center rounded-xl bg-amber-500/12 text-amber-400">
+          <Check size={17} strokeWidth={2.2} />
+        </span>
+        <div className="min-w-0 flex-1">
+          <div className="text-xs font-semibold text-text-primary">{t('Confirm plugin action')}</div>
+          <div className="mt-0.5 text-[10px] font-medium text-amber-400">{appName}</div>
+          {request.message && <p className="mt-2 whitespace-pre-wrap text-[11px] leading-relaxed text-text-secondary">{request.message}</p>}
+        </div>
+      </div>
+
+      <div className="space-y-3 border-t border-border-subtle px-3.5 py-3">
+        {(request.questions || []).map(question => (
+          <label key={question.id} className="block">
+            <span className="block text-[10px] font-semibold uppercase tracking-wide text-text-tertiary">{question.header}</span>
+            <span className="mt-1 block text-[11px] text-text-secondary">{question.question}</span>
+            {question.options?.length ? (
+              <>
+                <div className="mt-2 flex flex-wrap gap-1.5">
+                  {question.options.map(option => (
+                    <button
+                      key={option.label}
+                      type="button"
+                      onClick={() => setValues(current => ({ ...current, [question.id]: option.label }))}
+                      title={option.description}
+                      className={`rounded-lg border px-2.5 py-1.5 text-[10px] font-medium transition-colors ${values[question.id] === option.label
+                        ? 'border-sky-400/50 bg-sky-500/15 text-sky-300'
+                        : 'border-border-subtle bg-bg-input text-text-secondary hover:bg-bg-subtle'}`}
+                    >
+                      {option.label}
+                    </button>
+                  ))}
+                </div>
+                {question.isOther && (
+                  <input
+                    type={question.isSecret ? 'password' : 'text'}
+                    value={question.options.some(option => option.label === values[question.id]) ? '' : String(values[question.id] ?? '')}
+                    placeholder={t('Other…')}
+                    onChange={event => setValues(current => ({ ...current, [question.id]: event.target.value }))}
+                    className="mt-2 w-full rounded-lg border border-border-subtle bg-bg-input px-2.5 py-2 text-[11px] text-text-primary outline-none focus:border-sky-400/50"
+                  />
+                )}
+              </>
+            ) : (
+              <input
+                type={question.isSecret ? 'password' : 'text'}
+                value={String(values[question.id] ?? '')}
+                onChange={event => setValues(current => ({ ...current, [question.id]: event.target.value }))}
+                className="mt-2 w-full rounded-lg border border-border-subtle bg-bg-input px-2.5 py-2 text-[11px] text-text-primary outline-none focus:border-sky-400/50"
+              />
+            )}
+          </label>
+        ))}
+
+        {properties.map(([key, property]) => {
+          const singleOptions = property.oneOf?.map(option => ({ value: option.const, label: option.title || option.const }))
+            || property.enum?.map((option, index) => ({ value: String(option), label: property.enumNames?.[index] || String(option) }));
+          const multiOptions = property.items?.anyOf?.map(option => ({ value: option.const, label: option.title || option.const }))
+            || property.items?.enum?.map(option => ({ value: String(option), label: String(option) }));
+          const inputType = property.format === 'email' ? 'email'
+            : property.format === 'uri' ? 'url'
+              : property.format === 'date' ? 'date'
+                : property.format === 'date-time' ? 'datetime-local'
+                  : property.type === 'number' || property.type === 'integer' ? 'number' : 'text';
+          return <label key={key} className="block">
+            <span className="block text-[10px] font-semibold text-text-secondary">
+              {property.title || key}{requiredKeys.has(key) ? ' *' : ''}
+            </span>
+            {property.description && <span className="mt-0.5 block text-[9px] text-text-tertiary">{property.description}</span>}
+            {property.type === 'boolean' ? (
+              <input
+                type="checkbox"
+                checked={values[key] === true}
+                onChange={event => setValues(current => ({ ...current, [key]: event.target.checked }))}
+                className="mt-2 h-4 w-4 accent-sky-500"
+              />
+            ) : property.type === 'array' && multiOptions?.length ? (
+              <div className="mt-2 flex flex-wrap gap-1.5">
+                {multiOptions.map(option => {
+                  const selected = Array.isArray(values[key]) && values[key].includes(option.value);
+                  return (
+                    <button
+                      key={option.value}
+                      type="button"
+                      onClick={() => setValues(current => {
+                        const previous = Array.isArray(current[key]) ? current[key] as unknown[] : [];
+                        return {
+                          ...current,
+                          [key]: selected ? previous.filter(value => value !== option.value) : [...previous, option.value],
+                        };
+                      })}
+                      className={`rounded-lg border px-2.5 py-1.5 text-[10px] font-medium ${selected
+                        ? 'border-sky-400/50 bg-sky-500/15 text-sky-300'
+                        : 'border-border-subtle bg-bg-input text-text-secondary hover:bg-bg-subtle'}`}
+                    >
+                      {option.label}
+                    </button>
+                  );
+                })}
+              </div>
+            ) : singleOptions?.length ? (
+              <select
+                value={String(values[key] ?? '')}
+                onChange={event => setValues(current => ({ ...current, [key]: event.target.value }))}
+                className="mt-2 w-full rounded-lg border border-border-subtle bg-bg-input px-2.5 py-2 text-[11px] text-text-primary outline-none"
+              >
+                <option value="">{t('Select an option')}</option>
+                {singleOptions.map(option => <option key={option.value} value={option.value}>{option.label}</option>)}
+              </select>
+            ) : (
+              <input
+                type={inputType}
+                min={property.minimum}
+                max={property.maximum}
+                value={String(values[key] ?? '')}
+                onChange={event => setValues(current => ({
+                  ...current,
+                  [key]: property.type === 'number' || property.type === 'integer'
+                    ? (event.target.value === '' ? '' : Number(event.target.value))
+                    : event.target.value,
+                }))}
+                className="mt-2 w-full rounded-lg border border-border-subtle bg-bg-input px-2.5 py-2 text-[11px] text-text-primary outline-none focus:border-sky-400/50"
+              />
+            )}
+          </label>;
+        })}
+
+        {request.url && (
+          <button
+            type="button"
+            onClick={() => window.electronAPI.openExternal(request.url!)}
+            className="text-[10px] font-semibold text-sky-400 hover:underline"
+          >
+            {t('Open plugin confirmation page')}
+          </button>
+        )}
+
+        {error && <p className="text-[10px] text-red-400">{error}</p>}
+        <div className="flex justify-end gap-2 pt-1">
+          <button
+            type="button"
+            disabled={submitting}
+            onClick={() => void respond('decline')}
+            className="rounded-lg border border-border-subtle bg-bg-input px-3 py-1.5 text-[10px] font-semibold text-text-secondary transition-colors hover:bg-bg-subtle disabled:opacity-50"
+          >
+            {t('Cancel')}
+          </button>
+          <button
+            type="button"
+            disabled={submitting || !canAccept}
+            onClick={() => void respond('accept')}
+            className="rounded-lg bg-emerald-500 px-3 py-1.5 text-[10px] font-semibold text-white transition-colors hover:bg-emerald-400 disabled:cursor-not-allowed disabled:opacity-40"
+          >
+            {submitting ? t('Working…') : t('Allow')}
+          </button>
+        </div>
+      </div>
+    </div>
   );
 }
 
@@ -460,10 +692,15 @@ import {
   getOverlayAppearance,
   OVERLAY_OPACITY_DEFAULT,
 } from '../lib/overlayAppearance';
-import type { CodexPluginApp, DynamicActionPayload, SkillSummary } from '../types/electron';
+import type {
+  CodexPluginApp,
+  CodexPluginInteractionRequest,
+  CodexPluginInteractionResponse,
+  DynamicActionPayload,
+  SkillSummary,
+} from '../types/electron';
 import {
-  isSelectedPluginMentionIntact,
-  toCodexPluginPrompt,
+  findExplicitlyMentionedCodexPlugin,
   type SelectedCodexPluginMention,
 } from '../lib/codexPluginMentions';
 import { getCodexCliModelDisplayName, litellmModelLabel } from '../utils/modelUtils';
@@ -536,6 +773,9 @@ interface Message {
   id: string;
   role: 'user' | 'system' | 'interviewer';
   text: string;
+  // Preserve the app selected for this submitted turn so the sent bubble can
+  // show the same icon + friendly name that appeared in the composer.
+  pluginMention?: SelectedCodexPluginMention;
   isStreaming?: boolean;
   hasScreenshot?: boolean;
   screenshotPreview?: string;
@@ -1187,7 +1427,26 @@ const MessageRow = React.memo(
                 <span>{t('Corrected answer')}{msg.correctionNote ? ` — ${msg.correctionNote}` : ''}</span>
               </div>
             )}
-            {renderMessageText(msg)}
+            {msg.role === 'user' && msg.pluginMention ? (
+              <span
+                data-testid="sent-plugin-inline-mention"
+                className="whitespace-pre-wrap break-words"
+              >
+                <span className="mr-1.5 inline-flex items-center gap-1.5 align-middle font-semibold">
+                  <span className="flex h-4 w-4 shrink-0 items-center justify-center overflow-hidden">
+                    {getSafePluginLogoUrl(msg.pluginMention.logoUrl) ? (
+                      <img
+                        src={getSafePluginLogoUrl(msg.pluginMention.logoUrl)!}
+                        alt=""
+                        className="h-full w-full object-contain"
+                      />
+                    ) : <AtSign size={14} />}
+                  </span>
+                  <span>{msg.pluginMention.name}</span>
+                </span>
+                <span>{msg.text}</span>
+              </span>
+            ) : renderMessageText(msg)}
             {/* Verified badge: the code in this message passed executed tests. */}
             {msg.role === 'system' && msg.codeVerified && (
               <div className="flex items-center gap-1 mt-1.5 text-[10px] font-medium text-green-500" title={`Ran ${msg.codeVerified.total} test case(s) successfully`}>
@@ -1248,16 +1507,17 @@ const NativelyInterface: React.FC<NativelyInterfaceProps> = ({
   const pluginPickerIndexRef = useRef(0);
   const [availablePlugins, setAvailablePlugins] = useState<CodexPluginApp[]>([]);
   const [selectedPluginMention, setSelectedPluginMention] = useState<SelectedCodexPluginMention | null>(null);
+  const selectedPluginMentionRef = useRef<SelectedCodexPluginMention | null>(null);
+  selectedPluginMentionRef.current = selectedPluginMention;
+  const composerPluginMentionElementRef = useRef<HTMLButtonElement | null>(null);
+  const [composerPluginMentionWidth, setComposerPluginMentionWidth] = useState(0);
+  // Kept separately from the visible composer mention. A connector may ask a
+  // clarification (for example, "which date?"); the next short answer still
+  // needs to route to that connector without showing an "active" badge or
+  // putting the app mention back into the empty composer.
+  const [activePluginForFollowups, setActivePluginForFollowups] = useState<SelectedCodexPluginMention | null>(null);
+  const [pluginInteraction, setPluginInteraction] = useState<CodexPluginInteractionRequest | null>(null);
   const [pluginPickerIndex, setPluginPickerIndex] = useState(0);
-
-  // The selected mention is metadata for the current visible @Name token only.
-  // Clear it whenever normal or stealth typing edits that token so stale ids can
-  // never be submitted for text that no longer names the selected plugin.
-  useEffect(() => {
-    if (selectedPluginMention && !isSelectedPluginMentionIntact(inputValue, selectedPluginMention)) {
-      setSelectedPluginMention(null);
-    }
-  }, [inputValue, selectedPluginMention]);
   const { shortcuts, isShortcutPressed } = useShortcuts();
   const [messages, setMessages] = useState<Message[]>([]);
   // Keep chat history visible once an answer lands until explicit clear / session reset.
@@ -1969,12 +2229,28 @@ const NativelyInterface: React.FC<NativelyInterfaceProps> = ({
     });
     const unsubscribeSignedOut = window.electronAPI?.onCodexSignedOut?.(() => {
       setAvailablePlugins([]);
+      setSelectedPluginMention(null);
+      setActivePluginForFollowups(null);
     });
     return () => {
       alive = false;
       unsubscribeChanged?.();
       unsubscribeLogin?.();
       unsubscribeSignedOut?.();
+    };
+  }, []);
+
+  useEffect(() => {
+    const unsubscribeInteraction = window.electronAPI?.onCodexPluginInteraction?.((request) => {
+      setPluginInteraction(request);
+      setIsExpanded(true);
+    });
+    const unsubscribeClosed = window.electronAPI?.onCodexPluginInteractionClosed?.((requestId) => {
+      setPluginInteraction(current => current?.requestId === requestId ? null : current);
+    });
+    return () => {
+      unsubscribeInteraction?.();
+      unsubscribeClosed?.();
     };
   }, []);
 
@@ -2009,6 +2285,14 @@ const NativelyInterface: React.FC<NativelyInterfaceProps> = ({
       unsub?.();
     };
   }, []);
+
+  useEffect(() => {
+    if (llmProviderId !== 'codex-cli') {
+      setSelectedPluginMention(null);
+      setActivePluginForFollowups(null);
+      setPluginInteraction(null);
+    }
+  }, [llmProviderId]);
 
   // Model Selection State
   const [currentModel, setCurrentModel] = useState<string>('gemini-3-flash-preview');
@@ -4790,6 +5074,9 @@ const NativelyInterface: React.FC<NativelyInterfaceProps> = ({
   const resetChatState = useCallback(() => {
     cancelActiveChatStream();
     setMessages([]);
+    setSelectedPluginMention(null);
+    setActivePluginForFollowups(null);
+    setPluginInteraction(null);
     answerPanelPinnedRef.current = false;
     setAnswerPanelPinned(false);
     lastManualSubmitRef.current = null;
@@ -6255,8 +6542,8 @@ Provide only the answer, nothing else.`;
   }, [inputValue]);
 
   const selectPlugin = useCallback((plugin: CodexPluginApp) => {
-    setSelectedPluginMention({ id: plugin.id, name: plugin.name });
-    setInputValue(`@${plugin.name} `);
+    setSelectedPluginMention({ id: plugin.id, name: plugin.name, logoUrl: plugin.logoUrl });
+    setInputValue('');
     setPluginPickerIndex(0);
     textInputRef.current?.focus();
   }, []);
@@ -6265,13 +6552,23 @@ Provide only the answer, nothing else.`;
     if (!inputValue.trim() && attachedContext.length === 0) return;
 
     const userText = inputValue.trim();
-    const codexSubmitText = toCodexPluginPrompt(userText, selectedPluginMention);
+    const inferredPlugin = !selectedPluginMention && llmProviderId === 'codex-cli'
+      ? findExplicitlyMentionedCodexPlugin(userText, availablePlugins)
+      : null;
+    const explicitPluginForSubmit = selectedPluginMention || (inferredPlugin
+      ? { id: inferredPlugin.id, name: inferredPlugin.name, logoUrl: inferredPlugin.logoUrl }
+      : null);
+    const pluginForSubmit = explicitPluginForSubmit || activePluginForFollowups;
+    if (explicitPluginForSubmit) setActivePluginForFollowups(explicitPluginForSubmit);
+    const submitDedupeText = pluginForSubmit
+      ? `${pluginForSubmit.id}\u0000${userText}`
+      : userText;
     const nowMs = Date.now();
     if (manualSubmitInFlightRef.current) return;
     const last = lastManualSubmitRef.current;
     if (
       shouldDedupeManualSubmit({
-        text: userText,
+        text: submitDedupeText,
         lastText: last?.text ?? null,
         lastAtMs: last?.atMs ?? null,
         nowMs,
@@ -6280,7 +6577,7 @@ Provide only the answer, nothing else.`;
       return;
     }
     manualSubmitInFlightRef.current = true;
-    lastManualSubmitRef.current = { text: userText, atMs: nowMs };
+    lastManualSubmitRef.current = { text: submitDedupeText, atMs: nowMs };
 
     // Terminal-style chat history: record the submitted text (dedupe
     // consecutive repeats like a shell, cap the stack). Session-scoped —
@@ -6314,6 +6611,20 @@ Provide only the answer, nothing else.`;
       }
     } catch { /* non-fatal: submit without transcript */ }
 
+    // Plugin turns are actions, not Lecture/Sales/etc. knowledge questions.
+    // Give them only the chat history needed to resolve follow-up details and
+    // force the caller-owned transport so Context Intelligence, live meeting
+    // RAG, active Modes, and reference files cannot hijack or leak into the
+    // connector request.
+    if (pluginForSubmit) {
+      conversationContextForSubmit = [
+        `You are completing the user's request with the selected ${pluginForSubmit.name} plugin.`,
+        'Use the conversation only to recover details the user already supplied. Ask only for missing required details, then call the selected plugin. Do not guess permission or connection errors; report only errors returned by the connector.',
+        chatHistoryContext ? `[CONVERSATION SO FAR:]\n${chatHistoryContext}` : '',
+      ].filter(Boolean).join('\n\n');
+      useCallerOwnedPrompt = true;
+    }
+
     // Clear inputs immediately
     setInputValue('');
     setSelectedPluginMention(null);
@@ -6345,6 +6656,9 @@ Provide only the answer, nothing else.`;
         id: genMessageId(),
         role: 'user',
         text: userText || (currentAttachments.length > 0 ? 'Analyze this screenshot' : ''),
+        pluginMention: explicitPluginForSubmit
+          ? { id: explicitPluginForSubmit.id, name: explicitPluginForSubmit.name, logoUrl: explicitPluginForSubmit.logoUrl }
+          : undefined,
         hasScreenshot: currentAttachments.length > 0,
         screenshotPreview: currentAttachments[0]?.preview,
         screenshotPreviews: currentAttachments.map((a) => a.preview).filter(Boolean),
@@ -6412,7 +6726,10 @@ Provide only the answer, nothing else.`;
       // the request so "answer this" keeps working.
       await window.electronAPI.runIntelligence({
         source: 'manual_chat',
-        text: codexSubmitText || 'Analyze this screenshot',
+        text: userText || 'Analyze this screenshot',
+        codexApp: pluginForSubmit
+          ? { id: pluginForSubmit.id, name: pluginForSubmit.name }
+          : undefined,
         imagePaths: currentAttachments.length > 0 ? currentAttachments.map((s) => s.path) : undefined,
         context: conversationContextForSubmit,
         ...(useCallerOwnedPrompt ? { skipSystemPrompt: true } : {}),
@@ -7672,8 +7989,8 @@ Provide only the answer, nothing else.`;
           if (pluginPickerOpenRef.current) {
             const plugin = filteredPluginsRef.current[pluginPickerIndexRef.current];
             if (plugin) {
-              setSelectedPluginMention({ id: plugin.id, name: plugin.name });
-              setInputValue(`@${plugin.name} `);
+              setSelectedPluginMention({ id: plugin.id, name: plugin.name, logoUrl: plugin.logoUrl });
+              setInputValue('');
               setPluginPickerIndex(0);
               return;
             }
@@ -7689,8 +8006,14 @@ Provide only the answer, nothing else.`;
             window.electronAPI.stealthTapStop().catch(() => {});
           }
           return;
-        case 51: // Backspace — delete one char
-          setInputValue((prev) => prev.slice(0, -1));
+        case 51: // Backspace — delete one char, then the inline plugin mention
+          setInputValue((prev) => {
+            if (prev.length === 0 && selectedPluginMentionRef.current) {
+              setSelectedPluginMention(null);
+              selectedPluginMentionRef.current = null;
+            }
+            return prev.slice(0, -1);
+          });
           return;
         case 126: // Up arrow — terminal-style chat history (older entry)
         case 125: // Down arrow — terminal-style chat history (newer entry)
@@ -8059,6 +8382,26 @@ Provide only the answer, nothing else.`;
   filteredPluginsCountRef.current = filteredPlugins.length;
   filteredPluginsRef.current = filteredPlugins;
   pluginPickerIndexRef.current = clampedPluginPickerIndex;
+  const selectedPluginLogoUrl = getSafePluginLogoUrl(selectedPluginMention?.logoUrl);
+  useLayoutEffect(() => {
+    const element = composerPluginMentionElementRef.current;
+    if (!selectedPluginMention || !element) {
+      setComposerPluginMentionWidth(0);
+      return;
+    }
+    const measure = () => setComposerPluginMentionWidth(element.getBoundingClientRect().width);
+    measure();
+    const observer = new ResizeObserver(measure);
+    observer.observe(element);
+    return () => observer.disconnect();
+  }, [selectedPluginMention?.id, selectedPluginMention?.name, selectedPluginLogoUrl]);
+
+  // A textarea cannot contain rich children. Measure the real rendered width
+  // of the icon + app name, then reserve exactly that width plus a 10px gap.
+  // This avoids the oversized gap caused by estimating proportional text in ch.
+  const selectedPluginMentionInset = selectedPluginMention
+    ? 12 + composerPluginMentionWidth + 10
+    : undefined;
 
   return (
     <>
@@ -9077,6 +9420,29 @@ Provide only the answer, nothing else.`;
                                     tap and break inputs in Settings/Model
                                     Selector windows. */}
                 <div className="relative group" data-stealth-engage="true">
+                  {selectedPluginMention && (
+                    <button
+                      ref={composerPluginMentionElementRef}
+                      type="button"
+                      data-testid="selected-plugin-inline-mention"
+                      data-stealth-ignore="true"
+                      onMouseDown={(event) => {
+                        event.preventDefault();
+                        event.stopPropagation();
+                      }}
+                      onClick={() => setSelectedPluginMention(null)}
+                      className="absolute left-3 top-2.5 z-10 flex max-w-[190px] items-center gap-1.5 font-sans text-[13px] font-medium leading-relaxed text-sky-400 transition-opacity hover:opacity-75"
+                      aria-label={`${t('Remove plugin')} ${selectedPluginMention.name}`}
+                      title={t('Remove plugin')}
+                    >
+                      <span className="flex h-4 w-4 shrink-0 items-center justify-center overflow-hidden">
+                        {selectedPluginLogoUrl ? (
+                          <img src={selectedPluginLogoUrl} alt="" className="h-full w-full object-contain" />
+                        ) : <AtSign size={14} />}
+                      </span>
+                      <span className="truncate">{selectedPluginMention.name}</span>
+                    </button>
+                  )}
                   <textarea
                     ref={textInputRef}
                     data-testid="overlay-chat-input"
@@ -9092,6 +9458,11 @@ Provide only the answer, nothing else.`;
                       setPluginPickerIndex(0);
                     }}
                     onKeyDown={(e) => {
+                      if (e.key === 'Backspace' && !inputValue && selectedPluginMention) {
+                        e.preventDefault();
+                        setSelectedPluginMention(null);
+                        return;
+                      }
                       // Normal typing uses a real textarea, so preserve its
                       // native multiline behavior. Stealth typing handles
                       // Return through the OS keyboard hook instead.
@@ -9182,7 +9553,10 @@ Provide only the answer, nothing else.`;
                     // the same aurora glow with a class instead, and drop the
                     // green, so both platforms look identical on click.
                     className={`w-full min-h-[42px] max-h-[120px] resize-none overflow-y-auto whitespace-pre-wrap break-words [field-sizing:content] border rounded-xl pl-3 pr-10 py-2.5 text-[13px] leading-relaxed ${inputClass} ${stealthTapActive && isWindows ? 'aurora-focus-active' : ''} ${stealthTapActive && !isWindows ? 'ring-2 ring-emerald-400/30 border-emerald-400/40 shadow-[0_0_12px_rgba(52,211,153,0.15)]' : ''}`}
-                    style={appearance.inputStyle}
+                    style={{
+                      ...appearance.inputStyle,
+                      ...(selectedPluginMentionInset ? { paddingLeft: selectedPluginMentionInset } : {}),
+                    }}
                   />
 
                   {/* Synthetic caret — the input can never take real DOM focus
@@ -9195,7 +9569,8 @@ Provide only the answer, nothing else.`;
                   {stealthTapActive && (
                     <div
                       aria-hidden="true"
-                      className="absolute left-3 right-10 top-2.5 pointer-events-none select-none overflow-hidden whitespace-pre-wrap break-words text-[13px] leading-relaxed"
+                      className="absolute right-10 top-2.5 pointer-events-none select-none overflow-hidden whitespace-pre-wrap break-words text-[13px] leading-relaxed"
+                      style={{ left: selectedPluginMentionInset || '0.75rem' }}
                     >
                       <span className="invisible">{inputValue}</span>
                       <span className="overlay-synthetic-caret" />
@@ -9218,7 +9593,7 @@ Provide only the answer, nothing else.`;
                   {/* Custom Rich Placeholder — hidden while the synthetic caret
                       is active so a focused empty input reads like a native one
                       (blinking caret, no placeholder) */}
-                  {!inputValue && !stealthTapActive && (
+                  {!inputValue && !selectedPluginMention && !stealthTapActive && (
                     <div className="absolute left-3 top-1/2 -translate-y-1/2 flex items-center gap-1.5 pointer-events-none text-[13px] overlay-text-muted">
                       <span>{t('Ask anything on screen or conversation, or')}</span>
                       <div className="flex items-center gap-1 opacity-80">
@@ -9261,6 +9636,21 @@ Provide only the answer, nothing else.`;
                     selectedIndex={clampedPluginPickerIndex}
                     query={pluginPickerQuery}
                     onSelect={selectPlugin}
+                  />
+                )}
+
+                {pluginInteraction && (
+                  <CodexPluginInteractionCard
+                    key={pluginInteraction.requestId}
+                    request={pluginInteraction}
+                    onRespond={async response => {
+                      const result = await window.electronAPI.resolveCodexPluginInteraction(
+                        pluginInteraction.requestId,
+                        response,
+                      );
+                      if (!result.success) throw new Error(result.error || 'Could not answer the plugin request.');
+                      setPluginInteraction(null);
+                    }}
                   />
                 )}
 

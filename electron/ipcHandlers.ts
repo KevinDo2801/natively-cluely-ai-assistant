@@ -934,7 +934,7 @@ export function initializeIpcHandlers(appState: AppState): void {
       message: string,
       imagePaths?: string[],
       context?: string,
-      options?: { skipSystemPrompt?: boolean; ignoreKnowledgeMode?: boolean; chatSurface?: boolean; languageSurface?: 'reader' | 'speak' },
+      options?: { skipSystemPrompt?: boolean; ignoreKnowledgeMode?: boolean; chatSurface?: boolean; languageSurface?: 'reader' | 'speak'; codexApp?: { id: string; name: string } },
     ): Promise<null> => {
       let myController: AbortController | null = null;
       let myStreamId = 0; // assigned inside try; read by the finally cleanup
@@ -1490,7 +1490,7 @@ export function initializeIpcHandlers(appState: AppState): void {
               // Without it, a doc-grounded custom mode ran a second, ungoverned
               // retrieval and injected it around V3's filtered evidence, and
               // shapeDocumentGroundedSystemPrompt mutated V3's system prompt.
-              { v3Owned: true },
+              { v3Owned: true, codexApp: options?.codexApp },
             );
 
             try {
@@ -3567,6 +3567,7 @@ export function initializeIpcHandlers(appState: AppState): void {
             // never added to the model-visible prompt (the doc-grounded prompt
             // still strips prior assistant turns), so anti-contamination holds.
             {
+              codexApp: options?.codexApp,
               answerType: answerPlan.answerType,
               forbiddenContextLayers: answerPlan.forbiddenContextLayers,
               // F-502: the t0-pinned mode. streamContextPolicy documents this as
@@ -5830,7 +5831,14 @@ export function initializeIpcHandlers(appState: AppState): void {
             request.text ?? '',
             request.imagePaths,
             request.context, // rolling-context derivation lives inside the handler when absent
-            { skipSystemPrompt: request.skipSystemPrompt === true, chatSurface: request.chatSurface === true, languageSurface: request.languageSurface === 'speak' ? 'speak' : 'reader' },
+            {
+              skipSystemPrompt: request.skipSystemPrompt === true,
+              chatSurface: request.chatSurface === true,
+              languageSurface: request.languageSurface === 'speak' ? 'speak' : 'reader',
+              codexApp: request.codexApp && typeof request.codexApp.id === 'string' && typeof request.codexApp.name === 'string'
+                ? { id: request.codexApp.id, name: request.codexApp.name }
+                : undefined,
+            },
           );
           return {
             started: true,
@@ -9216,6 +9224,10 @@ export function initializeIpcHandlers(appState: AppState): void {
   });
 
   const codexServer = CodexAppServerService.getInstance();
+  // Settings → Plugins → "Approve plugin actions automatically". Default ON:
+  // `undefined` (never touched) reads as enabled, so a plugin action the user
+  // asked for is not blocked by a confirmation they did not know about.
+  codexServer.setAutoApprovePlugins(SettingsManager.getInstance().get('codexAutoApprovePlugins') ?? true);
   const codexPath = () => appState.processingHelper.getLLMHelper().getCodexCliConfig().path;
   const writeCodexAppsDiagnostic = (details: Record<string, unknown>) => {
     try {
@@ -9295,6 +9307,8 @@ export function initializeIpcHandlers(appState: AppState): void {
     broadcastCredentialsChanged();
   });
   codexServer.on('apps:changed', () => broadcastCodex('plugins:changed'));
+  codexServer.on('plugin-interaction', (request) => broadcastCodex('plugin-interaction', request));
+  codexServer.on('plugin-interaction-closed', (requestId) => broadcastCodex('plugin-interaction-closed', requestId));
   app.once('before-quit', () => {
     if (codexAppsRecoveryTimer) clearTimeout(codexAppsRecoveryTimer);
     codexAppsRecoveryTimer = undefined;
@@ -9357,6 +9371,42 @@ export function initializeIpcHandlers(appState: AppState): void {
       return { success: true, opened: true };
     } catch (error: any) {
       return { success: false, opened: false, error: error?.message || 'Could not connect plugin.' };
+    }
+  });
+  safeHandle('codex:plugin-interaction-resolve', async (_event, requestId: unknown, response: any) => {
+    try {
+      if (typeof requestId !== 'string' || !requestId) throw new Error('Invalid plugin confirmation.');
+      if (!response || !['accept', 'decline', 'cancel'].includes(response.action)) throw new Error('Invalid plugin decision.');
+      const values = response.values && typeof response.values === 'object' && !Array.isArray(response.values)
+        ? response.values as Record<string, unknown>
+        : undefined;
+      await codexServer.resolvePluginInteraction(requestId, { action: response.action, values });
+      return { success: true };
+    } catch (error: any) {
+      return { success: false, error: error?.message || 'Could not answer the plugin request.' };
+    }
+  });
+  safeHandle('get-codex-auto-approve-plugins', () => {
+    try {
+      const stored = SettingsManager.getInstance().get('codexAutoApprovePlugins');
+      return { enabled: stored ?? true };
+    } catch {
+      return { enabled: true };
+    }
+  });
+  safeHandle('set-codex-auto-approve-plugins', (_event, enabled: unknown) => {
+    try {
+      if (typeof enabled !== 'boolean') throw new Error('Invalid plugin approval setting.');
+      const sm = SettingsManager.getInstance();
+      if (!sm.set('codexAutoApprovePlugins', enabled)) {
+        // R-24 pattern: never report success for a value the store refused to
+        // persist — the runtime would diverge from disk and silently revert.
+        return { success: false, error: 'settings_store_degraded' };
+      }
+      codexServer.setAutoApprovePlugins(enabled);
+      return { success: true, enabled };
+    } catch (error: any) {
+      return { success: false, error: error?.message || 'Could not update plugin approval.' };
     }
   });
   safeHandle('test-codex-cli', async (_, config?: any) => {

@@ -3,6 +3,27 @@ import { EventEmitter } from 'events';
 import fs from 'fs';
 import os from 'os';
 import path from 'path';
+import { buildAutoApprovalResponse } from './codexPluginAutoApproval.mjs';
+
+// Developer instructions handed to the managed App Server thread. Both variants
+// keep the same hard bans (no shell, no local files, no delegation); they differ
+// only in whether an app connector may be used WITHOUT the user naming it.
+// The permissive variant is paired with the auto-approval path: it is only used
+// when the user opted into "approve plugin actions automatically", so nobody is
+// silently granted connector writes they did not ask for.
+const CODEX_DEVELOPER_INSTRUCTIONS_BASE =
+  'Ask only for details required by the connector. Once the required details are known, call the connector directly. '
+  + 'Do not claim that a browser is unavailable when an app connector is selected. '
+  + 'Do not call shell tools, run commands, read local files, or delegate work.';
+const CODEX_DEVELOPER_INSTRUCTIONS_EXPLICIT_APP =
+  'You are the text response provider inside Natively. You may call an enabled app connector only when the user explicitly mentions that app. '
+  + 'Do not ask for an extra prose confirmation because Natively shows the connector approval UI. '
+  + CODEX_DEVELOPER_INSTRUCTIONS_BASE;
+const CODEX_DEVELOPER_INSTRUCTIONS_AUTO_APPROVED_APP =
+  'You are the text response provider inside Natively. You may call any enabled app connector that matches the user\'s request, even when the user does not name it; '
+  + 'when several connectors could fit, pick the one whose name, description, or capabilities match the request best. '
+  + 'Natively approves connector actions automatically, so never ask the user for permission or a prose confirmation — perform the action and report the result. '
+  + CODEX_DEVELOPER_INSTRUCTIONS_BASE;
 
 export interface CodexModelInfo {
   id: string;
@@ -27,6 +48,30 @@ export interface CodexAppInfo {
   pluginDisplayNames: string[];
 }
 
+export interface CodexPluginInteractionRequest {
+  requestId: string;
+  kind: 'user_input' | 'elicitation';
+  app?: { id: string; name: string };
+  message?: string;
+  serverName?: string;
+  mode?: string;
+  url?: string;
+  questions?: Array<{
+    id: string;
+    header: string;
+    question: string;
+    isOther: boolean;
+    isSecret: boolean;
+    options?: Array<{ label: string; description: string }>;
+  }>;
+  requestedSchema?: unknown;
+}
+
+export interface CodexPluginInteractionResponse {
+  action: 'accept' | 'decline' | 'cancel';
+  values?: Record<string, unknown>;
+}
+
 /** The official client owns credentials; Natively never reads or copies its tokens. */
 export class CodexAppServerService extends EventEmitter {
   private static instance: CodexAppServerService;
@@ -45,8 +90,27 @@ export class CodexAppServerService extends EventEmitter {
   private appsCatalogSource: 'app-directory' | 'plugin-marketplace' | 'installed-only' = 'app-directory';
   private executable = 'codex';
   private loginId?: string;
+  private interactionSequence = 0;
+  private pluginInteractions = new Map<string, {
+    rpcId: string | number;
+    method: 'item/tool/requestUserInput' | 'mcpServer/elicitation/request';
+    params: any;
+    timer: ReturnType<typeof setTimeout>;
+  }>();
+  private threadApps = new Map<string, { id: string; name: string }>();
+  /**
+   * Settings → Plugins → "Approve plugin actions automatically". OFF at the
+   * service level (safe default for any direct construction, e.g. tests or a
+   * background recovery instance); the app turns it on from the persisted
+   * setting at IPC wiring time. When ON, confirm-only plugin interactions are
+   * answered here instead of waiting for a click, and connector turns may be
+   * started even when the user did not name the plugin.
+   */
+  private autoApprovePlugins = false;
 
   getStatus() { return { ...this.status }; }
+  getAutoApprovePlugins() { return this.autoApprovePlugins; }
+  setAutoApprovePlugins(enabled: boolean) { this.autoApprovePlugins = enabled === true; }
   getAppsCatalogStatus() { return { limited: this.appsCatalogLimited, source: this.appsCatalogSource }; }
   adoptAppsCatalog(apps: CodexAppInfo[]) {
     this.apps = apps.map(app => ({ ...app, pluginDisplayNames: [...app.pluginDisplayNames] }));
@@ -172,19 +236,78 @@ export class CodexAppServerService extends EventEmitter {
       return;
     }
     if (message.id !== undefined) {
-      // Apps execute inside Codex's hosted connector runtime. Read-only calls
-      // need no client response; app actions with side effects arrive here as
-      // approval/elicitation requests. Until Natively has a dedicated approval
-      // surface, fail closed instead of silently granting an action.
       const appApproval = message.method === 'item/tool/requestUserInput'
         || message.method === 'mcpServer/elicitation/request';
+      if (appApproval) {
+        const requestId = `plugin-interaction-${++this.interactionSequence}`;
+        const params = message.params || {};
+        const app = this.threadApps.get(String(params.threadId || ''));
+        const request: CodexPluginInteractionRequest = message.method === 'item/tool/requestUserInput'
+          ? {
+              requestId,
+              kind: 'user_input',
+              app,
+              questions: Array.isArray(params.questions)
+                ? params.questions.map((question: any) => ({
+                    id: String(question?.id || ''),
+                    header: String(question?.header || 'Confirmation'),
+                    question: String(question?.question || 'Continue with this plugin action?'),
+                    isOther: question?.isOther === true,
+                    isSecret: question?.isSecret === true,
+                    options: Array.isArray(question?.options)
+                      ? question.options.map((option: any) => ({
+                          label: String(option?.label || ''),
+                          description: String(option?.description || ''),
+                        })).filter((option: { label: string }) => option.label.length > 0)
+                      : undefined,
+                  })).filter((question: { id: string }) => question.id.length > 0)
+                : [],
+            }
+          : {
+              requestId,
+              kind: 'elicitation',
+              app,
+              message: String(params.message || 'Continue with this plugin action?'),
+              serverName: typeof params.serverName === 'string' ? params.serverName : undefined,
+              mode: typeof params.mode === 'string' ? params.mode : undefined,
+              url: typeof params.url === 'string' && /^https:\/\//i.test(params.url) ? params.url : undefined,
+              requestedSchema: params.requestedSchema,
+            };
+        // Reset the active stream's idle deadline. The JSON-RPC request stays
+        // pending until it is answered — by the auto-approval policy below or by
+        // the user through the renderer card.
+        this.emit('notification', message);
+        if (this.autoApprovePlugins) {
+          // Only confirm-only interactions are answered here; anything that
+          // needs user data returns null and still reaches the card below.
+          const auto = buildAutoApprovalResponse(request);
+          if (auto) {
+            this.sendInteractionResult(
+              { rpcId: message.id, method: message.method, params },
+              { action: auto.action, values: auto.values },
+            );
+            this.emit('plugin-interaction-closed', requestId);
+            return;
+          }
+        }
+        const timer = setTimeout(() => {
+          void this.resolvePluginInteraction(requestId, { action: 'cancel' }).catch(() => {});
+        }, 5 * 60_000);
+        this.pluginInteractions.set(requestId, {
+          rpcId: message.id,
+          method: message.method,
+          params,
+          timer,
+        });
+        // Surface the interaction to the renderer.
+        this.emit('plugin-interaction', request);
+        return;
+      }
       this.send({
         id: message.id,
         error: {
           code: -32601,
-          message: appApproval
-            ? 'This plugin action needs confirmation, which Natively does not support yet. Read-only plugin tools remain available.'
-            : 'Agent tools and approvals are not available in Natively chat.',
+          message: 'Agent tools and non-plugin approvals are not available in Natively chat.',
         },
       });
       return;
@@ -219,6 +342,12 @@ export class CodexAppServerService extends EventEmitter {
   private fail(error: Error) {
     for (const waiting of this.pending.values()) { clearTimeout(waiting.timer); waiting.reject(error); }
     this.pending.clear();
+    for (const [requestId, interaction] of this.pluginInteractions) {
+      clearTimeout(interaction.timer);
+      this.emit('plugin-interaction-closed', requestId);
+    }
+    this.pluginInteractions.clear();
+    this.threadApps.clear();
     this.emit('disconnected', error);
   }
   close() {
@@ -253,6 +382,63 @@ export class CodexAppServerService extends EventEmitter {
     } while (cursor);
     this.models = models;
     return models;
+  }
+
+  /**
+   * Send the renderer's (or the auto-approval policy's) decision back over
+   * JSON-RPC. Shapes are per method: requestUserInput answers each question id,
+   * elicitation carries an accept/decline/cancel action with optional content.
+   */
+  private sendInteractionResult(
+    pending: { rpcId: string | number; method: 'item/tool/requestUserInput' | 'mcpServer/elicitation/request'; params: any },
+    response: CodexPluginInteractionResponse,
+  ): void {
+    if (pending.method === 'item/tool/requestUserInput') {
+      const answers: Record<string, { answers: string[] }> = {};
+      if (response.action === 'accept') {
+        for (const question of Array.isArray(pending.params?.questions) ? pending.params.questions : []) {
+          const id = String(question?.id || '');
+          if (!id) continue;
+          const value = response.values?.[id];
+          const values = Array.isArray(value) ? value : value === undefined || value === null ? [] : [value];
+          answers[id] = { answers: values.map(item => String(item)) };
+        }
+      }
+      this.send({ id: pending.rpcId, result: { answers } });
+      return;
+    }
+
+    this.send({
+      id: pending.rpcId,
+      result: {
+        action: response.action,
+        content: response.action === 'accept' ? (response.values || {}) : null,
+        _meta: null,
+      },
+    });
+  }
+
+  async resolvePluginInteraction(
+    requestId: string,
+    response: CodexPluginInteractionResponse,
+  ): Promise<void> {
+    const pending = this.pluginInteractions.get(requestId);
+    if (!pending) throw new Error('This plugin confirmation is no longer active.');
+    this.pluginInteractions.delete(requestId);
+    clearTimeout(pending.timer);
+
+    try {
+      this.sendInteractionResult(pending, response);
+    } finally {
+      this.emit('plugin-interaction-closed', requestId);
+    }
+  }
+
+  private cancelPluginInteractionsForThread(threadId: string) {
+    for (const [requestId, pending] of this.pluginInteractions) {
+      if (String(pending.params?.threadId || '') !== threadId) continue;
+      void this.resolvePluginInteraction(requestId, { action: 'cancel' }).catch(() => {});
+    }
   }
 
   async listApps(configured = 'codex', force = false): Promise<CodexAppInfo[]> {
@@ -454,37 +640,60 @@ export class CodexAppServerService extends EventEmitter {
     this.emit('apps:changed');
   }
 
-  private async resolveAppMention(prompt: string, configured: string): Promise<{
+  private async resolveAppMention(
+    prompt: string,
+    configured: string,
+    selectedApp?: { id: string; name: string },
+  ): Promise<{
     text: string;
     mention?: { type: 'mention'; name: string; path: string };
   }> {
-    const match = prompt.match(/^@([A-Za-z0-9_-]+)(?:\s+([\s\S]*))?$/);
-    if (!match) return { text: prompt };
-    const requestedId = match[1].toLowerCase();
+    const match = selectedApp ? null : prompt.match(/^@([A-Za-z0-9_-]+)(?:\s+([\s\S]*))?$/);
+    if (!selectedApp && !match) return { text: prompt };
+    const requestedId = String(selectedApp?.id || match?.[1] || '').toLowerCase();
     const app = (await this.listApps(configured)).find(candidate => candidate.id.toLowerCase() === requestedId);
-    if (!app) throw new Error(`Plugin "${match[1]}" was not found. Open Settings → Plugins and refresh the catalog.`);
+    if (!app) throw new Error(`Plugin "${selectedApp?.name || match?.[1] || requestedId}" was not found. Open Settings → Plugins and refresh the catalog.`);
     if (!app.callable) throw new Error(`Plugin "${app.name}" is not connected. Open Settings → Plugins to connect it.`);
-    const query = (match[2] || '').trim();
+    const query = selectedApp ? prompt.trim() : (match?.[2] || '').trim();
     return {
       text: `$${app.id}${query ? ` ${query}` : ''}`,
       mention: { type: 'mention', name: app.name, path: `app://${app.id}` },
     };
   }
 
-  async *stream(options: { model: string; prompt: string; instructions?: string; images: string[]; timeoutMs: number; signal?: AbortSignal; effort?: string; serviceTier?: string }, configured = 'codex'): AsyncGenerator<string> {
+  async *stream(options: { model: string; prompt: string; instructions?: string; images: string[]; timeoutMs: number; signal?: AbortSignal; effort?: string; serviceTier?: string; app?: { id: string; name: string } }, configured = 'codex'): AsyncGenerator<string> {
     if (options.signal?.aborted) throw new Error('Codex request aborted.');
     const models = await this.listModels(configured);
     const model = models.find(m => m.id === options.model);
     if (!model) throw new Error(`Model ${options.model} is unavailable in Codex. Choose a model in Settings → AI Providers.`);
     const cwd = path.join(os.tmpdir(), 'natively-codex-chat');
-    const appInput = await this.resolveAppMention(options.prompt, configured);
-    const created = await this.request('thread/start', { model: model.id, cwd, ephemeral: true, sandbox: 'read-only', approvalPolicy: 'never',
+    const appInput = await this.resolveAppMention(options.prompt, configured, options.app);
+    const activeApp = options.app || (appInput.mention
+      ? { id: appInput.mention.path.slice('app://'.length), name: appInput.mention.name }
+      : undefined);
+    if (activeApp) console.log(`[CodexAppServer] Routing turn to connected plugin: ${activeApp.name}`);
+    // Connector activity needs `on-request` so the App Server may PAUSE and ask
+    // Natively instead of refusing the action outright (with `never` a connector
+    // write fails and the model can only report that approvals are disabled).
+    // Enabled when the turn is bound to an app (the user named or picked one) or
+    // when the user turned on auto-approval — in that mode the model is also
+    // allowed to reach a matching connector the user did not name.
+    // Non-app approval requests are still rejected by receive(), so this never
+    // opens shell/file permissions.
+    const connectorTurnsAllowed = Boolean(activeApp) || this.autoApprovePlugins;
+    const approvalPolicy = connectorTurnsAllowed ? 'on-request' : 'never';
+    const approvalsReviewer = connectorTurnsAllowed ? 'user' : undefined;
+    const developerInstructions = this.autoApprovePlugins
+      ? CODEX_DEVELOPER_INSTRUCTIONS_AUTO_APPROVED_APP
+      : CODEX_DEVELOPER_INSTRUCTIONS_EXPLICIT_APP;
+    const created = await this.request('thread/start', { model: model.id, cwd, ephemeral: true, sandbox: 'read-only', approvalPolicy, approvalsReviewer,
       environments: [], selectedCapabilityRoots: [], dynamicTools: [],
       baseInstructions: options.instructions || 'Answer the user directly.',
-      developerInstructions: 'You are the text response provider inside Natively. You may call an enabled app connector only when the user explicitly mentions that app. Do not call shell tools, run commands, read local files, or delegate work.',
+      developerInstructions,
       config: { project_doc_max_bytes: 0, web_search: 'disabled', mcp_servers: {} },
     });
     const threadId = created.thread.id;
+    if (activeApp) this.threadApps.set(threadId, activeApp);
     let turnId: string | undefined;
     const chunks: string[] = [];
     let done = false;
@@ -492,13 +701,15 @@ export class CodexAppServerService extends EventEmitter {
     let wake: (() => void) | undefined;
     let timer: ReturnType<typeof setTimeout>;
     const finish = (error?: Error) => { failure = error; done = true; wake?.(); };
-    const resetTimer = () => { clearTimeout(timer); timer = setTimeout(() => finish(new Error('Codex response timed out.')), options.timeoutMs); };
+    const resetTimer = (delay = options.timeoutMs) => { clearTimeout(timer); timer = setTimeout(() => finish(new Error('Codex response timed out.')), delay); };
     const onAbort = () => finish(new Error('Codex request aborted.'));
     const onDisconnect = (error: Error) => finish(error);
     const onNotification = (message: any) => {
       const p = message.params;
       if (p?.threadId !== threadId) return;
-      resetTimer();
+      const isPluginInteraction = message.method === 'item/tool/requestUserInput'
+        || message.method === 'mcpServer/elicitation/request';
+      resetTimer(isPluginInteraction ? Math.max(options.timeoutMs, 5 * 60_000) : options.timeoutMs);
       if (message.method === 'item/agentMessage/delta') { chunks.push(p.delta); wake?.(); }
       if (message.method === 'turn/completed') {
         if (p.turn.status === 'failed') finish(new Error(p.turn.error?.message || 'Codex turn failed.'));
@@ -517,7 +728,7 @@ export class CodexAppServerService extends EventEmitter {
         ...options.images.map(url => ({ type: 'image', url })),
       ];
       const effort = options.effort && model.efforts.includes(options.effort) ? options.effort : model.defaultEffort;
-      const result = await this.request('turn/start', { threadId, input, effort, environments: [], ...(options.serviceTier && options.serviceTier !== 'default' ? { serviceTier: options.serviceTier === 'fast' ? 'fast' : options.serviceTier } : {}) });
+      const result = await this.request('turn/start', { threadId, input, effort, environments: [], approvalPolicy, approvalsReviewer, ...(options.serviceTier && options.serviceTier !== 'default' ? { serviceTier: options.serviceTier === 'fast' ? 'fast' : options.serviceTier } : {}) });
       turnId = result.turn.id;
       while (true) {
         while (chunks.length) yield chunks.shift()!;
@@ -527,6 +738,8 @@ export class CodexAppServerService extends EventEmitter {
     } finally {
       clearTimeout(timer!); this.off('notification', onNotification); this.off('disconnected', onDisconnect);
       options.signal?.removeEventListener('abort', onAbort);
+      this.cancelPluginInteractionsForThread(threadId);
+      this.threadApps.delete(threadId);
       if ((!done || failure) && turnId) await this.request('turn/interrupt', { threadId, turnId }, 3000).catch(() => {});
       await this.request('thread/unsubscribe', { threadId }, 3000).catch(() => {});
     }

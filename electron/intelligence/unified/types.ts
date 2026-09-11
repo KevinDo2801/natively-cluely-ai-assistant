@@ -102,6 +102,9 @@ export interface IntelligenceRequest {
    *  caller-owned path. Set only by the typed-question call sites; quick
    *  actions and voice/answer-now leave it unset. */
   chatSurface?: boolean;
+  /** Active Codex app selected in the overlay. Kept structured so rolling
+   * conversation context cannot hide or corrupt the connector id. */
+  codexApp?: { id: string; name: string };
   /** Answer-surface language policy (manual_chat only, 2026-10): 'speak'
    *  marks questions the user will ASK/Say in the live conversation (e.g.
    *  Follow-up Questions put to the teacher) — they match the language being
