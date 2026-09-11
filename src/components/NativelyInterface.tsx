@@ -31,8 +31,11 @@ import { categorizeSttError } from '../lib/sttErrorMapper';
 import { splitGistLine, splitGistLineStreaming, collapseBlockGaps } from '../lib/displayMarkup';
 import {
   createDictationLevels,
+  DICTATION_MIN_BAR_COUNT,
+  dictationBarCount,
   dictationBarHeight,
   pushDictationLevel,
+  resizeDictationLevels,
 } from '../lib/dictationWaveform.mjs';
 
 function SkillPicker({
@@ -1500,6 +1503,13 @@ const NativelyInterface: React.FC<NativelyInterfaceProps> = ({
   const [dictationStopIntent, setDictationStopIntent] = useState<null | 'review' | 'send'>(null);
   const dictationActiveRef = useRef(false);
   const dictationOperationRef = useRef(0);
+  // The waveform track is measured, not assumed: the number of bars is derived
+  // from its real width so the waveform spans the whole composer. A fixed 44 bars
+  // covered only ~174px of a ~600px bar and left the rest empty. The ref carries
+  // the measured count into closures (the level-push updater and the reset paths)
+  // without making them depend on a state read.
+  const waveformRef = useRef<HTMLDivElement>(null);
+  const waveformBarCountRef = useRef(DICTATION_MIN_BAR_COUNT);
   // Set when the user ended dictation with the green send arrow. The dictated
   // text has to land in `inputValue` through setState BEFORE handleManualSubmit
   // reads it, so the submit is deferred to an effect instead of being issued
@@ -1519,7 +1529,7 @@ const NativelyInterface: React.FC<NativelyInterfaceProps> = ({
     dictationActiveRef.current = false;
     setDictationStopIntent(null);
     setDictationState('idle');
-    setDictationLevels(createDictationLevels());
+    setDictationLevels(createDictationLevels(waveformBarCountRef.current));
   }, []);
 
   useEffect(() => {
@@ -1544,7 +1554,7 @@ const NativelyInterface: React.FC<NativelyInterfaceProps> = ({
     dictationSendPendingRef.current = false;
     setDictationError('');
     setDictationStopIntent(null);
-    setDictationLevels(createDictationLevels());
+    setDictationLevels(createDictationLevels(waveformBarCountRef.current));
     setDictationState('starting');
     const deviceId = localStorage.getItem('preferredInputDeviceId') || undefined;
     try {
@@ -1601,7 +1611,7 @@ const NativelyInterface: React.FC<NativelyInterfaceProps> = ({
     dictationSendPendingRef.current = false;
     setDictationStopIntent(null);
     setDictationState('idle');
-    setDictationLevels(createDictationLevels());
+    setDictationLevels(createDictationLevels(waveformBarCountRef.current));
     setDictationError('');
     void window.electronAPI.cancelDictation();
   }, []);
@@ -1645,6 +1655,28 @@ const NativelyInterface: React.FC<NativelyInterfaceProps> = ({
     || (dictationState === 'idle' && inputValue.trim().length > 0);
   const sendSlotPrimary = dictationState === 'recording'
     || (dictationState === 'idle' && inputValue.trim().length > 0);
+
+  // Size the waveform to the bar it sits in.
+  // Layout effect, not an effect: the row only exists while `dictationRowVisible`,
+  // and measuring after paint would show one frame of the default 24 bars bunched
+  // in the middle before snapping to the full width.
+  useLayoutEffect(() => {
+    if (!dictationRowVisible) return;
+    const track = waveformRef.current;
+    if (!track) return;
+    const apply = () => {
+      const next = dictationBarCount(track.clientWidth);
+      if (next === waveformBarCountRef.current) return;
+      waveformBarCountRef.current = next;
+      // Keep the history anchored to the right edge across the resize (and
+      // across the shell's 600↔732px width spring, which fires this observer).
+      setDictationLevels((levels) => resizeDictationLevels(levels, next));
+    };
+    apply();
+    const observer = new ResizeObserver(apply);
+    observer.observe(track);
+    return () => observer.disconnect();
+  }, [dictationRowVisible]);
   // Terminal-style chat history: every submitted message is pushed onto this
   // stack, and ↑/↓ walk it (like a shell's history). The cursor is the index
   // into `chatHistoryRef.current` being shown, or -1 when the user is composing
@@ -9806,10 +9838,17 @@ Provide only the answer, nothing else.`;
                       </button>
 
                       {/* The track spans the bar's full inner height (42px row
-                          minus its 1px border) and the bars are sized against
-                          that, so the waveform fills the bar instead of floating
-                          as a hairline in the middle of it. */}
-                      <div className="flex h-full min-w-0 flex-1 items-center justify-center gap-[2px] overflow-hidden" aria-hidden="true">
+                          minus its 1px border) AND its full inner width: the bar
+                          count is measured from this element (see the layout
+                          effect above), and `justify-between` spreads the bars
+                          across whatever sub-pixel slack is left, so the
+                          waveform reaches both ends of the composer instead of
+                          clustering in the middle with empty margins. */}
+                      <div
+                        ref={waveformRef}
+                        className="flex h-full min-w-0 flex-1 items-center justify-between gap-[2px] overflow-hidden"
+                        aria-hidden="true"
+                      >
                         {dictationLevels.map((level, index) => (
                           <span
                             key={index}

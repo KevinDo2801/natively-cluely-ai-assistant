@@ -156,15 +156,51 @@ test('the recording row waits for recording while the icons swap immediately', (
   // Bars come from the shared shaping module (unit-tested) rather than inline
   // arithmetic that silently compressed real speech into a few pixels.
   assert.match(renderer, /height: `\$\{dictationBarHeight\(level\)\}px`/);
-  assert.match(renderer, /import \{[\s\S]{0,120}?dictationBarHeight[\s\S]{0,120}?from '\.\.\/lib\/dictationWaveform\.mjs'/);
+  assert.match(renderer, /import \{[\s\S]{0,160}?dictationBarHeight[\s\S]{0,160}?from '\.\.\/lib\/dictationWaveform\.mjs'/);
   assert.match(renderer, /setDictationLevels\(\(levels\) => pushDictationLevel\(levels, level\)\)/);
-  // The track must span the bar, not sit at a fixed 28px inside a 42px bar —
-  // that left the waveform floating as a hairline with dead space above it.
+  // The track must span the bar: full height AND full width, spreading the
+  // leftover slack rather than centring a short run of bars in the middle.
   assert.match(
     renderer,
-    /flex h-full min-w-0 flex-1 items-center justify-center gap-\[2px\] overflow-hidden/,
-    'the waveform track must fill the bar height',
+    /className="flex h-full min-w-0 flex-1 items-center justify-between gap-\[2px\] overflow-hidden"/,
+    'the waveform track must fill the bar',
   );
+});
+
+// The bar count is MEASURED, not a constant. A fixed 44 bars covered only
+// ~174px of the ~600px track and left the rest empty; the count now comes from
+// the track's real width and is re-derived on every resize (including the
+// shell's 600↔732px width spring, which the ResizeObserver sees).
+test('the waveform bar count is derived from the measured track width', () => {
+  const renderer = read('src/components/NativelyInterface.tsx');
+
+  assert.match(renderer, /ref=\{waveformRef\}/, 'the track must be measurable');
+  assert.match(
+    renderer,
+    /const next = dictationBarCount\(track\.clientWidth\)/,
+    'the count must come from the track width',
+  );
+  assert.match(
+    renderer,
+    /const observer = new ResizeObserver\(apply\);[\s\S]{0,120}?observer\.observe\(track\)/,
+    'the count must be re-derived when the composer resizes',
+  );
+  assert.match(
+    renderer,
+    /setDictationLevels\(\(levels\) => resizeDictationLevels\(levels, next\)\)/,
+    'the level window must follow the measured count',
+  );
+  // Measured in a LAYOUT effect: the row only exists while it is recording, and
+  // an ordinary effect would paint one frame of the default 24 bars bunched in
+  // the middle before snapping to the full width.
+  assert.match(
+    renderer,
+    /useLayoutEffect\(\(\) => \{\s*if \(!dictationRowVisible\) return;\s*const track = waveformRef\.current;/,
+    'the measurement must run as a layout effect',
+  );
+  // Resets must use the measured count too, or a new session would start with
+  // the default 24 bars until the next level event resizes them.
+  assert.match(renderer, /setDictationLevels\(createDictationLevels\(waveformBarCountRef\.current\)\)/);
 });
 
 // The dictate control sits in the composer's bottom row, grouped with the send
