@@ -181,12 +181,26 @@ plus the SQLite → Supabase sync tooling.
   `-- --batch 500`.
   Runs under Electron's Node so the repo's better-sqlite3 (Electron ABI)
   loads; the target auth user is resolved from `auth.admin.listUsers()`.
-- **Diagnostics:** `node scripts/supabase/measure-egress.cjs [db-path]` prints
-  the exact per-table payload of a full reconcile for the current database and
-  the before/after egress projection; `measure-tombstones.cjs` breaks the
-  tombstone ledger down by table and shows the live-meeting write-through cost.
-  Both open the database read-only and are cross-platform (Windows `%APPDATA%`,
-  macOS `~/Library/Application Support`).
+- **Diagnostics:**
+  - `node scripts/supabase/verify-sync-setup.cjs [db-path]` — ONE command that
+    answers "is the fix in place and working?" for both halves: whether 0004/0005/
+    0006 applied to the project (and whether the sequence is really maintained),
+    whether the local database is at v36 with live sequence watermarks and an
+    empty retry ledger, and the REST request count. Exits non-zero on any failed
+    check, so it can gate a release. Read-only.
+  - `node scripts/supabase/measure-egress.cjs [db-path]` prints the exact
+    per-table payload of a full reconcile for the current database and the
+    before/after egress projection; `measure-tombstones.cjs` breaks the tombstone
+    ledger down by table and shows the live-meeting write-through cost.
+  - The authoritative egress **GB** figure is NOT exposed by the Management API
+    (`/usage`, `/usage.api-egress`, `/usage.egress` all 404 — verified); read it
+    in the dashboard under Organization → Usage → Egress. The API-measurable
+    proxy is the REST request count, and it moves MUCH less than the egress does:
+    v34 spent ~70 requests and 5.8 MB per pass, the new engine spends ~40
+    requests and ~0 bytes, so the byte win is ~1000x while the request win is
+    under 2x.
+  - All three open the database read-only and resolve paths per platform
+    (Windows `%APPDATA%`, macOS `~/Library/Application Support`).
 - **Semantics (v3):** every synced row carries `updated_at` on both sides
   (local triggers stamp millisecond-precision ISO-8601 on INSERT/UPDATE —
   `electron/db/migrations.ts` v32→v33). Deletions propagate through
