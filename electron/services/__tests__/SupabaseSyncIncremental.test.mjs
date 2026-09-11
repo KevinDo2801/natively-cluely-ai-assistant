@@ -683,6 +683,13 @@ describe('incremental sync egress', () => {
     assert.ok(empty.length > 0, 'precondition: the seed has an empty table (folders)');
     assert.ok(empty.every((t) => t.incremental === false));
 
+    // The SUMMARY, however, must not be dragged to "full" by those free reads:
+    // the flag exists to say "no real table is being re-scanned", and a schema
+    // with any unused table would otherwise never show it.
+    assert.equal(second.incremental, true,
+      'a pass where no table WITH ROWS was read whole must report incremental');
+    assert.ok(second.fullRescans > 0, 'the free empty-table reads are still counted, just not as a signal');
+
     // Sequence mode: the delta is filtered on sync_seq, NOT on any timestamp, so
     // the result cannot depend on whose clock stamped the rows.
     assert.ok(

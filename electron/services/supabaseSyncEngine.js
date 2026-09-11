@@ -1640,6 +1640,7 @@ async function syncAll({ db, client, userId, direction = 'both', onProgress, dry
       onProgress && onProgress({ table: def.table, phase: 'error', error: result.error });
     }
   }
+  const fullRescans = resultTables.filter((t) => !t.incremental);
   return {
     tables: resultTables,
     totalRows,
@@ -1650,7 +1651,15 @@ async function syncAll({ db, client, userId, direction = 'both', onProgress, dry
     totalTableErrors,
     totalCandidates,
     totalRetrying,
-    incremental: resultTables.every((t) => t.incremental),
+    fullRescans: fullRescans.length,
+    // `incremental` means "no table that HAS ROWS was read whole", not "no table
+    // was read without a filter". A full read of an EMPTY table costs one request
+    // returning an empty array — the same as the delta it replaces — and a table
+    // with no rows has no sequence to learn, so it stays in that state by design.
+    // Counting those would make this flag permanently false for any schema with
+    // an unused table (this one has ten), i.e. it would destroy the signal it
+    // exists to carry.
+    incremental: !fullRescans.some((t) => t.rows > 0),
   };
 }
 

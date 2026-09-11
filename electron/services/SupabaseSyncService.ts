@@ -210,6 +210,8 @@ export class SupabaseSyncService extends EventEmitter {
     private lastPushAt = new Map<string, number>();
     /** Measured local-clock offset vs Supabase in ms; null until probed. */
     private clockSkewMs: number | null = null;
+    /** False until one pass has completed; the first gets an upgrade-sized budget. */
+    private hasCompletedSync = false;
 
     private constructor() {
         super();
@@ -588,16 +590,32 @@ export class SupabaseSyncService extends EventEmitter {
             }
 
             let summary: SyncSummary;
-            const deadline = Date.now() + SYNC_MAX_DURATION_MS;
+            // The first pass after start is also the one that pays for an upgrade:
+            // any table without a watermark yet is read WHOLE, which for this
+            // database is ~5.8 MB and took just over the routine 60s cap — so the
+            // tail tables were skipped and the pass was reported as "N table(s)
+            // errored". That is a false alarm on every upgrade, and it leaves the
+            // skipped tables' watermarks unset for another round. Give the first
+            // pass the same generous-but-still-bounded budget the cutover uses.
+            const budget = this.hasCompletedSync ? SYNC_MAX_DURATION_MS : SYNC_MAX_DURATION_MS * 3;
+            const deadline = Date.now() + budget;
+            // Per-table failures and deadline skips are otherwise invisible: the
+            // summary only carries a count, and an operator reading the log needs
+            // to know WHICH table and WHY.
+            const onProgress = (event: { table: string; phase: string; error?: string }) => {
+                if (event.phase === 'error') {
+                    console.warn(`[SupabaseSyncService] ${event.table}: ${event.error}`);
+                }
+            };
             if (opts.tables) {
                 // Write-through pass: only the dirtied tables (+ FK ancestors).
-                summary = await syncAll({ db, client, userId: session.user.id, tables: opts.tables, deadline });
+                summary = await syncAll({ db, client, userId: session.user.id, tables: opts.tables, deadline, onProgress });
             } else {
                 // One-time cutover: make Supabase the truth, rebuild the local cache.
                 if (dm.getAppState(CUTOVER_APP_STATE_KEY) !== '1') {
                     await this.runCutover(db, client, dm, session.user.id);
                 }
-                summary = await syncAll({ db, client, userId: session.user.id, deadline });
+                summary = await syncAll({ db, client, userId: session.user.id, deadline, onProgress });
             }
 
             if (summary.totalFailed > 0 || summary.totalTableErrors > 0) {
@@ -609,6 +627,7 @@ export class SupabaseSyncService extends EventEmitter {
             // Remember which tables this pass wrote to, so the realtime echo of
             // our own push does not immediately trigger another pass over the
             // same table (Supabase postgres_changes has no writer exclusion).
+            this.hasCompletedSync = true;
             const nowMs = Date.now();
             for (const t of summary.tables) {
                 if (t.pushed > 0 || t.deletedCloud > 0 || t.tombstonesPushed > 0) {
@@ -649,7 +668,11 @@ export class SupabaseSyncService extends EventEmitter {
                     // Outstanding rows whose push failed and are waiting out their
                     // backoff. The watermark is not held back for them any more, so
                     // this is the only place a stuck row is visible.
-                    (summary.totalRetrying ? `, ${summary.totalRetrying} retrying` : '') + ']' +
+                    (summary.totalRetrying ? `, ${summary.totalRetrying} retrying` : '') +
+                    // Only shown when a table WITH ROWS was read whole — empty
+                    // tables are read unfiltered by design (they have no sequence
+                    // to learn) and cost one empty request each.
+                    (summary.incremental ? '' : `, ${summary.fullRescans} full rescan(s)`) + ']' +
                     (opts.tables ? ` (${opts.tables.join(', ')})` : ''),
                 );
             }

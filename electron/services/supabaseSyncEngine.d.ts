@@ -61,7 +61,9 @@ export interface SyncSummary {
     totalCandidates: number;
     /** Outstanding retry-ledger entries across every table. */
     totalRetrying: number;
-    /** True when every table was reconciled incrementally. */
+    /** Tables read without a filter this pass (includes free empty-table reads). */
+    fullRescans: number;
+    /** True when no table THAT HAS ROWS was read whole. */
     incremental: boolean;
 }
 
