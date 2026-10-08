@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useLayoutEffect, useMemo, useRef } from 'react';
-import { MessageSquare, Camera, User, Pin, Keyboard, ChevronRight } from 'lucide-react';
+import { MessageSquare, Camera, User, Pin, Keyboard, ChevronRight, Sparkles } from 'lucide-react';
 import { useShortcuts } from '../hooks/useShortcuts';
 import { useResolvedTheme } from '../hooks/useResolvedTheme';
 import { getModifierSymbol } from '../utils/platformUtils';
@@ -12,6 +12,7 @@ import {
     OVERLAY_OPACITY_DEFAULT,
 } from '../lib/overlayAppearance';
 import { useToggleInit } from './settings/useToggleInit';
+import { loadDictatePreferences, saveDictatePreferences, subscribeToDictatePreferences } from '../lib/dictateUi';
 import nativelyIcon from './icon.png';
 
 /**
@@ -238,20 +239,9 @@ const SettingsPopup = () => {
         });
     }, []);
 
-    const [showTranscript, setShowTranscript] = useState(() => {
-        const stored = localStorage.getItem('natively_interviewer_transcript');
-        return stored !== 'false'; // Default to true if not set
-    });
+    const [dictateTextCleanup, setDictateTextCleanup] = useState(() => loadDictatePreferences().textCleanup);
 
-    useEffect(() => {
-        const handleStorage = () => {
-            const stored = localStorage.getItem('natively_interviewer_transcript');
-            setShowTranscript(stored !== 'false');
-        };
-
-        window.addEventListener('storage', handleStorage);
-        return () => window.removeEventListener('storage', handleStorage);
-    }, []);
+    useEffect(() => subscribeToDictatePreferences((prefs) => setDictateTextCleanup(prefs.textCleanup)), []);
 
     const contentRef = useRef<HTMLDivElement>(null);
 
@@ -417,24 +407,22 @@ const SettingsPopup = () => {
                 </div>
 
 
-                {/* Interviewer Transcript Toggle */}
+                {/* Text cleanup (Dictate) */}
                 <div className={`flex items-center justify-between px-2.5 py-1.5 rounded-md transition-colors duration-200 group cursor-default ${itemHoverClass} ${glassRowClass}`}>
                     <div className="flex items-center gap-2.5">
-                        <MessageSquare
-                            className={`w-3.5 h-3.5 transition-colors ${showTranscript ? 'text-accent-primary' : inactiveIconColorClass}`}
-                            fill={showTranscript ? "currentColor" : "none"}
+                        <Sparkles
+                            className={`w-3.5 h-3.5 transition-colors ${dictateTextCleanup ? 'text-accent-primary' : inactiveIconColorClass}`}
+                            fill={dictateTextCleanup ? "currentColor" : "none"}
                         />
-                        <span className={`text-[12px] font-medium transition-colors ${labelColorClass}`}>Transcript</span>
+                        <span className={`text-[12px] font-medium transition-colors ${labelColorClass}`}>Text cleanup</span>
                     </div>
                     <PopupToggle
-                        checked={showTranscript}
-                        label="Transcript"
+                        checked={dictateTextCleanup}
+                        label="Text cleanup"
                         onChange={() => {
-                            const newState = !showTranscript;
-                            setShowTranscript(newState);
-                            localStorage.setItem('natively_interviewer_transcript', String(newState));
-                            // Dispatch event for same-window listeners
-                            window.dispatchEvent(new Event('storage'));
+                            const next = { ...loadDictatePreferences(), textCleanup: !dictateTextCleanup };
+                            setDictateTextCleanup(!dictateTextCleanup);
+                            saveDictatePreferences(next);
                         }}
                         onClassName="bg-accent-primary shadow-[0_2px_10px_var(--accent-shadow-20)]"
                         offClassName={defaultToggleTrackClass}
