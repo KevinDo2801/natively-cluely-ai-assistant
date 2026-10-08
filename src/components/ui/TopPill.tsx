@@ -1,6 +1,6 @@
 import { ChevronUp, ChevronDown, Mic } from "lucide-react";
-import icon from "../icon.png";
 import type { OverlayAppearance } from "../../lib/overlayAppearance";
+import { VoiceBrandMarkIcon } from "./VoiceBrandMarkIcon";
 
 interface TopPillProps {
     onToggle: () => void;
@@ -42,6 +42,7 @@ export default function TopPill({
                     {/* LOGO BUTTON */}
                     <button
                         onClick={onLogoClick}
+                        aria-label="Open Natively menu"
                         className={`
               w-7 h-7
               rounded-full
@@ -53,12 +54,9 @@ export default function TopPill({
             `}
                         style={appearance.iconStyle}
                     >
-                        <img
-                            src={icon}
-                            alt="Natively"
-                            className="w-[24px] h-[24px] object-contain opacity-95 scale-105 force-black-icon"
-                            draggable="false"
-                            onDragStart={(e) => e.preventDefault()}
+                        <VoiceBrandMarkIcon
+                            size={18}
+                            className="overlay-text-primary"
                         />
                     </button>
                 </div>

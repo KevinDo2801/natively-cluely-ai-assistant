@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useLayoutEffect, useMemo, useRef } from 'react';
-import { MessageSquare, Camera, Zap, User, Pin, Keyboard } from 'lucide-react';
+import { MessageSquare, Camera, User, Pin, Keyboard, ChevronRight } from 'lucide-react';
 import { useShortcuts } from '../hooks/useShortcuts';
 import { useResolvedTheme } from '../hooks/useResolvedTheme';
 import { getModifierSymbol } from '../utils/platformUtils';
@@ -12,6 +12,7 @@ import {
     OVERLAY_OPACITY_DEFAULT,
 } from '../lib/overlayAppearance';
 import { useToggleInit } from './settings/useToggleInit';
+import nativelyIcon from './icon.png';
 
 /**
  * The quick-settings popup's switch (`sm` variant: a 30x13.64 track — the
@@ -74,9 +75,6 @@ const SettingsPopup = () => {
     const isLightTheme = useResolvedTheme() === 'light';
     const [isUndetectable, setIsUndetectable] = useState(false);
     const [stealthTypingEnabled, setStealthTypingEnabled] = useState(true);
-    const [useGroqFastText, setUseGroqFastText] = useState(() => {
-        return localStorage.getItem('natively_groq_fast_text') === 'true';
-    });
     const [profileMode, setProfileMode] = useState(false);
     const [pillAlwaysVisible, setPillAlwaysVisible] = useState(false);
     // Context Intelligence V3 (Phase 7): when the V3 flag is on, the Profile
@@ -92,11 +90,6 @@ const SettingsPopup = () => {
     }, []);
     const [hasProfile, setHasProfile] = useState(false);
 
-    const isFirstRender = React.useRef(true);
-
-    const [hasStoredKey, setHasStoredKey] = useState<Record<string, boolean>>({});
-    const [isCodexReady, setIsCodexReady] = useState(false);
-    const canUseFastResponse = !!(hasStoredKey.groq || hasStoredKey.natively || isCodexReady);
     const [interfaceTheme, setInterfaceTheme] = useState<MeetingInterfaceTheme>(() => {
         return getMeetingInterfaceTheme();
     });
@@ -121,38 +114,8 @@ const SettingsPopup = () => {
         return isUserSet ? clampOverlayOpacity(parsed) : getDefaultOverlayOpacity();
     });
 
-    // Load credentials func
-    const loadCredentials = async () => {
-        try {
-            // @ts-ignore
-            const creds = await window.electronAPI?.getStoredCredentials?.();
-            if (creds) {
-                setHasStoredKey({
-                    gemini: !!creds.hasGeminiKey,
-                    groq: !!creds.hasGroqKey,
-                    openai: !!creds.hasOpenaiKey,
-                    claude: !!creds.hasClaudeKey,
-                    deepseek: !!creds.hasDeepseekKey,
-                    natively: !!creds.hasNativelyKey
-                });
-            }
-
-            const [codexConfig, codexStatus] = await Promise.all([
-                window.electronAPI?.getCodexCliConfig?.(),
-                window.electronAPI?.codexLoginStatus?.(),
-            ]);
-            setIsCodexReady(Boolean(codexConfig?.enabled && codexStatus?.success && codexStatus.signedIn));
-        } catch (e) {
-            console.error("Failed to load settings:", e);
-        }
-    };
-
-    // Load Initial Data and refresh on focus
+    // Load initial data and refresh it whenever this persistent popup is shown.
     useEffect(() => {
-        loadCredentials();
-        const handleFocus = () => loadCredentials();
-        window.addEventListener('focus', handleFocus);
-
         // Load profile status
         const loadProfile = async () => {
             try {
@@ -180,11 +143,10 @@ const SettingsPopup = () => {
         // stale. The focus handler never fires for the overlay-anchored
         // popover (main shows it with showInactive()), so re-pull everything
         // pull-based each time the main process shows the window. Broadcast-
-        // synced state (undetectable, groq mode, opacity, theme) already stays
+        // synced state (undetectable, opacity, theme) already stays
         // live via its own listeners.
         // @ts-ignore
         const unsubscribeShown = window.electronAPI?.onSettingsWindowShown?.(() => {
-            loadCredentials();
             loadProfile();
             try {
                 window.electronAPI?.getPillAlwaysVisible?.().then((state: boolean) => setPillAlwaysVisible(!!state)).catch(() => {});
@@ -205,7 +167,6 @@ const SettingsPopup = () => {
         });
 
         return () => {
-            window.removeEventListener('focus', handleFocus);
             unsubscribeShown?.();
         };
     }, []);
@@ -277,43 +238,6 @@ const SettingsPopup = () => {
         });
     }, []);
 
-    useEffect(() => {
-        // Listen for changes from other windows (2-way sync)
-        if (window.electronAPI?.onGroqFastTextChanged) {
-            const unsubscribe = window.electronAPI.onGroqFastTextChanged((enabled: boolean) => {
-                setUseGroqFastText(enabled);
-                localStorage.setItem('natively_groq_fast_text', String(enabled));
-            });
-            return () => unsubscribe();
-        }
-    }, []);
-
-    useEffect(() => {
-        // Skip initial render to avoid unnecessary IPC calls
-        if (isFirstRender.current) {
-            isFirstRender.current = false;
-            // Ensure backend is synced on mount (even if no change)
-            try {
-                // @ts-ignore
-                window.electronAPI?.invoke('set-groq-fast-text-mode', useGroqFastText);
-            } catch (e) {
-                console.error(e);
-            }
-            return;
-        }
-
-        // Apply Groq Text Mode
-        localStorage.setItem('natively_groq_fast_text', String(useGroqFastText));
-        try {
-            // @ts-ignore - electronAPI not typed in this file yet
-            window.electronAPI?.invoke('set-groq-fast-text-mode', useGroqFastText);
-        } catch (e) {
-            console.error(e);
-        }
-    }, [useGroqFastText]);
-
-    const [actionButtonMode, setActionButtonModeState] = useState<'recap' | 'brainstorm'>('recap');
-
     const [showTranscript, setShowTranscript] = useState(() => {
         const stored = localStorage.getItem('natively_interviewer_transcript');
         return stored !== 'false'; // Default to true if not set
@@ -327,21 +251,6 @@ const SettingsPopup = () => {
 
         window.addEventListener('storage', handleStorage);
         return () => window.removeEventListener('storage', handleStorage);
-    }, []);
-
-    // Load action button mode and subscribe to changes from other windows
-    useEffect(() => {
-        // @ts-ignore
-        window.electronAPI?.getActionButtonMode?.()?.then((mode: 'recap' | 'brainstorm') => {
-            setActionButtonModeState(mode ?? 'recap');
-        }).catch(() => {});
-        // @ts-ignore
-        if (!window.electronAPI?.onActionButtonModeChanged) return;
-        // @ts-ignore
-        const unsubscribe = window.electronAPI.onActionButtonModeChanged((mode: 'recap' | 'brainstorm') => {
-            setActionButtonModeState(mode);
-        });
-        return () => unsubscribe();
     }, []);
 
     const contentRef = useRef<HTMLDivElement>(null);
@@ -426,6 +335,29 @@ const SettingsPopup = () => {
             >
                 <div className="relative z-[1] flex flex-col">
 
+                {/* Open the main Natively launcher. This reuses the same
+                    window-mode action as clicking the TopPill brand mark. */}
+                <button
+                    type="button"
+                    onClick={() => window.electronAPI?.setWindowMode?.('launcher')}
+                    className={`w-full flex items-center justify-between px-2.5 py-2 rounded-md transition-colors duration-200 group interaction-base interaction-press ${itemHoverClass} ${glassRowClass}`}
+                    aria-label="Open Natively"
+                >
+                    <span className="flex items-center gap-2.5">
+                        <img
+                            src={nativelyIcon}
+                            alt=""
+                            aria-hidden="true"
+                            draggable="false"
+                            className="w-4 h-4 object-contain force-black-icon"
+                        />
+                        <span className={`text-[12px] font-medium transition-colors ${labelColorClass}`}>Open Natively</span>
+                    </span>
+                    <ChevronRight className={`w-3.5 h-3.5 transition-transform duration-200 group-hover:translate-x-0.5 ${inactiveIconColorClass}`} />
+                </button>
+
+                <div className={`h-px my-0.5 mx-1.5 ${dividerClass}`} />
+
                 {/* Undetectability */}
                 <div className={`flex items-center justify-between px-2.5 py-1.5 rounded-md transition-colors duration-200 group cursor-default ${itemHoverClass} ${glassRowClass}`}>
                     <div className="flex items-center gap-2.5">
@@ -485,28 +417,6 @@ const SettingsPopup = () => {
                 </div>
 
 
-                {/* Fast Response — enabled with Groq, Natively API, or a signed-in Codex CLI. */}
-                <div className={`flex items-center justify-between px-2.5 py-1.5 rounded-md transition-colors duration-200 group ${!canUseFastResponse ? 'opacity-50 grayscale cursor-not-allowed' : `${itemHoverClass} ${glassRowClass} cursor-default`}`} title={!canUseFastResponse ? "Requires Groq, Natively API, or Codex CLI" : ""}>
-                    <div className="flex items-center gap-2.5">
-                        <Zap
-                            className={`w-4 h-4 transition-colors ${useGroqFastText ? 'text-accent-primary' : inactiveIconColorClass}`}
-                            fill={useGroqFastText ? "currentColor" : "none"}
-                        />
-                        <span className={`text-[12px] font-medium transition-colors ${labelColorClass}`}>Fast Response</span>
-                    </div>
-                    <PopupToggle
-                        checked={useGroqFastText}
-                        label="Fast Response"
-                        disabled={!canUseFastResponse}
-                        onChange={() => {
-                            if (!canUseFastResponse) return;
-                            setUseGroqFastText(!useGroqFastText);
-                        }}
-                        onClassName="bg-accent-primary shadow-[0_2px_10px_var(--accent-shadow-20)]"
-                        offClassName={defaultToggleTrackClass}
-                    />
-                </div>
-
                 {/* Interviewer Transcript Toggle */}
                 <div className={`flex items-center justify-between px-2.5 py-1.5 rounded-md transition-colors duration-200 group cursor-default ${itemHoverClass} ${glassRowClass}`}>
                     <div className="flex items-center gap-2.5">
@@ -525,42 +435,6 @@ const SettingsPopup = () => {
                             localStorage.setItem('natively_interviewer_transcript', String(newState));
                             // Dispatch event for same-window listeners
                             window.dispatchEvent(new Event('storage'));
-                        }}
-                        onClassName="bg-accent-primary shadow-[0_2px_10px_var(--accent-shadow-20)]"
-                        offClassName={defaultToggleTrackClass}
-                    />
-                </div>
-
-                {/* Interview Mode (Brainstorm) Toggle */}
-                <div className={`flex items-center justify-between px-2.5 py-1.5 rounded-md transition-colors duration-200 group cursor-default ${itemHoverClass} ${glassRowClass}`}>
-                    <div className="flex items-center gap-2.5">
-                        <svg
-                            xmlns="http://www.w3.org/2000/svg"
-                            viewBox="0 0 24 24"
-                            fill="none"
-                            stroke="currentColor"
-                            strokeWidth="2"
-                            strokeLinecap="round"
-                            strokeLinejoin="round"
-                            className={`w-3.5 h-3.5 transition-colors ${actionButtonMode === 'brainstorm' ? 'text-accent-primary' : inactiveIconColorClass}`}
-                        >
-                            <line x1="6" y1="3" x2="6" y2="15" />
-                            <circle cx="18" cy="6" r="3" />
-                            <circle cx="6" cy="18" r="3" />
-                            <path d="M18 9a9 9 0 0 1-9 9" />
-                        </svg>
-                        <span className={`text-[12px] font-medium transition-colors ${labelColorClass}`}>Interview Mode</span>
-                    </div>
-                    <PopupToggle
-                        checked={actionButtonMode === 'brainstorm'}
-                        label="Interview Mode"
-                        onChange={async () => {
-                            const newMode: 'recap' | 'brainstorm' = actionButtonMode === 'brainstorm' ? 'recap' : 'brainstorm';
-                            setActionButtonModeState(newMode);
-                            try {
-                                // @ts-ignore
-                                await window.electronAPI?.setActionButtonMode?.(newMode);
-                            } catch (e) { console.error(e); }
                         }}
                         onClassName="bg-accent-primary shadow-[0_2px_10px_var(--accent-shadow-20)]"
                         offClassName={defaultToggleTrackClass}
