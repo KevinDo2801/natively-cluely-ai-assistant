@@ -666,6 +666,39 @@ test('Ask/Hide toggles never hide the pill window (no blink)', () => {
   );
 });
 
+test('standalone pill resizes in place instead of re-centering on the hidden overlay', () => {
+  // Reported: start dictation from the floating pill → on stop the pill jumps
+  // to another spot. Root cause: a dictate phase change swaps the center
+  // segment (Ask/Hide ↔ waveform ↔ "Cleaning"), the pill reports its new width,
+  // and setPillWindowSize re-centered it via positionOverlayAuxWindows — which
+  // derives the pill's position from the HIDDEN overlay's stale bounds. While
+  // standalone the pill must resize where the user placed it (top-left fixed),
+  // not snap back to the overlay's parked origin.
+  const size = extractMethodBody(windowHelper, 'setPillWindowSize');
+  assert.match(
+    size,
+    /if \(this\.pillStandalone\) \{[\s\S]{0,220}pill\.setBounds\(\{ x: o\.x, y: o\.y, width: w, height: h \}\);/,
+    'a standalone pill must resize IN PLACE (same x/y, new w/h)',
+  );
+  // The standalone branch must early-return BEFORE the group-mode re-center.
+  const start = size.indexOf('if (this.pillStandalone)');
+  const returnIdx = size.indexOf('return;', start);
+  assert.ok(
+    start !== -1 && returnIdx !== -1,
+    'standalone branch must exist and end with an early return',
+  );
+  assert.doesNotMatch(
+    size.slice(start, returnIdx),
+    /positionOverlayAuxWindows/,
+    'a standalone resize must not re-center through positionOverlayAuxWindows',
+  );
+  const reCenterIdx = size.indexOf('this.positionOverlayAuxWindows()', returnIdx);
+  assert.ok(
+    reCenterIdx !== -1 && returnIdx < reCenterIdx,
+    'a group-mode resize must still re-center the pill on the shell (after the standalone early-return)',
+  );
+});
+
 test('TopPill renders mic (idle) / stop (recording) and Ask/Hide labels', () => {
   const pill = read('src/components/ui/TopPill.tsx');
   assert.match(
@@ -700,8 +733,8 @@ test('TopPill renders mic (idle) / stop (recording) and Ask/Hide labels', () => 
   );
   assert.match(
     pill,
-    /\{meetingActive \? \(/,
-    'the action button must branch on recording state',
+    /\) : meetingActive \? \(/,
+    'the action button must branch on recording state (after the dictate-cancel X)',
   );
   assert.match(
     pill,

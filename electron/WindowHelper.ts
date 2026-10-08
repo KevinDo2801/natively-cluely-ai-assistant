@@ -2302,6 +2302,25 @@ export class WindowHelper {
     const h = Math.max(1, Math.ceil(height));
     if (w === this.pillSize.width && h === this.pillSize.height) return;
     this.pillSize = { width: w, height: h };
+    // Standalone pill: resize IN PLACE. Re-centering through
+    // positionOverlayAuxWindows would snap it back to the HIDDEN overlay's
+    // stale bounds (the overlay parks off-screen / at its old origin while the
+    // pill floats), so a dictate phase change — waveform / "Cleaning" swap the
+    // center segment's width — would teleport the floating pill across the
+    // screen ("start dictate here, stop, and the TopPill jumps elsewhere").
+    if (this.pillStandalone) {
+      const pill = this.pillWindow;
+      if (pill && !pill.isDestroyed()) {
+        const o = pill.getBounds();
+        this.auxSyncing = true;
+        try {
+          pill.setBounds({ x: o.x, y: o.y, width: w, height: h });
+        } finally {
+          this.auxSyncing = false;
+        }
+      }
+      return;
+    }
     this.positionOverlayAuxWindows();
   }
 
