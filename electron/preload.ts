@@ -1,7 +1,8 @@
-import { contextBridge, ipcRenderer } from 'electron';
+import { contextBridge, ipcRenderer, webUtils } from 'electron';
 import type { SkillUploadPayload } from './services/skills/SkillValidator';
 import { PAGE_CAPTURE_FALLBACK_CHANNEL, PAGE_CAPTURE_STARTED_CHANNEL, type PageCaptureFallbackNotice } from './services/pageCaptureFallback';
 import type { SupabaseSyncStatus } from './services/SupabaseSyncService';
+import type { UploadAudioFileRef, UploadAudioProgress, UploadAudioRequest, UploadAudioResult } from '../src/types/uploadAudio';
 
 /**
  * Metadata the companion extension sends with a captured page (drives the
@@ -476,6 +477,12 @@ interface ElectronAPI {
   debugInjectTranscript: (segments: Array<{ speaker?: string; text: string; timestamp?: number; confidence?: number }>)
     => Promise<{ success: boolean; injected?: number; error?: string }>;
   finalizeMicSTT: () => Promise<void>;
+  uploadAudioSelectFile: () => Promise<{ canceled: true } | ({ canceled: false } & UploadAudioFileRef)>;
+  uploadAudioGetPathForFile: (file: File) => string;
+  uploadAudioRegisterDroppedFile: (filePath: string) => Promise<{ success: true; file: UploadAudioFileRef } | { success: false; code: string; error: string }>;
+  uploadAudioTranscribe: (request: UploadAudioRequest) => Promise<UploadAudioResult>;
+  uploadAudioCancel: (requestId: string) => Promise<{ success: boolean }>;
+  onUploadAudioProgress: (callback: (progress: UploadAudioProgress) => void) => () => void;
   // Folders (v32): folderId === undefined → all meetings (global search);
   // null → root only; string → that folder's meetings.
   getRecentMeetings: (folderId?: string | null) => Promise<
@@ -1839,6 +1846,16 @@ contextBridge.exposeInMainWorld('electronAPI', {
   debugInjectTranscript: (segments: Array<{ speaker?: string; text: string; timestamp?: number; confidence?: number }>) =>
     ipcRenderer.invoke('debug-inject-transcript', segments),
   finalizeMicSTT: () => ipcRenderer.invoke('finalize-mic-stt'),
+  uploadAudioSelectFile: () => ipcRenderer.invoke('upload-audio:select-file'),
+  uploadAudioGetPathForFile: (file: File) => webUtils.getPathForFile(file),
+  uploadAudioRegisterDroppedFile: (filePath: string) => ipcRenderer.invoke('upload-audio:register-dropped-file', filePath),
+  uploadAudioTranscribe: (request: UploadAudioRequest) => ipcRenderer.invoke('upload-audio:transcribe', request),
+  uploadAudioCancel: (requestId: string) => ipcRenderer.invoke('upload-audio:cancel', requestId),
+  onUploadAudioProgress: (callback: (progress: UploadAudioProgress) => void) => {
+    const subscription = (_: unknown, progress: UploadAudioProgress) => callback(progress);
+    ipcRenderer.on('upload-audio:progress', subscription);
+    return () => ipcRenderer.removeListener('upload-audio:progress', subscription);
+  },
   // undefined → all meetings (global search); null → root only; string → folder.
   getRecentMeetings: (folderId?: string | null) => ipcRenderer.invoke('get-recent-meetings', folderId),
   getMeetingDetails: (id: string) => ipcRenderer.invoke('get-meeting-details', id),

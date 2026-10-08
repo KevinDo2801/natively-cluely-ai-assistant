@@ -1,3 +1,5 @@
+import type { UploadAudioFileRef, UploadAudioProgress, UploadAudioRequest, UploadAudioResult } from './uploadAudio'
+
 // Phase 3 — DynamicActionPayload mirrors electron/services/dynamic-actions/DynamicAction.ts.
 // Kept as a structural interface (not a class import) to preserve the strict main↔renderer
 // type boundary — the renderer never imports from electron/* directly.
@@ -344,6 +346,12 @@ export interface ElectronAPI {
   debugInjectTranscript: (segments: Array<{ speaker?: string; text: string; timestamp?: number; confidence?: number }>)
     => Promise<{ success: boolean; injected?: number; error?: string }>
   finalizeMicSTT: () => Promise<void>
+  uploadAudioSelectFile: () => Promise<{ canceled: true } | ({ canceled: false } & UploadAudioFileRef)>
+  uploadAudioGetPathForFile: (file: File) => string
+  uploadAudioRegisterDroppedFile: (filePath: string) => Promise<{ success: true, file: UploadAudioFileRef } | { success: false, code: string, error: string }>
+  uploadAudioTranscribe: (request: UploadAudioRequest) => Promise<UploadAudioResult>
+  uploadAudioCancel: (requestId: string) => Promise<{ success: boolean }>
+  onUploadAudioProgress: (callback: (progress: UploadAudioProgress) => void) => () => void
   // Folders (v32): folderId === undefined → all meetings (global search);
   // null → root only; string → that folder's meetings.
   getRecentMeetings: (folderId?: string | null) => Promise<Array<{ id: string; title: string; date: string; duration: string; summary: string; isLive?: boolean; folderId?: string | null }>>

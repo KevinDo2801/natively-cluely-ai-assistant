@@ -29,6 +29,8 @@ import { SkillsManager } from './services/SkillsManager';
 import { SAFE_DOCUMENT_EXTENSIONS } from './services/SafeDocumentTextExtractor';
 import { DEFAULT_BUILTIN_SKILL_IDS, type SkillUploadPayload } from './services/skills/SkillValidator';
 import { darwinMajorVersion, isMacOS13VenturaOrLater, macOSMajorFromDarwin } from './platform/macosVersion';
+import { UploadAudioService } from './services/UploadAudioService';
+import type { UploadAudioRequest } from '../src/types/uploadAudio';
 
 import { TRIAL_SENTINEL_KEY, DOM_CONTEXT_MAX_CHARS } from './config/constants';
 import { resolveCodingPromptSignals } from './llm/codingPromptSignals';
@@ -225,6 +227,37 @@ export function initializeIpcHandlers(appState: AppState): void {
       if (!win.isDestroyed()) win.webContents.send('credentials-changed');
     });
   };
+
+  const uploadAudioService = new UploadAudioService();
+  safeHandle('upload-audio:select-file', () => uploadAudioService.selectFile());
+  safeHandle('upload-audio:register-dropped-file', (_event, filePath: unknown) => {
+    if (typeof filePath !== 'string' || !filePath.trim()) {
+      return { success: false, code: 'INVALID_FILE', error: 'The dropped file is invalid.' };
+    }
+    try {
+      return { success: true, file: uploadAudioService.registerFile(filePath) };
+    } catch (error) {
+      return {
+        success: false,
+        code: (error as { code?: string })?.code || 'INVALID_FILE',
+        error: error instanceof Error ? error.message : 'The dropped file could not be opened.',
+      };
+    }
+  });
+  safeHandle('upload-audio:transcribe', async (event, request: UploadAudioRequest) => {
+    const result = await uploadAudioService.transcribe(
+      request,
+      appState.getCurrentFolderId?.() ?? null,
+      (progress) => {
+        if (!event.sender.isDestroyed()) event.sender.send('upload-audio:progress', progress);
+      },
+    );
+    if (result.success) appState.broadcast('meetings-updated');
+    return result;
+  });
+  safeHandle('upload-audio:cancel', (_event, requestId: unknown) => ({
+    success: typeof requestId === 'string' && uploadAudioService.cancel(requestId),
+  }));
 
   // System Dictate owns its own hotkey/audio lifecycle. It deliberately does
   // not share renderer state with the composer dictation channels below.

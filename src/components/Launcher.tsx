@@ -1,11 +1,12 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { useT } from '../i18n';
-import { ToggleLeft, ToggleRight, Search, Calendar, ArrowRight, ArrowLeft, MoreHorizontal, Globe, Clock, ChevronRight, Settings, LayoutGrid, RefreshCw, Eye, EyeOff, Ghost, Plus, Mail, Link as LinkIcon, ChevronDown, Trash2, Bell, Download, DownloadCloud, CheckCircle, AlertCircle, User, UserSearch, Sparkles, Folder, FolderPlus, FolderOpen, Check, Pencil, X, Mic, Volume2, AudioLines } from 'lucide-react';
+import { ToggleLeft, ToggleRight, Search, Calendar, ArrowRight, ArrowLeft, MoreHorizontal, Globe, Clock, ChevronRight, Settings, LayoutGrid, RefreshCw, Eye, EyeOff, Ghost, Plus, Mail, Link as LinkIcon, ChevronDown, Trash2, Bell, Download, DownloadCloud, CheckCircle, AlertCircle, User, UserSearch, Sparkles, Folder, FolderPlus, FolderOpen, Check, Pencil, X, Mic, Volume2, AudioLines, Upload } from 'lucide-react';
 import { generateMeetingPDF } from '../utils/pdfGenerator';
 import icon from "./icon.png";
 import LinkCalendarPrompt from './ui/LinkCalendarPrompt';
 import UpcomingCalendarCard, { type CalendarMeeting } from './ui/UpcomingCalendarCard';
 import CalendarEventDetail from './ui/CalendarEventDetail';
+import UploadAudioPanel from './ui/UploadAudioPanel';
 import { useToggleInit } from './settings/useToggleInit';
 import MeetingDetails from './MeetingDetails';
 import TopSearchPill from './TopSearchPill';
@@ -118,6 +119,7 @@ const Launcher: React.FC<LauncherProps> = ({ onStartMeeting, onOpenSettings, onO
     const [isMeetingActive, setIsMeetingActive] = useState(false);
     const [selectedMeeting, setSelectedMeeting] = useState<Meeting | null>(null);
     const [selectedCalendarEvent, setSelectedCalendarEvent] = useState<CalendarMeeting | null>(null);
+    const [isUploadAudioOpen, setIsUploadAudioOpen] = useState(false);
     // Tab to open MeetingDetails with. Set by handleOpenMeeting so the
     // launcher can auto-open a meeting's Transcript tab (meeting start/stop).
     const [detailsInitialTab, setDetailsInitialTab] = useState<'summary' | 'transcript' | 'usage'>('summary');
@@ -690,7 +692,7 @@ const Launcher: React.FC<LauncherProps> = ({ onStartMeeting, onOpenSettings, onO
     // Notify parent if we are on the main launcher list view; also feed the
     // orchestrator's homepage-mounted clock.
     useEffect(() => {
-        const isMain = !selectedMeeting && !selectedCalendarEvent && !isGlobalChatOpen;
+        const isMain = !selectedMeeting && !selectedCalendarEvent && !isUploadAudioOpen && !isGlobalChatOpen;
         if (onPageChange) onPageChange(isMain);
         if (isMain) {
             emitOrchestratorEvent({ type: 'launcher:mounted' });
@@ -699,7 +701,7 @@ const Launcher: React.FC<LauncherProps> = ({ onStartMeeting, onOpenSettings, onO
         }
         // Cleanup on unmount: ensure unmount is fired
         return () => emitOrchestratorEvent({ type: 'launcher:unmounted' });
-    }, [selectedMeeting, selectedCalendarEvent, isGlobalChatOpen, onPageChange]);
+    }, [selectedMeeting, selectedCalendarEvent, isUploadAudioOpen, isGlobalChatOpen, onPageChange]);
 
     const handleOpenMeeting = async (meeting: Meeting, tab: 'summary' | 'transcript' | 'usage' = 'summary') => {
         setForwardMeeting(null); // Clear forward history on new navigation
@@ -761,6 +763,10 @@ const Launcher: React.FC<LauncherProps> = ({ onStartMeeting, onOpenSettings, onO
 
     const handleCalendarEventBack = () => {
         setSelectedCalendarEvent(null);
+    };
+
+    const handleUploadAudioBack = () => {
+        setIsUploadAudioOpen(false);
     };
 
     const handleForward = () => {
@@ -971,11 +977,11 @@ const Launcher: React.FC<LauncherProps> = ({ onStartMeeting, onOpenSettings, onO
                     {/* Back Button — closes meeting details, or (folders v32)
                         steps up from an open folder back to the root view */}
                     <button
-                        onClick={selectedMeeting ? handleBack : (selectedCalendarEvent ? handleCalendarEventBack : (currentFolderId ? handleGoToRoot : undefined))}
-                        disabled={!selectedMeeting && !selectedCalendarEvent && !currentFolderId}
+                        onClick={selectedMeeting ? handleBack : (selectedCalendarEvent ? handleCalendarEventBack : (isUploadAudioOpen ? handleUploadAudioBack : (currentFolderId ? handleGoToRoot : undefined)))}
+                        disabled={!selectedMeeting && !selectedCalendarEvent && !isUploadAudioOpen && !currentFolderId}
                         className={`
                             transition-all duration-300 p-1 flex items-center justify-center mt-1 ml-2
-                            ${selectedMeeting || selectedCalendarEvent || currentFolderId
+                            ${selectedMeeting || selectedCalendarEvent || isUploadAudioOpen || currentFolderId
                                 ? `text-text-secondary hover:text-text-primary ${isLight ? 'hover:drop-shadow-[0_0_6px_rgba(0,0,0,0.25)]' : 'hover:drop-shadow-[0_0_8px_rgba(255,255,255,0.5)]'}`
                                 : 'text-text-tertiary opacity-50 cursor-default'}
                         `}
@@ -1307,6 +1313,22 @@ const Launcher: React.FC<LauncherProps> = ({ onStartMeeting, onOpenSettings, onO
                                 onBack={handleCalendarEventBack}
                             />
                         </motion.div>
+                    ) : isUploadAudioOpen ? (
+                        <motion.div
+                            key="upload-audio"
+                            className="flex-1 overflow-hidden"
+                            initial={{ opacity: 0 }}
+                            animate={{ opacity: 1 }}
+                            exit={{ opacity: 0 }}
+                            transition={{ duration: 0.15 }}
+                        >
+                            <UploadAudioPanel
+                                onOpenMeeting={(meetingId) => {
+                                    setIsUploadAudioOpen(false);
+                                    void handleOpenMeeting({ id: meetingId } as Meeting, 'transcript');
+                                }}
+                            />
+                        </motion.div>
                     ) : (
                         <motion.div
                             key="launcher"
@@ -1418,6 +1440,24 @@ const Launcher: React.FC<LauncherProps> = ({ onStartMeeting, onOpenSettings, onO
                                                 )}
                                             </AnimatePresence>
                                         </div>
+
+                                        <button
+                                            type="button"
+                                            aria-label={t('Upload Audio')}
+                                            title={t('Upload Audio')}
+                                            data-testid="open-upload-audio"
+                                            onClick={() => {
+                                                setIsAudioSourceOpen(false);
+                                                setIsUploadAudioOpen(true);
+                                            }}
+                                            className={`mr-2 h-9 w-9 shrink-0 rounded-full border flex items-center justify-center text-text-secondary backdrop-blur-xl transition-all duration-200 hover:text-accent-primary active:scale-[0.96] ${
+                                                isLight
+                                                    ? 'bg-white/72 border-black/10 shadow-[0_4px_18px_rgba(15,23,42,0.10)] hover:bg-white/90'
+                                                    : 'bg-white/[0.07] border-white/10 shadow-[0_4px_18px_rgba(0,0,0,0.24)] hover:bg-white/[0.11]'
+                                            }`}
+                                        >
+                                            <Upload size={16} strokeWidth={2} />
+                                        </button>
 
                                         {/* Persisted, data-driven recording source selector. The selected
                                             value is also passed into Start so this click cannot race the
