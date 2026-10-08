@@ -571,7 +571,7 @@ test('Ask opens the overlay at the pill, not the top-middle of the screen', () =
   );
   assert.match(
     show,
-    /if \(pillWasStandalone\) this\.positionOverlayAtPill\(\);/,
+    /if \(pillWasStandalone\) \{[\s\S]{0,600}this\.positionOverlayAtPill\(\);/,
     'Ask must reposition the overlay onto the pill when it was floating',
   );
   const place = extractMethodBody(windowHelper, 'positionOverlayAtPill');
@@ -696,6 +696,37 @@ test('standalone pill resizes in place instead of re-centering on the hidden ove
   assert.ok(
     reCenterIdx !== -1 && returnIdx < reCenterIdx,
     'a group-mode resize must still re-center the pill on the shell (after the standalone early-return)',
+  );
+});
+
+test('Ask keeps the floating pill where the user parked it (no jump)', () => {
+  // Reported: clicking Ask moved the floating pill. Root cause: showOverlay
+  // placed + clamped the overlay under the pill, then applyOverlayAuxVisibility
+  // re-centered the pill on those CLAMPED bounds — dragging a pill parked near
+  // a screen edge toward the middle. During the Ask transition the pill must
+  // stay parked; only the overlay (and toggle) may move.
+  const show = extractMethodBody(windowHelper, 'showOverlay');
+  const captureIdx = show.indexOf('parkedPill.getBounds()');
+  const reWeldIdx = show.indexOf('this.setPillStandalone(false, true);');
+  assert.ok(
+    captureIdx !== -1 && reWeldIdx !== -1 && captureIdx < reWeldIdx,
+    'Ask must capture the parked origin BEFORE re-welding (macOS weld displaces the child)',
+  );
+  assert.match(
+    show,
+    /if \(pillWasStandalone\) \{[\s\S]{0,600}this\.pinnedPillOrigin = pinnedOrigin;[\s\S]{0,160}this\.positionOverlayAtPill\(\);/,
+    'Ask must pin the parked origin before placing the overlay under it',
+  );
+  assert.match(
+    show,
+    /\} finally \{\s*\n\s*this\.pinnedPillOrigin = null;/,
+    'the pin must always be released, even on an early throw (finally)',
+  );
+  const place = extractMethodBody(windowHelper, 'positionOverlayAuxWindows');
+  assert.match(
+    place,
+    /if \(this\.pinnedPillOrigin\) \{[\s\S]{0,200}x: this\.pinnedPillOrigin\.x,[\s\S]{0,120}y: this\.pinnedPillOrigin\.y,/,
+    'a pinned pill must re-assert the CAPTURED parked origin, never re-center on the overlay',
   );
 });
 

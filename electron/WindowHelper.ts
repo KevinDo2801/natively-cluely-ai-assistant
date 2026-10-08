@@ -179,6 +179,16 @@ export class WindowHelper {
   // True while the pill floats without the overlay (launcher visible, no
   // meeting). Drives drag anchoring and re-welding on the next overlay show.
   private pillStandalone = false;
+  // Parked pill origin captured the instant an Ask click brings the overlay up
+  // from a floating pill. positionOverlayAuxWindows then re-asserts THIS origin
+  // instead of re-centering the pill on the overlay's (possibly clamped) bounds
+  // — otherwise a pill parked near a screen edge is dragged toward the center
+  // when the overlay can't sit directly beneath it. We capture the origin
+  // BEFORE re-welding (macOS) and BEFORE positionOverlayAtPill moves the
+  // overlay: AppKit then displaces the child by the parent's delta, so reading
+  // getBounds() later would return the weld-displaced position, not the parked
+  // one. Null when no Ask transition is in flight.
+  private pinnedPillOrigin: { x: number; y: number } | null = null;
   // The panel's LIVE right edge, in px from the overlay window's left edge —
   // streamed by the renderer as the width spring runs so the toggle window
   // rides the panel's top-right corner frame-by-frame (the pre-aux-window
@@ -1765,6 +1775,28 @@ export class WindowHelper {
     const pill = this.pillWindow;
     if (pill && !pill.isDestroyed()) {
       const { width: pw, height: ph } = this.pillSize;
+      // Ask transition (overlay just summoned from a floating pill): the
+      // overlay was already placed under the pill and clamped, so re-centering
+      // the pill on the overlay here would drag a pill the user had parked
+      // near a screen edge toward the middle. Re-assert the CAPTURED parked
+      // origin instead (never the weld-displaced getBounds(), which on macOS
+      // has already moved with the parent) and resize in place — the dictate
+      // center-segment width can change at any moment.
+      if (this.pinnedPillOrigin) {
+        this.auxSyncing = true;
+        try {
+          pill.setBounds({
+            x: this.pinnedPillOrigin.x,
+            y: this.pinnedPillOrigin.y,
+            width: pw,
+            height: ph,
+          });
+        } finally {
+          this.auxSyncing = false;
+        }
+        this.positionToggleWindow();
+        return;
+      }
       // Clamp into the work area: the old single-window layout could never
       // lose the pill (it lived inside the OS-constrained window), but as a
       // separate window above the shell it would slide under the menu bar
@@ -2363,44 +2395,70 @@ export class WindowHelper {
     // instead of at the overlay's previous/default bounds ("Ask jumps to the
     // middle of the screen"). Capture BEFORE leaving standalone mode.
     const pillWasStandalone = this.pillStandalone;
+    // Capture the pill's parked origin BEFORE re-welding and BEFORE the overlay
+    // moves. On macOS, setPillStandalone(false) re-welds the pill as an AppKit
+    // child of the shell and positionOverlayAtPill then moves the shell — the
+    // welded pill follows by the parent's delta, so its getBounds() no longer
+    // reflects where the user parked it. Pinning this pre-move origin is what
+    // lets positionOverlayAuxWindows put it back exactly, on both platforms.
+    const parkedPill = this.pillWindow;
+    const pinnedOrigin =
+      pillWasStandalone && parkedPill && !parkedPill.isDestroyed()
+        ? (() => {
+            const b = parkedPill.getBounds();
+            return { x: b.x, y: b.y };
+          })()
+        : null;
     // Leave standalone-pill mode: the shell is coming up, so the pill joins
     // the group (re-welded on macOS) instead of floating detached.
     // keepVisible: the overlay becomes visible in this same synchronous block,
     // so hiding the pill here and re-showing it below is the visible Ask/Hide
     // blink — applyOverlayAuxVisibility(true) repositions it instead.
     this.setPillStandalone(false, true);
-    if (pillWasStandalone) this.positionOverlayAtPill();
+    try {
+      if (pillWasStandalone) {
+        // Pin the pill where the user parked it: positionOverlayAtPill places
+        // (and clamps) the overlay under the pill, and the follow-up
+        // applyOverlayAuxVisibility(true) → positionOverlayAuxWindows must NOT
+        // re-center the pill on those clamped bounds (that is the "click Ask
+        // and the pill jumps" bug). Cleared in the finally below.
+        this.pinnedPillOrigin = pinnedOrigin;
+        this.positionOverlayAtPill();
+      }
 
-    // Restore opacity in case it was zeroed by hideMainWindow() before a screenshot.
-    this.overlayWindow.setOpacity(1);
-    this.pillWindow?.setOpacity(1);
-    this.toggleWindow?.setOpacity(1);
+      // Restore opacity in case it was zeroed by hideMainWindow() before a screenshot.
+      this.overlayWindow.setOpacity(1);
+      this.pillWindow?.setOpacity(1);
+      this.toggleWindow?.setOpacity(1);
 
-    // Re-assert z-order on Windows before showing — same DWM demotion risk as
-    // switchToOverlay(). Must come before show()/showInactive() so the window
-    // lands at the correct level on first paint (issue #136). Adapter no-ops
-    // on darwin.
-    this.adapter.reassertAlwaysOnTop(this.overlayWindow);
+      // Re-assert z-order on Windows before showing — same DWM demotion risk as
+      // switchToOverlay(). Must come before show()/showInactive() so the window
+      // lands at the correct level on first paint (issue #136). Adapter no-ops
+      // on darwin.
+      this.adapter.reassertAlwaysOnTop(this.overlayWindow);
 
-    if (inactive || this.appState.getOverlayMousePassthrough()) {
-      // Inactive reveal (global-shortcut delivery) and passthrough/stealth
-      // mode share one path: appear on screen WITHOUT stealing OS focus. The
-      // underlying app (Zoom, browser, etc.) must keep focus — the user can
-      // click the overlay if they want to interact with the result.
-      this.overlayWindow.showInactive();
-    } else {
-      // Normal interactive mode: show and focus so the user can click/type.
-      this.overlayWindow.showInactive();
-      // Bring to front without a full app-activate (avoids dock bounce on macOS).
-      // setAlwaysOnTop is already set at creation; a focus() call alone is safe.
-      this.overlayWindow.focus();
+      if (inactive || this.appState.getOverlayMousePassthrough()) {
+        // Inactive reveal (global-shortcut delivery) and passthrough/stealth
+        // mode share one path: appear on screen WITHOUT stealing OS focus. The
+        // underlying app (Zoom, browser, etc.) must keep focus — the user can
+        // click the overlay if they want to interact with the result.
+        this.overlayWindow.showInactive();
+      } else {
+        // Normal interactive mode: show and focus so the user can click/type.
+        this.overlayWindow.showInactive();
+        // Bring to front without a full app-activate (avoids dock bounce on macOS).
+        // setAlwaysOnTop is already set at creation; a focus() call alone is safe.
+        this.overlayWindow.focus();
+      }
+      // Explicit, same-block aux show — see switchToOverlay.
+      this.applyOverlayAuxVisibility(true);
+      this.reassertOverlayTaskbarHidden();
+      // Refresh the aux windows' overlay/meeting state (Ask/Hide label,
+      // mic/stop icon).
+      this.pushPillState();
+    } finally {
+      this.pinnedPillOrigin = null;
     }
-    // Explicit, same-block aux show — see switchToOverlay.
-    this.applyOverlayAuxVisibility(true);
-    this.reassertOverlayTaskbarHidden();
-    // Refresh the aux windows' overlay/meeting state (Ask/Hide label,
-    // mic/stop icon).
-    this.pushPillState();
   }
 
   // Hide overlay directly without switching to launcher.
