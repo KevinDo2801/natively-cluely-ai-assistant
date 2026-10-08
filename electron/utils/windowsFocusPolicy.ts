@@ -99,6 +99,33 @@ export function attachNoActivate(
   return true;
 }
 
+/**
+ * Put a window under the no-activate policy UNCONDITIONALLY on win32 —
+ * regardless of stealth-hook availability. For windows with NO text input (the
+ * TopPill and the resize toggle), which never need DOM focus to type: a
+ * focusable pill would activate Natively on click and steal the foreground
+ * app's focus, which breaks click-to-dictate's paste target (the target window
+ * is captured from the foreground at begin() time). Buttons, hover and
+ * pointer-capture drags all still work without activation.
+ */
+export function attachNoActivateAlways(
+  win: NoActivateWindowLike | null | undefined,
+  platform: NodeJS.Platform = process.platform,
+): boolean {
+  if (!isClickActivatingPlatform(platform)) return false;
+  if (!win || win.isDestroyed()) return false;
+  managed.add(win);
+  win.setFocusable(false);
+  // Defensive re-assert: unlike the gated variant, this window must NEVER
+  // become focusable — it has no input that could ever need real DOM focus.
+  const revert = () => {
+    if (!win.isDestroyed()) win.setFocusable(false);
+  };
+  win.on('blur', revert);
+  win.on('hide', revert);
+  return true;
+}
+
 /** True if attachNoActivate() was applied to this window. */
 export function isNoActivateManaged(win: object | null | undefined): boolean {
   return !!win && managed.has(win);

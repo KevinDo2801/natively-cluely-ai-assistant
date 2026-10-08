@@ -28,6 +28,7 @@ const repoRoot = path.resolve(__dirname, '../../..');
 const {
   isClickActivatingPlatform,
   attachNoActivate,
+  attachNoActivateAlways,
   isNoActivateManaged,
   setStealthHookAvailabilityProvider,
 } = require(path.join(repoRoot, 'dist-electron/electron/utils/windowsFocusPolicy.js'));
@@ -108,6 +109,32 @@ test('win32: hook available → policy applies (the normal path)', () => {
   });
 });
 
+test('win32: attachNoActivateAlways applies even WITHOUT a stealth hook (input-less windows)', () => {
+  withHookAvailable(false, () => {
+    const win = fakeWindow();
+    // Unlike attachNoActivate, the always-variant is NOT gated on hook
+    // availability: the pill/toggle have no text input, so they must never
+    // activate Natively on click regardless of the stealth hook.
+    assert.equal(attachNoActivateAlways(win, 'win32'), true);
+    assert.deepEqual(win.calls, [['setFocusable', false]]);
+    assert.equal(isNoActivateManaged(win), true);
+
+    // blur/hide must re-assert false even while the hook stays unavailable.
+    for (const event of ['blur', 'hide']) {
+      win.calls.length = 0;
+      win.emit(event);
+      assert.deepEqual(win.calls, [['setFocusable', false]], `'${event}' must re-assert no-activate`);
+    }
+  });
+});
+
+test('darwin: attachNoActivateAlways is a no-op (mac uses non-activating NSPanels)', () => {
+  const win = fakeWindow();
+  assert.equal(attachNoActivateAlways(win, 'darwin'), false);
+  assert.deepEqual(win.calls, [], 'must not touch focusable on macOS');
+  assert.equal(isNoActivateManaged(win), false);
+});
+
 test('win32: the window is NEVER focused — the policy is permanent, not a typing grant', () => {
   // Regression guard for the earlier "focus while typing" design that caused
   // the exact blur the user reported. The module must expose no focus path.
@@ -165,12 +192,23 @@ const preloadSource = read('electron/preload.ts');
 const ipcHandlersSource = read('electron/ipcHandlers.ts');
 
 test('overlay, pill and toggle windows are placed under the no-activate policy at creation', () => {
-  for (const win of ['this.overlayWindow', 'this.pillWindow', 'this.toggleWindow']) {
+  // The overlay body keeps the hook-gated attachNoActivate() (it has a text
+  // input that may need real DOM focus when the stealth hook is unavailable).
+  assert.match(
+    windowHelperSource,
+    /attachNoActivate\(this\.overlayWindow\)/,
+    'BUG: this.overlayWindow must call attachNoActivate() right after construction — without it, every ' +
+      'click on that window activates Natively on Windows and steals foreground focus.',
+  );
+  // The pill and toggle have NO text input, so they are no-activate
+  // UNCONDITIONALLY — a focusable pill would steal focus on click and break
+  // click-to-dictate's paste target even when the stealth hook is unavailable.
+  for (const win of ['this.pillWindow', 'this.toggleWindow']) {
     assert.match(
       windowHelperSource,
-      new RegExp(`attachNoActivate\\(${win.replace(/[.$]/g, '\\$&')}\\)`),
-      `BUG: ${win} must call attachNoActivate() right after construction — without it, every ` +
-        'click on that window activates Natively on Windows and steals foreground focus.',
+      new RegExp(`attachNoActivateAlways\\(${win.replace(/[.$]/g, '\\$&')}\\)`),
+      `BUG: ${win} must call attachNoActivateAlways() right after construction — it has no input, ` +
+        'so it must never activate Natively on click (a focusable pill steals focus and breaks dictation paste).',
     );
   }
 });

@@ -18,7 +18,7 @@ import {
   easeLauncherResize,
   interpolateBounds,
 } from './utils/launcherResizeAnimation';
-import { attachNoActivate, isNoActivateManaged } from './utils/windowsFocusPolicy';
+import { attachNoActivate, attachNoActivateAlways, isNoActivateManaged } from './utils/windowsFocusPolicy';
 import { createWindowAdapter } from './platform/windowAdapter';
 import type { LauncherDisguise, TimerSlot } from './platform/windowAdapter';
 
@@ -1568,12 +1568,15 @@ export class WindowHelper {
 
     this.pillWindow = new BrowserWindow(auxSettings(true));
     this.toggleWindow = new BrowserWindow(auxSettings(false));
-    // Same Windows no-activate treatment as the overlay body: the pill's
-    // buttons (end meeting, expand, width toggle) must not steal foreground
-    // focus from the meeting app on click. Mac parity comes from
-    // type:'panel' + applyStealthToWindow below. No-op on macOS/Linux.
-    attachNoActivate(this.pillWindow);
-    attachNoActivate(this.toggleWindow);
+    // The pill and toggle are no-activate UNCONDITIONALLY on Windows: they have
+    // no text input, so they never need DOM focus, and a focusable pill would
+    // activate Natively on click — stealing the foreground app's focus, which
+    // breaks click-to-dictate's paste target. (The overlay body below keeps the
+    // hook-gated attachNoActivate because its chat input may need focus when the
+    // stealth hook is unavailable.) Mac parity comes from type:'panel' +
+    // applyStealthToWindow. No-op on macOS/Linux.
+    attachNoActivateAlways(this.pillWindow);
+    attachNoActivateAlways(this.toggleWindow);
 
     // Weld the group via real AppKit child windows (macOS only) — see the
     // overlayGroupWelded field comment for the measured semantics. Applied
