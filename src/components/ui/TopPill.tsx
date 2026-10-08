@@ -8,7 +8,7 @@ import {
 } from "../../lib/dictateUi";
 import { VoiceBrandMarkIcon } from "./VoiceBrandMarkIcon";
 
-const WAVEFORM_BARS = [8, 14, 20, 11, 17, 23, 13, 19, 9];
+const WAVEFORM_BARS = [5, 9, 12, 7, 10, 14, 8, 11, 6];
 
 // Dictation cue chime — a two-note sine "up" (start) / "down" (stop) interval,
 // mirroring OpenWhispr's src/utils/dictationCues.js.
@@ -25,7 +25,7 @@ const CUE_MIN_GAIN = 0.0001;
 function DictateWaveform() {
     return (
         <div
-            className="flex h-7 w-[76px] items-center justify-center gap-[3px]"
+            className="dictate-center-enter flex h-4 w-[52px] items-center justify-center gap-[3px]"
             role="img"
             aria-label="Recording dictation"
         >
@@ -121,7 +121,7 @@ export default function TopPill({
                         idle, stop when recording). */}
                     <button
                         onClick={() => void window.electronAPI?.toggleSystemDictate?.().catch(() => {})}
-                        title={dictatePhase === 'recording' ? 'Stop dictation' : dictatePhase === 'cleaning' ? 'Cleaning…' : 'Start dictation'}
+                        title={dictatePhase === 'recording' ? 'Stop dictation' : dictatePhase === 'cleaning' ? 'Cleaning' : 'Start dictation'}
                         aria-label={dictatePhase === 'recording' ? 'Stop dictation' : dictatePhase === 'cleaning' ? 'Cleaning dictation' : 'Start dictation'}
                         className={`
               w-7 h-7
@@ -136,7 +136,7 @@ export default function TopPill({
                     >
                         <VoiceBrandMarkIcon
                             size={18}
-                            className="overlay-text-primary"
+                            className={dictatePhase === 'cleaning' ? "overlay-text-primary animate-pulse" : "overlay-text-primary"}
                         />
                     </button>
                 </div>
@@ -187,12 +187,12 @@ export default function TopPill({
                     {dictatePhase === 'recording' ? (
                         <DictateWaveform />
                     ) : dictatePhase === 'cleaning' ? (
-                        <span className="flex h-7 min-w-[76px] items-center justify-center gap-2 px-1 text-[11px] font-semibold tracking-wide">
-                            <LoaderCircle className="h-3.5 w-3.5 animate-spin" />
-                            Cleaning…
+                        <span className="dictate-center-enter flex h-4 min-w-[52px] items-center justify-center gap-1.5 px-1 text-[11px] font-semibold tracking-wide">
+                            <LoaderCircle className="h-3 w-3 animate-spin" />
+                            Cleaning
                         </span>
                     ) : (
-                        <>
+                        <span className="dictate-center-enter flex items-center gap-1">
                             <span
                                 className={`transition-opacity duration-200 ${
                                     overlayVisible
@@ -207,7 +207,7 @@ export default function TopPill({
                                 )}
                             </span>
                             <span
-                                className={`tracking-wide ${
+                                className={`tracking-wide min-w-[30px] text-center ${
                                     overlayVisible
                                         ? "opacity-80 group-hover:opacity-100"
                                         : "opacity-100"
@@ -215,7 +215,7 @@ export default function TopPill({
                             >
                                 {overlayVisible ? "Hide" : "Ask"}
                             </span>
-                        </>
+                        </span>
                     )}
                 </button>
 
