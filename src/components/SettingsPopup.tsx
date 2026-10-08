@@ -325,8 +325,7 @@ const SettingsPopup = () => {
             >
                 <div className="relative z-[1] flex flex-col">
 
-                {/* Open the main Natively launcher. This reuses the same
-                    window-mode action as clicking the TopPill brand mark. */}
+                {/* Open the main Natively launcher. */}
                 <button
                     type="button"
                     onClick={() => window.electronAPI?.setWindowMode?.('launcher')}

@@ -36,7 +36,6 @@ interface TopPillProps {
     onToggle: () => void;
     onQuit: () => void;
     appearance: OverlayAppearance;
-    onLogoClick?: () => void;
     /** Whether a meeting (recording) is currently active. Drives the action
      *  button: mic (start) while idle, square/stop while recording. */
     meetingActive: boolean;
@@ -49,7 +48,6 @@ export default function TopPill({
     onToggle,
     onQuit,
     appearance,
-    onLogoClick,
     meetingActive,
     overlayVisible,
 }: TopPillProps) {
@@ -98,10 +96,12 @@ export default function TopPill({
                 style={appearance.pillStyle}
             >
                 <div className="draggable-area">
-                    {/* LOGO BUTTON */}
+                    {/* LOGO BUTTON — toggles system-wide dictation (start when
+                        idle, stop when recording). */}
                     <button
-                        onClick={onLogoClick}
-                        aria-label="Open Natively menu"
+                        onClick={() => void window.electronAPI?.toggleSystemDictate?.().catch(() => {})}
+                        title={dictatePhase === 'recording' ? 'Stop dictation' : dictatePhase === 'cleaning' ? 'Cleaning…' : 'Start dictation'}
+                        aria-label={dictatePhase === 'recording' ? 'Stop dictation' : dictatePhase === 'cleaning' ? 'Cleaning dictation' : 'Start dictation'}
                         className={`
               w-7 h-7
               rounded-full

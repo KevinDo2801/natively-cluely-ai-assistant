@@ -237,6 +237,10 @@ export function initializeIpcHandlers(appState: AppState): void {
     await systemDictation.cancel();
     return { success: true };
   });
+  safeHandle('system-dictate:toggle', () => {
+    systemDictation.toggle();
+    return { success: true };
+  });
 
   // Use Electron's main-process clipboard for overlay copy actions. The overlay
   // deliberately avoids stealing focus, which makes the renderer Web Clipboard

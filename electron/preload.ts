@@ -670,6 +670,7 @@ interface ElectronAPI {
   setSystemDictatePreferences: (preferences: any) => Promise<any>;
   getSystemDictateState: () => Promise<{ phase: 'idle' | 'recording' | 'cleaning' }>;
   cancelSystemDictate: () => Promise<{ success: boolean }>;
+  toggleSystemDictate: () => Promise<{ success: boolean }>;
   onSystemDictatePreferences: (callback: (preferences: any) => void) => () => void;
   onSystemDictateState: (callback: (state: { phase: 'idle' | 'recording' | 'cleaning' }) => void) => () => void;
   onSystemDictateLevel: (callback: (level: number) => void) => () => void;
@@ -2138,6 +2139,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
   setSystemDictatePreferences: (preferences: unknown) => ipcRenderer.invoke('system-dictate:set-preferences', preferences),
   getSystemDictateState: () => ipcRenderer.invoke('system-dictate:get-state'),
   cancelSystemDictate: () => ipcRenderer.invoke('system-dictate:cancel'),
+  toggleSystemDictate: () => ipcRenderer.invoke('system-dictate:toggle'),
   onSystemDictatePreferences: (callback: (preferences: any) => void) => {
     const subscription = (_: any, preferences: any) => callback(preferences);
     ipcRenderer.on('system-dictate:preferences', subscription);

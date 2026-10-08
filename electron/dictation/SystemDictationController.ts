@@ -68,6 +68,14 @@ export class SystemDictationController {
 
   public getState(): { phase: DictatePhase } { return { phase: this.phase }; }
 
+  /** Toggle dictation from an explicit control (e.g. the TopPill brand mark).
+   *  Starts when idle, stops when recording. Unlike the passive hotkey, a
+   *  manual toggle is NOT governed by the hold/toggle activation mode. */
+  public toggle(): void {
+    if (this.phase === 'idle') void this.begin(true);
+    else if (this.phase === 'recording') void this.finish();
+  }
+
   public async cancel(): Promise<void> {
     if (this.phase === 'idle') return;
     this.cancelled = true;
@@ -102,7 +110,7 @@ export class SystemDictationController {
     }
   }
 
-  private async begin(): Promise<void> {
+  private async begin(manual = false): Promise<void> {
     if (this.phase !== 'idle') return;
     const prefs = this.getPreferences();
     this.cancelled = false;
@@ -121,7 +129,7 @@ export class SystemDictationController {
           if (this.phase !== 'recording') await this.media.resumePaused();
         }).finally(() => { this.mediaPausePromise = null; });
       }
-      if (prefs.activationMode === 'hold' && !this.held) void this.finish();
+      if (!manual && prefs.activationMode === 'hold' && !this.held) void this.finish();
     } catch (error) {
       await this.resumeMedia();
       this.fail(error);

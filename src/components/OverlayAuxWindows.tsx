@@ -264,7 +264,6 @@ export function OverlayPillWindow() {
           onToggle={() => sendAction('toggle-expand')}
           onQuit={() => sendAction(meetingActive ? 'end-meeting' : 'start-meeting')}
           appearance={appearance}
-          onLogoClick={() => window.electronAPI?.setWindowMode?.('launcher')}
           meetingActive={meetingActive}
           overlayVisible={state.overlayVisible === true}
         />

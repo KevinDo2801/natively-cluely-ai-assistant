@@ -560,6 +560,7 @@ export interface ElectronAPI {
   setSystemDictatePreferences: (preferences: import('../lib/dictateUi').DictatePreferences) => Promise<import('../lib/dictateUi').DictatePreferences>;
   getSystemDictateState: () => Promise<{ phase: import('../lib/dictateUi').DictateUiPhase }>;
   cancelSystemDictate: () => Promise<{ success: boolean }>;
+  toggleSystemDictate: () => Promise<{ success: boolean }>;
   onSystemDictatePreferences: (callback: (preferences: import('../lib/dictateUi').DictatePreferences) => void) => () => void;
   onSystemDictateState: (callback: (state: { phase: import('../lib/dictateUi').DictateUiPhase }) => void) => () => void;
   onSystemDictateLevel: (callback: (level: number) => void) => () => void;
