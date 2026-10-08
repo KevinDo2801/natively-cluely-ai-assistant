@@ -38,17 +38,30 @@ pub fn get_global_modifier_state() -> GlobalModifierState {
 pub fn is_global_key_down(key: String) -> bool {
     #[cfg(target_os = "windows")]
     {
-        use windows::Win32::UI::Input::KeyboardAndMouse::VIRTUAL_KEY;
-        let upper = key.trim().to_ascii_uppercase();
-        let code = if upper.len() == 1 {
-            upper.as_bytes()[0] as u16
-        } else {
-            match upper.as_str() {
+        use windows::Win32::UI::Input::KeyboardAndMouse::{VkKeyScanW, VIRTUAL_KEY};
+        let trimmed = key.trim();
+        let mut chars = trimmed.chars();
+        let code: u16 = match (chars.next(), chars.next()) {
+            // Single character: resolve the physical virtual key through the
+            // active keyboard layout. The low byte is the VK, the high byte the
+            // required shift state (ignored — the poller only cares WHICH key is
+            // physically held). The previous ASCII-byte mapping was only valid
+            // for A–Z / 0–9 and silently mis-mapped punctuation: '`' became
+            // 0x60 (VK_NUMPAD0) instead of 0xC0 (VK_OEM_3), so e.g. "Ctrl + `"
+            // never fired.
+            (Some(ch), None) => (unsafe { VkKeyScanW(ch as u16) } & 0xFF) as u16,
+            _ => match trimmed.to_ascii_uppercase().as_str() {
                 "SPACE" => 0x20, "ENTER" => 0x0D, "TAB" => 0x09,
                 "ARROWLEFT" | "LEFT" => 0x25, "ARROWUP" | "UP" => 0x26,
                 "ARROWRIGHT" | "RIGHT" => 0x27, "ARROWDOWN" | "DOWN" => 0x28,
+                "F1" => 0x70, "F2" => 0x71, "F3" => 0x72, "F4" => 0x73,
+                "F5" => 0x74, "F6" => 0x75, "F7" => 0x76, "F8" => 0x77,
+                "F9" => 0x78, "F10" => 0x79, "F11" => 0x7A, "F12" => 0x7B,
+                "F13" => 0x7C, "F14" => 0x7D, "F15" => 0x7E, "F16" => 0x7F,
+                "F17" => 0x80, "F18" => 0x81, "F19" => 0x82, "F20" => 0x83,
+                "F21" => 0x84, "F22" => 0x85, "F23" => 0x86, "F24" => 0x87,
                 _ => return false,
-            }
+            },
         };
         return key_down(VIRTUAL_KEY(code));
     }

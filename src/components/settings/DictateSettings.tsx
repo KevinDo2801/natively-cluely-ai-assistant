@@ -39,7 +39,11 @@ function keyboardEventToKeys(event: React.KeyboardEvent): string[] {
   if (event.shiftKey) keys.push('Shift');
   if (event.metaKey) keys.push('Meta');
   if (!MODIFIER_KEYS.has(event.key)) {
-    keys.push(event.code.startsWith('Key') ? event.key.toUpperCase() : event.key);
+    // Space must be sent as "Space" — event.key is a lone " " which the native
+    // poller trims away before it can match. Letters become their uppercase
+    // character; everything else (digits, punctuation, F-keys, arrows) keeps
+    // event.key, which the native poller resolves via the active layout.
+    keys.push(event.code === 'Space' ? 'Space' : event.code.startsWith('Key') ? event.key.toUpperCase() : event.key);
   }
   return keys;
 }
