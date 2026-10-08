@@ -556,6 +556,16 @@ export interface ElectronAPI {
   onAudioTestSystemLevel: (callback: (level: number) => void) => () => void;
   onAudioTestSystemError: (callback: (errorMessage: string) => void) => () => void;
   startDictation: (deviceId?: string) => Promise<{ success: boolean; error?: string }>;
+  getSystemDictatePreferences: () => Promise<import('../lib/dictateUi').DictatePreferences>;
+  setSystemDictatePreferences: (preferences: import('../lib/dictateUi').DictatePreferences) => Promise<import('../lib/dictateUi').DictatePreferences>;
+  getSystemDictateState: () => Promise<{ phase: import('../lib/dictateUi').DictateUiPhase }>;
+  cancelSystemDictate: () => Promise<{ success: boolean }>;
+  onSystemDictatePreferences: (callback: (preferences: import('../lib/dictateUi').DictatePreferences) => void) => () => void;
+  onSystemDictateState: (callback: (state: { phase: import('../lib/dictateUi').DictateUiPhase }) => void) => () => void;
+  onSystemDictateLevel: (callback: (level: number) => void) => () => void;
+  onSystemDictateCue: (callback: (cue: 'start' | 'stop') => void) => () => void;
+  onSystemDictateError: (callback: (message: string) => void) => () => void;
+  onSystemDictateFinished: (callback: (result: { text: string; pasted: boolean; copied: boolean; warning?: string }) => void) => () => void;
   stopDictation: () => Promise<{ success: boolean; text: string; error?: string }>;
   cancelDictation: () => Promise<{ success: boolean; error?: string }>;
   onDictationLevel: (callback: (level: number) => void) => () => void;

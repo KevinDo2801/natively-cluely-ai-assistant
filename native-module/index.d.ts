@@ -113,6 +113,14 @@ export declare function deactivateDodoKey(licenseKey: string, instanceId: string
 export declare function getDefaultOutputDeviceId(): string
 
 /**
+ * Snapshot the current foreground HWND as a decimal string. A string avoids
+ * truncating a 64-bit pointer at the JS number boundary.
+ */
+export declare function getForegroundWindowId(): string
+
+export declare function getGlobalModifierState(): GlobalModifierState
+
+/**
  * Returns a deterministic hardware fingerprint (SHA-256 hash of the machine UID).
  * This is used to lock license keys to a specific physical device.
  */
@@ -122,11 +130,21 @@ export declare function getInputDevices(): Array<AudioDeviceInfo>
 
 export declare function getOutputDevices(): Array<AudioDeviceInfo>
 
+export interface GlobalModifierState {
+  ctrl: boolean
+  alt: boolean
+  shift: boolean
+  meta: boolean
+}
+
 /**
  * Windows needs no OS permission for a WH_KEYBOARD_LL hook (unlike macOS
  * Accessibility). Always true so the JS permission flow no-ops.
  */
 export declare function isAccessibilityGranted(): boolean
+
+/** Poll one non-modifier key used by a custom hold shortcut. */
+export declare function isGlobalKeyDown(key: string): boolean
 
 /**
  * True when the active keyboard layout is a CJK IME (Chinese / Japanese /
@@ -166,6 +184,18 @@ export interface OverlayBoundsInput {
   width: number
   height: number
 }
+
+/**
+ * Restore the dictation-start foreground window and synthesize Ctrl+V. The
+ * clipboard itself is populated by Electron immediately before this call.
+ */
+export declare function pasteToWindow(windowId?: string | undefined | null): boolean
+
+/**
+ * Best-effort media play/pause key. The controller calls it once on start and
+ * once on finish only when the preference is enabled.
+ */
+export declare function sendMediaPlayPause(): boolean
 
 /**
  * One joint-state transition from the dual-channel tracker

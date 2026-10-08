@@ -1,6 +1,36 @@
-import { ChevronUp, ChevronDown, Mic } from "lucide-react";
+import { useEffect, useState } from "react";
+import { ChevronUp, ChevronDown, LoaderCircle, Mic, X } from "lucide-react";
 import type { OverlayAppearance } from "../../lib/overlayAppearance";
+import {
+    publishDictateUiPhase,
+    subscribeToDictateUiPhase,
+    type DictateUiPhase,
+} from "../../lib/dictateUi";
 import { VoiceBrandMarkIcon } from "./VoiceBrandMarkIcon";
+
+const WAVEFORM_BARS = [8, 14, 20, 11, 17, 23, 13, 19, 9];
+
+function DictateWaveform() {
+    return (
+        <div
+            className="flex h-7 w-[76px] items-center justify-center gap-[3px]"
+            role="img"
+            aria-label="Recording dictation"
+        >
+            {WAVEFORM_BARS.map((height, index) => (
+                <span
+                    key={`${height}-${index}`}
+                    className="dictate-waveform-bar w-[3px] rounded-full bg-current"
+                    style={{
+                        height,
+                        animationDelay: `${index * -85}ms`,
+                        animationDuration: `${620 + (index % 4) * 90}ms`,
+                    }}
+                />
+            ))}
+        </div>
+    );
+}
 
 interface TopPillProps {
     onToggle: () => void;
@@ -23,6 +53,35 @@ export default function TopPill({
     meetingActive,
     overlayVisible,
 }: TopPillProps) {
+    const [dictatePhase, setDictatePhase] = useState<DictateUiPhase>('idle');
+
+    useEffect(() => subscribeToDictateUiPhase(setDictatePhase), []);
+
+    useEffect(() => {
+        if (!window.electronAPI?.onSystemDictateCue) return;
+        return window.electronAPI.onSystemDictateCue((cue) => {
+            try {
+                const AudioContextCtor = window.AudioContext || (window as any).webkitAudioContext;
+                const context = new AudioContextCtor();
+                const oscillator = context.createOscillator();
+                const gain = context.createGain();
+                oscillator.type = 'sine';
+                oscillator.frequency.value = cue === 'start' ? 720 : 520;
+                gain.gain.setValueAtTime(0.0001, context.currentTime);
+                gain.gain.exponentialRampToValueAtTime(0.055, context.currentTime + 0.01);
+                gain.gain.exponentialRampToValueAtTime(0.0001, context.currentTime + 0.11);
+                oscillator.connect(gain).connect(context.destination);
+                oscillator.start();
+                oscillator.stop(context.currentTime + 0.12);
+                oscillator.addEventListener('ended', () => void context.close(), { once: true });
+            } catch {
+                // Audio cues are optional; recording must never depend on them.
+            }
+        });
+    }, []);
+
+    const dictateActive = dictatePhase !== 'idle';
+
     return (
         <div className="flex justify-center select-none z-50">
             <div
@@ -69,14 +128,26 @@ export default function TopPill({
                     (#1592EA) with white glyphs; "Hide" restores the default
                     chip surface. */}
                 <button
-                    onClick={onToggle}
+                    onClick={dictateActive ? undefined : onToggle}
+                    aria-live="polite"
+                    aria-label={
+                        dictatePhase === 'recording'
+                            ? 'Recording dictation'
+                            : dictatePhase === 'cleaning'
+                                ? 'Cleaning dictation'
+                                : overlayVisible
+                                    ? 'Hide Natively'
+                                    : 'Show Natively'
+                    }
                     className={`
             flex items-center gap-2
             group
-            px-3 py-1
+            ${dictateActive ? "px-2.5 py-1" : "px-3 py-1"}
             rounded-full
             backdrop-blur-md
-            ${overlayVisible
+            ${dictateActive
+                ? "overlay-chip-ask text-white"
+                : overlayVisible
                 ? "overlay-chip-surface overlay-text-interactive"
                 : "overlay-chip-ask text-white"}
             text-[12px]
@@ -85,40 +156,54 @@ export default function TopPill({
             interaction-base interaction-hover interaction-press
           `}
                     style={
-                        overlayVisible
+                        dictateActive
+                            ? { backgroundColor: "#1592EA", borderColor: "transparent", color: "#ffffff" }
+                            : overlayVisible
                             ? appearance.chipStyle
                             : { backgroundColor: "#1592EA", borderColor: "transparent", color: "#ffffff" }
                     }
                 >
-                    <span
-                        className={`transition-opacity duration-200 ${
-                            overlayVisible
-                                ? "opacity-70 group-hover:opacity-100"
-                                : "opacity-100"
-                        }`}
-                    >
-                        {overlayVisible ? (
-                            <ChevronUp className="w-3.5 h-3.5" />
-                        ) : (
-                            <ChevronDown className="w-3.5 h-3.5" />
-                        )}
-                    </span>
-                    <span
-                        className={`tracking-wide ${
-                            overlayVisible
-                                ? "opacity-80 group-hover:opacity-100"
-                                : "opacity-100"
-                        }`}
-                    >
-                        {overlayVisible ? "Hide" : "Ask"}
-                    </span>
+                    {dictatePhase === 'recording' ? (
+                        <DictateWaveform />
+                    ) : dictatePhase === 'cleaning' ? (
+                        <span className="flex h-7 min-w-[76px] items-center justify-center gap-2 px-1 text-[11px] font-semibold tracking-wide">
+                            <LoaderCircle className="h-3.5 w-3.5 animate-spin" />
+                            Cleaning…
+                        </span>
+                    ) : (
+                        <>
+                            <span
+                                className={`transition-opacity duration-200 ${
+                                    overlayVisible
+                                        ? "opacity-70 group-hover:opacity-100"
+                                        : "opacity-100"
+                                }`}
+                            >
+                                {overlayVisible ? (
+                                    <ChevronUp className="w-3.5 h-3.5" />
+                                ) : (
+                                    <ChevronDown className="w-3.5 h-3.5" />
+                                )}
+                            </span>
+                            <span
+                                className={`tracking-wide ${
+                                    overlayVisible
+                                        ? "opacity-80 group-hover:opacity-100"
+                                        : "opacity-100"
+                                }`}
+                            >
+                                {overlayVisible ? "Hide" : "Ask"}
+                            </span>
+                        </>
+                    )}
                 </button>
 
                 {/* ACTION BUTTON — mic while idle (start a meeting/recording),
                     square/stop while a meeting is recording (end it). */}
                 <button
-                    onClick={onQuit}
-                    title={meetingActive ? "Stop" : "Start"}
+                    onClick={dictateActive ? () => publishDictateUiPhase('idle') : onQuit}
+                    title={dictateActive ? "Cancel dictation" : meetingActive ? "Stop" : "Start"}
+                    aria-label={dictateActive ? "Cancel dictation" : meetingActive ? "Stop meeting" : "Start meeting"}
                     className={`
             w-7 h-7
             rounded-full
@@ -130,7 +215,9 @@ export default function TopPill({
           `}
                     style={appearance.iconStyle}
                 >
-                    {meetingActive ? (
+                    {dictateActive ? (
+                        <X className="h-4 w-4" strokeWidth={2.25} />
+                    ) : meetingActive ? (
                         <div className="w-3.5 h-3.5 rounded-[3px] bg-current opacity-80" />
                     ) : (
                         <Mic className="w-4 h-4" strokeWidth={2} />

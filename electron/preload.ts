@@ -666,6 +666,16 @@ interface ElectronAPI {
   cancelDictation: () => Promise<{ success: boolean; error?: string }>;
   onDictationLevel: (callback: (level: number) => void) => () => void;
   onDictationFinished: (callback: (result: { text: string; error?: string }) => void) => () => void;
+  getSystemDictatePreferences: () => Promise<any>;
+  setSystemDictatePreferences: (preferences: any) => Promise<any>;
+  getSystemDictateState: () => Promise<{ phase: 'idle' | 'recording' | 'cleaning' }>;
+  cancelSystemDictate: () => Promise<{ success: boolean }>;
+  onSystemDictatePreferences: (callback: (preferences: any) => void) => () => void;
+  onSystemDictateState: (callback: (state: { phase: 'idle' | 'recording' | 'cleaning' }) => void) => () => void;
+  onSystemDictateLevel: (callback: (level: number) => void) => () => void;
+  onSystemDictateCue: (callback: (cue: 'start' | 'stop') => void) => () => void;
+  onSystemDictateError: (callback: (message: string) => void) => () => void;
+  onSystemDictateFinished: (callback: (result: any) => void) => () => void;
 
   // Database
   flushDatabase: () => Promise<{ success: boolean }>;
@@ -2121,6 +2131,42 @@ contextBridge.exposeInMainWorld('electronAPI', {
     const subscription = (_: any, result: { text: string; error?: string }) => callback(result);
     ipcRenderer.on('dictation:finished', subscription);
     return () => ipcRenderer.removeListener('dictation:finished', subscription);
+  },
+
+  // System-wide hold-to-dictate (TopPill flow).
+  getSystemDictatePreferences: () => ipcRenderer.invoke('system-dictate:get-preferences'),
+  setSystemDictatePreferences: (preferences: unknown) => ipcRenderer.invoke('system-dictate:set-preferences', preferences),
+  getSystemDictateState: () => ipcRenderer.invoke('system-dictate:get-state'),
+  cancelSystemDictate: () => ipcRenderer.invoke('system-dictate:cancel'),
+  onSystemDictatePreferences: (callback: (preferences: any) => void) => {
+    const subscription = (_: any, preferences: any) => callback(preferences);
+    ipcRenderer.on('system-dictate:preferences', subscription);
+    return () => ipcRenderer.removeListener('system-dictate:preferences', subscription);
+  },
+  onSystemDictateState: (callback: (state: { phase: 'idle' | 'recording' | 'cleaning' }) => void) => {
+    const subscription = (_: any, state: { phase: 'idle' | 'recording' | 'cleaning' }) => callback(state);
+    ipcRenderer.on('system-dictate:state', subscription);
+    return () => ipcRenderer.removeListener('system-dictate:state', subscription);
+  },
+  onSystemDictateLevel: (callback: (level: number) => void) => {
+    const subscription = (_: any, level: number) => callback(level);
+    ipcRenderer.on('system-dictate:level', subscription);
+    return () => ipcRenderer.removeListener('system-dictate:level', subscription);
+  },
+  onSystemDictateCue: (callback: (cue: 'start' | 'stop') => void) => {
+    const subscription = (_: any, cue: 'start' | 'stop') => callback(cue);
+    ipcRenderer.on('system-dictate:cue', subscription);
+    return () => ipcRenderer.removeListener('system-dictate:cue', subscription);
+  },
+  onSystemDictateError: (callback: (message: string) => void) => {
+    const subscription = (_: any, message: string) => callback(message);
+    ipcRenderer.on('system-dictate:error', subscription);
+    return () => ipcRenderer.removeListener('system-dictate:error', subscription);
+  },
+  onSystemDictateFinished: (callback: (result: any) => void) => {
+    const subscription = (_: any, result: any) => callback(result);
+    ipcRenderer.on('system-dictate:finished', subscription);
+    return () => ipcRenderer.removeListener('system-dictate:finished', subscription);
   },
 
   // Database

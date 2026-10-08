@@ -7,7 +7,7 @@ import {
     Camera, RotateCcw, Eye, EyeOff, Layout, MessageSquare, Crop,
     ChevronDown, ChevronUp, Check, BadgeCheck, Power, Palette, Calendar, Ghost, Sun, Moon, RefreshCw, Info, Globe, FlaskConical, Terminal, Settings, Activity, ExternalLink, Trash2,
     Sparkles, Pencil, Briefcase, Building2, Search, MapPin, CheckCircle, HelpCircle, Zap, SlidersHorizontal, PointerOff, Folder,
-    Star, AlertCircle, Gift, Shield, Code2, Headphones, MessageSquareReply, Pin, Plug
+    Star, AlertCircle, Gift, Shield, Code2, Headphones, MessageSquareReply, Pin, Plug, AudioLines
 } from 'lucide-react';
 import { analytics } from '../lib/analytics/analytics.service';
 import { AboutSection } from './AboutSection';
@@ -18,6 +18,7 @@ import { IntelligenceSettings } from './settings/IntelligenceSettings';
 import { SkillsSettings } from './settings/SkillsSettings';
 import { PluginsSettings } from './settings/PluginsSettings';
 import { AccountSettings } from './settings/AccountSettings';
+import { DictateSettings, DictateShortcutControl } from './settings/DictateSettings';
 import { LocalWhisperModelPanel, type ChannelConfig as LocalWhisperChannelConfig } from './LocalWhisperModelPanel';
 import { motion, AnimatePresence, useReducedMotion } from 'framer-motion';
 import { useShortcuts } from '../hooks/useShortcuts';
@@ -408,6 +409,7 @@ const SETTINGS_NAV_ORDER = [
     'plugins',
     'skills',
     'calendar',
+    'dictate',
     'audio',
     'keybinds',
 ];
@@ -1857,6 +1859,13 @@ const SettingsOverlay: React.FC<SettingsOverlayProps> = ({
                                         <Calendar size={16} /> {t('Calendar')}
                                     </button>
                                     <button
+                                        onClick={() => setActiveTab('dictate')}
+                                        className={navItemClass(activeTab === 'dictate')}
+                                    >
+                                        {activeTab === 'dictate' && navActivePill}
+                                        <AudioLines size={16} /> {t('Dictate')}
+                                    </button>
+                                    <button
                                         onClick={() => setActiveTab('audio')}
                                         className={navItemClass(activeTab === 'audio')}
                                     >
@@ -2682,6 +2691,9 @@ const SettingsOverlay: React.FC<SettingsOverlayProps> = ({
                             {activeTab === 'plugins' && (
                                 <PluginsSettings />
                             )}
+                            {activeTab === 'dictate' && (
+                                <DictateSettings />
+                            )}
                             {activeTab === 'keybinds' && (
                                 <div className="space-y-5 animated fadeIn select-text pb-4">
                                     <div className="flex items-start justify-between">
@@ -2716,6 +2728,16 @@ const SettingsOverlay: React.FC<SettingsOverlayProps> = ({
                                         <div>
                                             <h4 className="text-sm font-bold text-text-primary mb-3">{t('General')}</h4>
                                             <div className="space-y-1">
+                                                <div className="flex items-center justify-between py-1.5 group">
+                                                    <div className="flex items-center gap-3">
+                                                        <span className="text-accent-primary w-5 flex justify-center"><AudioLines size={14} /></span>
+                                                        <div>
+                                                            <span className="block text-sm text-text-secondary font-medium group-hover:text-text-primary transition-colors">{t('Hold to Dictate')}</span>
+                                                            <span className="block text-[10px] text-text-tertiary">{t('Hold the shortcut while speaking')}</span>
+                                                        </div>
+                                                    </div>
+                                                    <DictateShortcutControl compact />
+                                                </div>
                                                 <div className="flex items-center justify-between py-1.5 group">
                                                     <div className="flex items-center gap-3">
                                                         <span className="text-text-tertiary group-hover:text-text-primary transition-colors w-5 flex justify-center"><Eye size={14} /></span>

@@ -39,6 +39,11 @@ export interface NativeModule {
   // rebuild; callers must `typeof`-check and treat a missing export as "no IME"
   // so a stale binary keeps today's behaviour.
   isImeKeyboardActive?: () => boolean;
+  getGlobalModifierState?: () => { ctrl: boolean; alt: boolean; shift: boolean; meta: boolean };
+  isGlobalKeyDown?: (key: string) => boolean;
+  getForegroundWindowId?: () => string;
+  pasteToWindow?: (windowId?: string | null) => boolean;
+  sendMediaPlayPause?: () => boolean;
   // Stealth keyboard interception. macOS: CGEventTap. Windows:
   // WH_KEYBOARD_LL low-level hook (native-module/src/keyboard_hook_windows.rs)
   // exposing this IDENTICAL surface. Engaged by StealthKeyboardManager; the

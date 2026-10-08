@@ -19,6 +19,7 @@ pub mod microphone;
 pub mod resampler;
 pub mod silence_suppression;
 pub mod speaker;
+pub mod system_input;
 
 #[cfg(target_os = "macos")]
 pub mod stealth_window;

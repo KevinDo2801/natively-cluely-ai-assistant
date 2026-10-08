@@ -76,6 +76,15 @@ export interface AppSettings {
     // hook captures below the input method and breaks composition. Default ON
     // (stealth as before); `undefined` reads as enabled.
     stealthTypingEnabled?: boolean;
+    // System-wide hold-to-dictate preferences. Kept in the early settings
+    // store because the native modifier monitor starts before any renderer.
+    dictateMicrophoneId?: string;
+    dictateLanguage?: string;
+    dictateShortcut?: string[];
+    dictateAutoPaste?: boolean;
+    dictateSounds?: boolean;
+    dictatePauseMedia?: boolean;
+    dictateTextCleanup?: boolean;
     // Explicit opt-out sentinel for "I do not want Hindsight at all". Distinct from
     // "hindsightBaseUrl is empty" — that condition means "user hasn't configured yet"
     // (synthetic default applies). `true` here means "user has actively disabled Hindsight"

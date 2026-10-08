@@ -8524,3 +8524,26 @@ html[data-platform="linux"] body {
 @container (max-height: 60px) {
   .cc-card .cc-empty { display: none; }
 }
+@keyframes dictate-waveform-pulse {
+  0%, 100% {
+    transform: scaleY(0.38);
+    opacity: 0.62;
+  }
+  50% {
+    transform: scaleY(1);
+    opacity: 1;
+  }
+}
+
+.dictate-waveform-bar {
+  transform-origin: center;
+  animation-name: dictate-waveform-pulse;
+  animation-timing-function: ease-in-out;
+  animation-iteration-count: infinite;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .dictate-waveform-bar {
+    animation: none;
+  }
+}

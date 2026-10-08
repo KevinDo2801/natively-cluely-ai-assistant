@@ -5521,6 +5521,7 @@ export class AppState {
     deviceId: string | undefined,
     emitLevel: (level: number) => void,
     onAutoStop: (result: { text: string; error?: string }) => void,
+    options?: { provider?: 'assemblyai'; language?: string },
   ): Promise<void> {
     if (this.isMeetingActive || this._isDraining || this._pendingTeardown) {
       throw new Error('Dictation is unavailable while a meeting is active. End the meeting first, then try again.');
@@ -5548,7 +5549,18 @@ export class AppState {
     let session!: DictationSession;
     session = createDictationSession({
       createCapture: (requestedDeviceId?: string) => new MicrophoneCapture(requestedDeviceId),
-      createStt: () => this.createSTTProvider('user'),
+      createStt: () => {
+        if (options?.provider === 'assemblyai') {
+          const apiKey = CredentialsManager.getInstance().getAssemblyAiApiKey();
+          if (!apiKey) {
+            throw new Error('AssemblyAI API key is missing. Add it in Settings → Audio before using Dictate.');
+          }
+          const stt = new AssemblyAIStreamingSTT(apiKey);
+          stt.setRecognitionLanguage(options.language || 'auto');
+          return stt;
+        }
+        return this.createSTTProvider('user');
+      },
       emitLevel,
       onAutoStop: (result) => {
         if (this.dictationSession === session) this.dictationSession = null;

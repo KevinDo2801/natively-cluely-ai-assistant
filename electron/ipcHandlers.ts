@@ -23,6 +23,7 @@ import { formatEnvelopeForPrompt } from './services/browser-context/formatEnvelo
 import { BrowserMetadataClassifierService } from './services/browser-context/BrowserMetadataClassifierService';
 import type { BrowserContextCategory, SafeWebsiteMetadata } from './services/browser-context/types';
 import { SettingsManager } from './services/SettingsManager';
+import { SystemDictationController } from './dictation/SystemDictationController';
 import { ProviderStatusRegistry } from './services/ProviderStatusRegistry';
 import { SkillsManager } from './services/SkillsManager';
 import { SAFE_DOCUMENT_EXTENSIONS } from './services/SafeDocumentTextExtractor';
@@ -224,6 +225,18 @@ export function initializeIpcHandlers(appState: AppState): void {
       if (!win.isDestroyed()) win.webContents.send('credentials-changed');
     });
   };
+
+  // System Dictate owns its own hotkey/audio lifecycle. It deliberately does
+  // not share renderer state with the composer dictation channels below.
+  const systemDictation = new SystemDictationController(appState);
+  systemDictation.start();
+  safeHandle('system-dictate:get-preferences', () => systemDictation.getPreferences());
+  safeHandle('system-dictate:set-preferences', (_event, value: unknown) => systemDictation.setPreferences(value));
+  safeHandle('system-dictate:get-state', () => systemDictation.getState());
+  safeHandle('system-dictate:cancel', async () => {
+    await systemDictation.cancel();
+    return { success: true };
+  });
 
   // Use Electron's main-process clipboard for overlay copy actions. The overlay
   // deliberately avoids stealing focus, which makes the renderer Web Clipboard
