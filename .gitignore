@@ -504,11 +504,13 @@ benchmark-results/
 # Working-directory artifacts that are NOT part of this application.
 # These accumulated as untracked noise; none of them belong in the app repo.
 #   natively-control/    a separate 1.8 GB / 41k-file project checkout
+#   openwhispr/          a separate nested Electron + Expo dictation app
 #   chargeback_evidence/ payment-dispute documents (business records, not code)
 #   undefined/           written by a bug that resolved a path to the literal
 #                        string "undefined" — if this reappears, fix the caller
 #   natively_debug.size* one-off debug dumps
 /natively-control/
+/openwhispr/
 /chargeback_evidence/
 /undefined/
 /natively_debug.size*

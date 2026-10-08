@@ -35,6 +35,16 @@ export default defineConfig({
                 // the script tag references popup.js, which lives in src/ as
                 // popup.ts and is bundled separately to natively-browser/dist/.
                 '**/natively-browser/**',
+                // OpenWhispr is a separate nested Electron + Expo app with its
+                // own node_modules and locked files. Watching it makes the Vite
+                // fs watcher hit EBUSY on Windows ("resource busy or locked") and
+                // crash the dev server, so it is excluded from the watcher.
+                '**/openwhispr/**',
+                // Editor-tool transient temp dirs (.<file>.<pid>.<uuid>.tmpdir)
+                // are created and deleted next to the file being edited; Vite
+                // watching them mid-create/delete hits EBUSY and kills the dev
+                // server on Windows.
+                '**/.*.tmpdir/**',
             ],
         },
     },
