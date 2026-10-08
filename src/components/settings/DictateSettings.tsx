@@ -18,7 +18,6 @@ import {
   type DictatePreferences,
 } from '../../lib/dictateUi';
 import { SettingsToggle } from './SettingsToggle';
-import { VoiceBrandMarkIcon } from '../ui/VoiceBrandMarkIcon';
 
 const MODIFIER_KEYS = new Set(['Control', 'Alt', 'Shift', 'Meta']);
 const DICTATE_LANGUAGES = [
@@ -83,7 +82,7 @@ export function DictateShortcutControl({ compact = false }: DictateShortcutContr
     setRecording(false);
   };
 
-  const visibleKeys = recording && draftKeys.length > 0 ? draftKeys : preferences.shortcut;
+  const visibleKeys = recording ? draftKeys : preferences.shortcut;
 
   return (
     <div className={`flex items-center ${compact ? 'gap-2' : 'gap-3'}`}>
@@ -120,19 +119,25 @@ export function DictateShortcutControl({ compact = false }: DictateShortcutContr
           event.stopPropagation();
           if (MODIFIER_KEYS.has(event.key)) commitShortcut(draftKeys);
         }}
-        className={`flex min-h-8 items-center justify-center gap-1 rounded-lg border transition-colors focus:outline-none focus:ring-2 focus:ring-accent-primary/30 ${
+        className={`group flex min-h-8 items-center justify-center gap-1 rounded-lg border transition-colors focus:outline-none ${
           recording
-            ? 'border-accent-primary bg-accent-primary/10 text-accent-primary'
-            : 'border-border-subtle bg-bg-input text-text-secondary hover:border-text-tertiary'
+            ? compact
+              ? 'border-accent-primary bg-bg-input text-accent-primary'
+              : 'border-accent-primary bg-accent-primary/10 text-accent-primary'
+            : compact
+              ? 'border-transparent bg-transparent text-text-secondary'
+              : 'border-border-subtle bg-bg-input text-text-secondary hover:border-text-tertiary'
         } ${compact ? 'px-2 py-1' : 'px-3 py-1.5'}`}
       >
         {recording && visibleKeys.length === 0 ? (
-          <span className="px-1 text-[11px] font-medium">{t('Hold keys…')}</span>
+          <span className={compact ? 'text-xs font-sans' : 'px-1 text-[11px] font-medium'}>
+            {compact ? t('Press keys...') : t('Hold keys…')}
+          </span>
         ) : (
           visibleKeys.map((key) => (
             <kbd
               key={key}
-              className="min-w-7 rounded-md border border-border-subtle bg-bg-elevated px-1.5 py-0.5 text-center text-[11px] font-medium text-text-primary shadow-sm"
+              className={`min-w-7 rounded-md border border-border-subtle px-1.5 py-0.5 text-center text-[11px] font-medium shadow-sm ${compact ? (recording ? 'bg-bg-input text-accent-primary' : 'bg-bg-input text-text-secondary transition-colors group-hover:border-text-tertiary') : 'bg-bg-elevated text-text-primary'}`}
             >
               {key}
             </kbd>
@@ -251,26 +256,6 @@ export function DictateSettings() {
             ? t('Tap your shortcut to start, speak naturally, then tap it again to paste polished text.')
             : t('Hold your shortcut, speak naturally, then release to paste polished text.')}
         </p>
-      </div>
-
-      <div className="relative overflow-hidden rounded-2xl border border-accent-primary/20 bg-gradient-to-br from-accent-primary/12 via-bg-card to-bg-card p-5">
-        <div className="absolute -right-12 -top-16 h-40 w-40 rounded-full bg-accent-primary/10 blur-3xl" />
-        <div className="relative flex items-center justify-between gap-6">
-          <div>
-            <div className="mb-2 flex items-center gap-2 text-sm font-semibold text-text-primary">
-              <span className="flex h-7 w-7 items-center justify-center rounded-full bg-accent-primary text-on-accent">
-                <VoiceBrandMarkIcon size={16} />
-              </span>
-              {preferences.activationMode === 'toggle' ? t('Tap to toggle') : t('Hold to dictate')}
-            </div>
-            <p className="max-w-md text-xs leading-relaxed text-text-secondary">
-              {preferences.activationMode === 'toggle'
-                ? t('Tap the shortcut once to start recording, then tap it again to clean up and paste your words.')
-                : t('The TopPill becomes a live waveform while you hold the shortcut. Release it to clean up and paste your words.')}
-            </p>
-          </div>
-          <DictateShortcutControl />
-        </div>
       </div>
 
       <section>
