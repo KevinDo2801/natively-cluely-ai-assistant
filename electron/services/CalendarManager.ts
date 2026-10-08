@@ -58,6 +58,27 @@ if (GOOGLE_CLIENT_ID === "YOUR_CLIENT_ID_HERE") {
     console.warn('[CalendarManager] GOOGLE_CLIENT_ID is using the default placeholder. Calendar features will not work until a valid client ID is provided via env var or build config.');
 }
 
+/**
+ * Google token-endpoint error codes that mean the saved refresh token is
+ * permanently dead (revoked by the user, expired, or the OAuth client was
+ * disabled). Only these justify dropping the persisted refresh token. Every
+ * other failure — a network blip at boot, the calendar proxy not running yet,
+ * a backend 401 auth_required, or a transient Google 5xx — leaves the token
+ * intact so the next sync/launch can retry without forcing a re-link.
+ */
+const PERMANENT_REFRESH_ERROR_CODES = ['invalid_grant', 'invalid_client', 'unauthorized_client'];
+
+/** A refresh failure that carries the upstream status + OAuth error code. */
+class CalendarRefreshError extends Error {
+    readonly status: number;
+    readonly code: string;
+    constructor(message: string, status: number, code: string) {
+        super(message);
+        this.status = status;
+        this.code = code;
+    }
+}
+
 export interface CalendarAttendee {
     email: string;
     name?: string;
@@ -83,6 +104,7 @@ export class CalendarManager extends EventEmitter {
     private expiryDate: number | null = null;
     private isConnected: boolean = false;
     private updateInterval: NodeJS.Timeout | null = null;
+    private refreshTimer: NodeJS.Timeout | null = null;
 
     private constructor() {
         super();
@@ -180,6 +202,7 @@ export class CalendarManager extends EventEmitter {
         this.refreshToken = null;
         this.expiryDate = null;
         this.isConnected = false;
+        this.clearRefreshTimer();
 
         if (fs.existsSync(TOKEN_PATH)) {
             fs.unlinkSync(TOKEN_PATH);
@@ -315,16 +338,22 @@ export class CalendarManager extends EventEmitter {
         if (data.refresh_token) {
             this.refreshToken = data.refresh_token; // Only returned on first consent
         }
-        this.expiryDate = Date.now() + (data.expires_in * 1000);
+        // Google always sends expires_in (access tokens live ~1h), but default
+        // defensively so a malformed payload can't poison expiryDate with NaN.
+        const expiresInSec = typeof data.expires_in === 'number' && Number.isFinite(data.expires_in)
+            ? data.expires_in
+            : 3600;
+        this.expiryDate = Date.now() + (expiresInSec * 1000);
         this.isConnected = true;
         this.saveTokens();
+        this.scheduleRefresh();
         this.emit('connection-changed', true);
 
         // Initial fetch
         this.fetchUpcomingEvents();
     }
 
-    private async refreshAccessToken() {
+    private async refreshAccessToken(): Promise<boolean> {
         if (!this.refreshToken) {
             throw new Error('No refresh token available');
         }
@@ -340,10 +369,14 @@ export class CalendarManager extends EventEmitter {
                     grant_type: 'refresh_token',
                 });
                 if (!ok) {
-                    throw new Error(`refresh_failed status=${status} ${(data as any)?.error || ''}`.trim());
+                    throw new CalendarRefreshError(
+                        `refresh_failed status=${status} ${(data as any)?.error || ''}`.trim(),
+                        status,
+                        String((data as any)?.error || ''),
+                    );
                 }
                 this.handleTokenResponse(data);
-                return;
+                return true;
             }
 
             // Proxied through natively-api so GOOGLE_CLIENT_SECRET never ships in the desktop app.
@@ -357,15 +390,52 @@ export class CalendarManager extends EventEmitter {
 
             if (!response.ok) {
                 const errBody = await response.json().catch(() => ({} as any));
-                throw new Error(`refresh_failed status=${response.status} ${(errBody as any).error || ''}`.trim());
+                throw new CalendarRefreshError(
+                    `refresh_failed status=${response.status} ${(errBody as any).error || ''}`.trim(),
+                    response.status,
+                    String((errBody as any).error || ''),
+                );
             }
 
             const data = await response.json();
             this.handleTokenResponse(data);
+            return true;
         } catch (error) {
-            console.error('[CalendarManager] Token refresh failed:', error);
-            // If refresh fails (e.g. revoked), disconnect
-            this.disconnect();
+            if (error instanceof CalendarRefreshError && PERMANENT_REFRESH_ERROR_CODES.includes(error.code)) {
+                // The refresh token is genuinely dead (revoked/expired/disabled) —
+                // re-linking is unavoidable, so clear the saved credentials.
+                console.error('[CalendarManager] Token refresh failed permanently — disconnecting:', error.message);
+                this.disconnect();
+            } else {
+                // Transient: network blip at boot, proxy/backend not up yet, a
+                // backend 401 auth_required, or a temporary Google 5xx. The saved
+                // refresh token is still valid — KEEP it and retry on the next
+                // sync/launch instead of forcing the user to re-link.
+                console.error('[CalendarManager] Token refresh failed transiently — keeping stored refresh token for retry:', error);
+            }
+            return false;
+        }
+    }
+
+    /**
+     * Schedule a proactive refresh a little before the access token expires, so
+     * a long-running app never finds itself with a dead token. Cleared and
+     * re-armed on every token response and on disconnect.
+     */
+    private scheduleRefresh() {
+        this.clearRefreshTimer();
+        if (!this.expiryDate) return;
+        const REFRESH_LEAD_MS = 5 * 60 * 1000; // refresh 5 minutes before expiry
+        const delay = Math.max(0, this.expiryDate - Date.now() - REFRESH_LEAD_MS);
+        this.refreshTimer = setTimeout(() => {
+            void this.refreshAccessToken();
+        }, delay);
+    }
+
+    private clearRefreshTimer() {
+        if (this.refreshTimer) {
+            clearTimeout(this.refreshTimer);
+            this.refreshTimer = null;
         }
     }
 
@@ -410,6 +480,10 @@ export class CalendarManager extends EventEmitter {
                 // Check expiry
                 if (this.expiryDate && Date.now() >= this.expiryDate) {
                     this.refreshAccessToken();
+                } else {
+                    // Still valid — arm the proactive refresh so it renews
+                    // before expiry even if no event sync happens in between.
+                    this.scheduleRefresh();
                 }
             }
         } catch (error) {
