@@ -48,7 +48,7 @@ export class SystemDictationController {
       microphoneId: s.get('dictateMicrophoneId'), language: s.get('dictateLanguage'),
       shortcut: s.get('dictateShortcut'), autoPaste: s.get('dictateAutoPaste'),
       dictationSounds: s.get('dictateSounds'), pauseMedia: s.get('dictatePauseMedia'),
-      textCleanup: s.get('dictateTextCleanup'),
+      textCleanup: s.get('dictateTextCleanup'), activationMode: s.get('dictateActivationMode'),
     });
   }
 
@@ -59,7 +59,7 @@ export class SystemDictationController {
       s.set('dictateMicrophoneId', next.microphoneId), s.set('dictateLanguage', next.language),
       s.set('dictateShortcut', next.shortcut), s.set('dictateAutoPaste', next.autoPaste),
       s.set('dictateSounds', next.dictationSounds), s.set('dictatePauseMedia', next.pauseMedia),
-      s.set('dictateTextCleanup', next.textCleanup),
+      s.set('dictateTextCleanup', next.textCleanup), s.set('dictateActivationMode', next.activationMode),
     ];
     if (writes.some((ok) => !ok)) throw new Error('Dictate preferences could not be persisted.');
     this.broadcast('system-dictate:preferences', next);
@@ -88,8 +88,18 @@ export class SystemDictationController {
     catch { return; }
     if (active === this.held) return;
     this.held = active;
-    if (active) void this.begin();
-    else if (this.phase === 'recording') void this.finish();
+    if (active) {
+      // Shortcut just pressed.
+      if (this.getPreferences().activationMode === 'toggle') {
+        if (this.phase === 'idle') void this.begin();
+        else if (this.phase === 'recording') void this.finish();
+      } else {
+        void this.begin();
+      }
+    } else if (this.getPreferences().activationMode === 'hold' && this.phase === 'recording') {
+      // Shortcut just released (hold mode only).
+      void this.finish();
+    }
   }
 
   private async begin(): Promise<void> {
@@ -111,7 +121,7 @@ export class SystemDictationController {
           if (this.phase !== 'recording') await this.media.resumePaused();
         }).finally(() => { this.mediaPausePromise = null; });
       }
-      if (!this.held) void this.finish();
+      if (prefs.activationMode === 'hold' && !this.held) void this.finish();
     } catch (error) {
       await this.resumeMedia();
       this.fail(error);
@@ -138,13 +148,15 @@ export class SystemDictationController {
     }
     if (prefs.textCleanup) {
       try {
+        const startedAt = Date.now();
         const cleanupModel = selectCheapestCodexModel(await CodexAppServerService.getInstance().listModels());
         const cleaned = await CodexCliService.run('', {
           model: cleanupModel, prompt: buildDictateCleanupPrompt(text),
           instructions: DICTATE_CLEANUP_INSTRUCTIONS, timeoutMs: 30_000,
-          sandboxMode: 'read-only', modelReasoningEffort: 'low',
+          sandboxMode: 'read-only', modelReasoningEffort: 'low', serviceTier: 'fast',
         });
         text = normalizeCleanupOutput(cleaned, text);
+        console.log(`[SystemDictation] cleanup ${cleanupModel} ${Date.now() - startedAt}ms`);
       } catch (error) {
         warning = `AI cleanup failed; pasted raw transcript. ${error instanceof Error ? error.message : String(error)}`;
       }

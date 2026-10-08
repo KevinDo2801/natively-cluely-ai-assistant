@@ -1,6 +1,5 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
 import {
-  Check,
   ChevronDown,
   Command,
   Languages,
@@ -248,7 +247,9 @@ export function DictateSettings() {
       <div>
         <h3 className="mb-1 text-lg font-bold text-text-primary">{t('Dictate')}</h3>
         <p className="text-xs text-text-secondary">
-          {t('Hold your shortcut, speak naturally, then release to paste polished text.')}
+          {preferences.activationMode === 'toggle'
+            ? t('Tap your shortcut to start, speak naturally, then tap it again to paste polished text.')
+            : t('Hold your shortcut, speak naturally, then release to paste polished text.')}
         </p>
       </div>
 
@@ -260,10 +261,12 @@ export function DictateSettings() {
               <span className="flex h-7 w-7 items-center justify-center rounded-full bg-accent-primary text-on-accent">
                 <VoiceBrandMarkIcon size={16} />
               </span>
-              {t('Hold to dictate')}
+              {preferences.activationMode === 'toggle' ? t('Tap to toggle') : t('Hold to dictate')}
             </div>
             <p className="max-w-md text-xs leading-relaxed text-text-secondary">
-              {t('The TopPill becomes a live waveform while you hold the shortcut. Release it to clean up and paste your words.')}
+              {preferences.activationMode === 'toggle'
+                ? t('Tap the shortcut once to start recording, then tap it again to clean up and paste your words.')
+                : t('The TopPill becomes a live waveform while you hold the shortcut. Release it to clean up and paste your words.')}
             </p>
           </div>
           <DictateShortcutControl />
@@ -314,10 +317,27 @@ export function DictateSettings() {
           <PreferenceRow
             icon={<Command size={16} />}
             title={t('Activation')}
-            description={t('Keep the shortcut held while speaking')}
+            description={preferences.activationMode === 'toggle'
+              ? t('Press the shortcut once to start, again to stop')
+              : t('Keep the shortcut held while speaking')}
           >
-            <div className="flex items-center gap-2 rounded-full border border-accent-primary/20 bg-accent-primary/10 px-3 py-1.5 text-[11px] font-semibold text-accent-primary">
-              <Check size={12} /> {t('Hold')}
+            <div className="flex rounded-lg border border-border-subtle bg-bg-input p-0.5" role="group" aria-label={t('Activation mode')}>
+              {(['hold', 'toggle'] as const).map((mode) => {
+                const active = preferences.activationMode === mode;
+                return (
+                  <button
+                    key={mode}
+                    type="button"
+                    aria-pressed={active}
+                    onClick={() => updatePreferences({ activationMode: mode })}
+                    className={`rounded-md px-3 py-1.5 text-[11px] font-semibold transition-colors ${
+                      active ? 'bg-accent-primary text-on-accent' : 'text-text-secondary hover:text-text-primary'
+                    }`}
+                  >
+                    {mode === 'hold' ? t('Hold') : t('Toggle')}
+                  </button>
+                );
+              })}
             </div>
           </PreferenceRow>
         </div>

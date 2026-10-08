@@ -85,6 +85,7 @@ export interface AppSettings {
     dictateSounds?: boolean;
     dictatePauseMedia?: boolean;
     dictateTextCleanup?: boolean;
+    dictateActivationMode?: 'hold' | 'toggle';
     // Explicit opt-out sentinel for "I do not want Hindsight at all". Distinct from
     // "hindsightBaseUrl is empty" — that condition means "user hasn't configured yet"
     // (synthetic default applies). `true` here means "user has actively disabled Hindsight"

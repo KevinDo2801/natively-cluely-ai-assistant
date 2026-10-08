@@ -2732,8 +2732,8 @@ const SettingsOverlay: React.FC<SettingsOverlayProps> = ({
                                                     <div className="flex items-center gap-3">
                                                         <span className="text-accent-primary w-5 flex justify-center"><AudioLines size={14} /></span>
                                                         <div>
-                                                            <span className="block text-sm text-text-secondary font-medium group-hover:text-text-primary transition-colors">{t('Hold to Dictate')}</span>
-                                                            <span className="block text-[10px] text-text-tertiary">{t('Hold the shortcut while speaking')}</span>
+                                                            <span className="block text-sm text-text-secondary font-medium group-hover:text-text-primary transition-colors">{t('Dictate')}</span>
+                                                            <span className="block text-[10px] text-text-tertiary">{t('Start or stop dictation')}</span>
                                                         </div>
                                                     </div>
                                                     <DictateShortcutControl compact />

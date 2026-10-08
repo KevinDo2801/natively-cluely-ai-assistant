@@ -1,5 +1,7 @@
 export type DictateUiPhase = 'idle' | 'recording' | 'cleaning';
 
+export type DictateActivationMode = 'hold' | 'toggle';
+
 export interface DictatePreferences {
   microphoneId: string;
   language: string;
@@ -8,6 +10,7 @@ export interface DictatePreferences {
   dictationSounds: boolean;
   pauseMedia: boolean;
   textCleanup: boolean;
+  activationMode: DictateActivationMode;
 }
 
 export const DEFAULT_DICTATE_PREFERENCES: DictatePreferences = {
@@ -18,6 +21,7 @@ export const DEFAULT_DICTATE_PREFERENCES: DictatePreferences = {
   dictationSounds: true,
   pauseMedia: false,
   textCleanup: true,
+  activationMode: 'hold',
 };
 
 const PREFERENCES_KEY = 'natively_dictate_preferences_v1';
@@ -61,6 +65,7 @@ function sanitizePreferences(value: unknown): DictatePreferences {
     textCleanup: isBoolean(candidate.textCleanup)
       ? candidate.textCleanup
       : DEFAULT_DICTATE_PREFERENCES.textCleanup,
+    activationMode: candidate.activationMode === 'toggle' ? 'toggle' : 'hold',
   };
 }
 
