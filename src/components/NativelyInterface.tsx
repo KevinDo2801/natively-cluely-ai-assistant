@@ -9990,7 +9990,7 @@ Provide only the answer, nothing else.`;
                                                 interaction-base interaction-press
                                                 ${controlSurfaceClass}
                                             `}
-                      style={appearance.controlStyle}
+                      style={{ ...appearance.controlStyle, display: 'none' }}
                     >
                       <span className="truncate min-w-0 flex-1">
                         {(() => {
@@ -10031,7 +10031,7 @@ Provide only the answer, nothing else.`;
                       <ChevronDown size={14} className="shrink-0 transition-transform" />
                     </button>
 
-                    <div className="w-px h-3 mx-1" style={appearance.dividerStyle} />
+                    <div className="w-px h-3 mx-1" style={{ ...appearance.dividerStyle, display: 'none' }} />
 
                     <div className="relative">
                       <button
