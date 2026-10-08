@@ -10,6 +10,18 @@ import { VoiceBrandMarkIcon } from "./VoiceBrandMarkIcon";
 
 const WAVEFORM_BARS = [8, 14, 20, 11, 17, 23, 13, 19, 9];
 
+// Dictation cue chime — a two-note sine "up" (start) / "down" (stop) interval,
+// mirroring OpenWhispr's src/utils/dictationCues.js.
+const CUE_NOTES: Record<'start' | 'stop', [number, number]> = {
+    start: [523.25, 659.25], // C5 → E5 (ascending major third)
+    stop: [587.33, 440],     // D5 → A4 (descending)
+};
+const CUE_NOTE_DURATION = 0.09;
+const CUE_NOTE_GAP = 0.025;
+const CUE_NOTE_ATTACK = 0.015;
+const CUE_MAX_GAIN = 0.4;
+const CUE_MIN_GAIN = 0.0001;
+
 function DictateWaveform() {
     return (
         <div
@@ -61,17 +73,26 @@ export default function TopPill({
             try {
                 const AudioContextCtor = window.AudioContext || (window as any).webkitAudioContext;
                 const context = new AudioContextCtor();
-                const oscillator = context.createOscillator();
-                const gain = context.createGain();
-                oscillator.type = 'sine';
-                oscillator.frequency.value = cue === 'start' ? 720 : 520;
-                gain.gain.setValueAtTime(0.0001, context.currentTime);
-                gain.gain.exponentialRampToValueAtTime(0.055, context.currentTime + 0.01);
-                gain.gain.exponentialRampToValueAtTime(0.0001, context.currentTime + 0.11);
-                oscillator.connect(gain).connect(context.destination);
-                oscillator.start();
-                oscillator.stop(context.currentTime + 0.12);
-                oscillator.addEventListener('ended', () => void context.close(), { once: true });
+                const baseTime = context.currentTime + 0.005;
+                const notes = CUE_NOTES[cue] ?? CUE_NOTES.start;
+                notes.forEach((frequency, index) => {
+                    const startTime = baseTime + index * (CUE_NOTE_DURATION + CUE_NOTE_GAP);
+                    const stopTime = startTime + CUE_NOTE_DURATION;
+                    const oscillator = context.createOscillator();
+                    const gain = context.createGain();
+                    oscillator.type = 'sine';
+                    oscillator.frequency.setValueAtTime(frequency, startTime);
+                    gain.gain.setValueAtTime(CUE_MIN_GAIN, startTime);
+                    gain.gain.linearRampToValueAtTime(CUE_MAX_GAIN, startTime + CUE_NOTE_ATTACK);
+                    gain.gain.exponentialRampToValueAtTime(CUE_MIN_GAIN, stopTime);
+                    oscillator.connect(gain).connect(context.destination);
+                    oscillator.start(startTime);
+                    oscillator.stop(stopTime + 0.01);
+                    // Close the context once the LAST note finishes.
+                    if (index === notes.length - 1) {
+                        oscillator.addEventListener('ended', () => void context.close(), { once: true });
+                    }
+                });
             } catch {
                 // Audio cues are optional; recording must never depend on them.
             }
