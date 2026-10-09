@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { ChevronUp, ChevronDown, LoaderCircle, Mic, X } from "lucide-react";
+import { ChevronUp, ChevronDown, Mic, X } from "lucide-react";
 import type { OverlayAppearance } from "../../lib/overlayAppearance";
 import {
     publishDictateUiPhase,
@@ -100,11 +100,14 @@ export default function TopPill({
     }, []);
 
     const dictateActive = dictatePhase !== 'idle';
+    const dictateCleaning = dictatePhase === 'cleaning';
 
     return (
         <div className="flex justify-center select-none z-50">
             <div
-                className="
+                className={`
+          top-pill-shell
+          ${dictateCleaning ? "top-pill-shell-cleaning" : ""}
           draggable-area
           flex items-center gap-2
           rounded-full
@@ -112,18 +115,19 @@ export default function TopPill({
           overlay-pill-surface
           backdrop-blur-md
           px-1.5 py-1.5
-          transition-all duration-300 ease-sculpted
-        "
+        `}
                 style={appearance.pillStyle}
             >
+                <span className="dictate-cleaning-orbit" aria-hidden="true" />
                 <div className="draggable-area">
                     {/* LOGO BUTTON — toggles system-wide dictation (start when
                         idle, stop when recording). */}
                     <button
                         onClick={() => void window.electronAPI?.toggleSystemDictate?.().catch(() => {})}
+                        disabled={dictateCleaning}
                         title={dictatePhase === 'recording' ? 'Stop dictation' : dictatePhase === 'cleaning' ? 'Cleaning' : 'Start dictation'}
                         aria-label={dictatePhase === 'recording' ? 'Stop dictation' : dictatePhase === 'cleaning' ? 'Cleaning dictation' : 'Start dictation'}
-                        className={`
+                        className={`top-pill-dictate-button
               w-7 h-7
               rounded-full
               overlay-icon-surface
@@ -136,7 +140,7 @@ export default function TopPill({
                     >
                         <VoiceBrandMarkIcon
                             size={18}
-                            className={dictatePhase === 'cleaning' ? "overlay-text-primary animate-pulse" : "overlay-text-primary"}
+                            className={dictateCleaning ? "dictate-cleaning-logo overlay-text-primary" : "overlay-text-primary"}
                         />
                     </button>
                 </div>
@@ -160,7 +164,7 @@ export default function TopPill({
                                     ? 'Hide Natively'
                                     : 'Show Natively'
                     }
-                    className={`
+                    className={`top-pill-center-segment
             flex items-center gap-2
             group
             ${dictateActive ? "px-2.5 py-1" : "px-3 py-1"}
@@ -187,10 +191,7 @@ export default function TopPill({
                     {dictatePhase === 'recording' ? (
                         <DictateWaveform />
                     ) : dictatePhase === 'cleaning' ? (
-                        <span className="dictate-center-enter flex h-4 min-w-[52px] items-center justify-center gap-1.5 px-1 text-[11px] font-semibold tracking-wide">
-                            <LoaderCircle className="h-3 w-3 animate-spin" />
-                            Cleaning
-                        </span>
+                        <span className="sr-only">Cleaning</span>
                     ) : (
                         <span className="dictate-center-enter flex items-center gap-1">
                             <span
@@ -225,7 +226,7 @@ export default function TopPill({
                     onClick={dictateActive ? () => publishDictateUiPhase('idle') : onQuit}
                     title={dictateActive ? "Cancel dictation" : meetingActive ? "Stop" : "Start"}
                     aria-label={dictateActive ? "Cancel dictation" : meetingActive ? "Stop meeting" : "Start meeting"}
-                    className={`
+                    className={`top-pill-action-button
             w-7 h-7
             rounded-full
             overlay-icon-surface
