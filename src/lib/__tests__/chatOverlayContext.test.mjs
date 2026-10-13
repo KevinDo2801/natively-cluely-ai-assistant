@@ -2,6 +2,8 @@ import { describe, test } from 'node:test';
 import assert from 'node:assert/strict';
 import {
   composeChatOverlayContext,
+  fetchChatOverlayContext,
+  resolveChatPersona,
   isVagueChatQuestion,
   buildReaderLanguageHint,
 } from '../chatOverlayContext.ts';
@@ -168,5 +170,109 @@ describe('buildReaderLanguageHint', () => {
   test('empty when there is no typed text', () => {
     assert.equal(buildReaderLanguageHint('   '), '');
     assert.equal(buildReaderLanguageHint(''), '');
+  });
+});
+
+describe('resolveChatPersona — role-correct persona per mode', () => {
+  test('lecture-like and unknown modes keep the study persona (unchanged behaviour)', () => {
+    for (const m of [undefined, null, '', 'general', 'lecture', 'seminar', 'some-custom-template']) {
+      assert.match(resolveChatPersona(m), /study assistant for a student/);
+    }
+  });
+
+  test('interview modes are NOT answered as a student', () => {
+    for (const m of ['looking-for-work', 'technical-interview']) {
+      const p = resolveChatPersona(m);
+      assert.doesNotMatch(p, /study assistant|student/i);
+      assert.match(p, /interview copilot/);
+      assert.match(p, /\[CANDIDATE PROFILE\]/);
+      assert.match(p, /NEWEST content is at the BOTTOM/);
+    }
+    assert.match(resolveChatPersona('technical-interview'), /time and space complexity/);
+  });
+
+  test('sales, recruiting, call-center and team-meet get their own persona', () => {
+    assert.match(resolveChatPersona('sales'), /sales-call copilot/);
+    assert.match(resolveChatPersona('recruiting'), /recruiter or interviewer/);
+    assert.match(resolveChatPersona('call-center'), /support-call copilot/);
+    assert.match(resolveChatPersona('team-meet'), /action items/);
+    for (const m of ['sales', 'recruiting', 'call-center', 'team-meet']) {
+      assert.doesNotMatch(resolveChatPersona(m), /Nói trong lớp|Tóm gọn/);
+    }
+  });
+
+  test('composeChatOverlayContext uses the mode persona; an explicit persona still wins', () => {
+    const interview = composeChatOverlayContext({ transcript: 't', chatHistory: '', modeTemplateType: 'looking-for-work' });
+    assert.match(interview, /interview copilot/);
+    assert.doesNotMatch(interview, /study assistant/);
+    const custom = composeChatOverlayContext({
+      transcript: 't', chatHistory: '', modeTemplateType: 'looking-for-work', persona: 'Custom persona.',
+    });
+    assert.match(custom, /Custom persona\./);
+    assert.doesNotMatch(custom, /interview copilot/);
+  });
+
+  test('the vague-question bound applies to every persona', () => {
+    const out = composeChatOverlayContext({
+      transcript: 't', chatHistory: '', modeTemplateType: 'sales', question: '¿qué dijo ella?',
+    });
+    assert.match(out, /what is being said RIGHT NOW/);
+  });
+});
+
+describe('composeChatOverlayContext — relevance-aware reference files', () => {
+  const filler = Array.from({ length: 80 }, (_, i) => `Responsibility ${i}: coordinate with stakeholders and maintain documentation.`).join('\n\n');
+
+  test('a fact at the TAIL of a long file survives when the question is about it', () => {
+    const resume = `Jane Doe — Staff Engineer\n\n${filler}\n\nCertifications: CKA Kubernetes administrator, AWS SAP.`;
+    const out = composeChatOverlayContext({
+      transcript: 't', chatHistory: '', files: [{ fileName: 'resume.md', content: resume }],
+      question: 'do I have a kubernetes certification',
+    });
+    assert.match(out, /CKA Kubernetes administrator/);
+    assert.match(out, /Jane Doe/);
+    assert.match(out, /\[\.\.\.truncated\]/);
+  });
+
+  test('the file section stays bounded (cost / latency guard)', () => {
+    const files = [1, 2, 3].map((i) => ({ fileName: `f${i}.txt`, content: filler }));
+    const out = composeChatOverlayContext({ transcript: 't', chatHistory: '', files, question: 'stakeholders' });
+    const section = out.slice(out.indexOf('[REFERENCE FILES:]'));
+    assert.ok(section.length < 11500, `section too large: ${section.length}`);
+  });
+
+  test('small files are included verbatim', () => {
+    const out = composeChatOverlayContext({
+      transcript: 't', chatHistory: '', files: [{ fileName: 'a.md', content: 'tiny body' }], question: 'x',
+    });
+    assert.match(out, /\[FILE: a\.md\]\ntiny body/);
+    assert.doesNotMatch(out, /truncated/);
+  });
+});
+
+describe('fetchChatOverlayContext — mode awareness', () => {
+  test('passes the active mode template type through to the persona', async () => {
+    const api = {
+      getIntelligenceContext: async () => ({ context: '', recapContext: '[INTERVIEWER]: tell me about yourself', lastAssistantMessage: null, activeMode: '' }),
+      modesGetActive: async () => ({ id: 'm1', name: 'Interview', templateType: 'looking-for-work', customContext: '', isActive: true, createdAt: '' }),
+      modesGetReferenceFiles: async () => [],
+    };
+    const r = await fetchChatOverlayContext('', api, 'what should I say');
+    assert.ok(r);
+    assert.match(r.context, /interview copilot/);
+  });
+
+  test('returns null without a live transcript (caller keeps its own path)', async () => {
+    const api = { getIntelligenceContext: async () => ({ context: '', recapContext: '  ', lastAssistantMessage: null, activeMode: '' }) };
+    assert.equal(await fetchChatOverlayContext('', api, 'hi'), null);
+  });
+
+  test('a failing mode lookup falls back to the study persona instead of throwing', async () => {
+    const api = {
+      getIntelligenceContext: async () => ({ context: '', recapContext: 'x', lastAssistantMessage: null, activeMode: '' }),
+      modesGetActive: async () => { throw new Error('boom'); },
+    };
+    const r = await fetchChatOverlayContext('', api, 'hi');
+    assert.match(r.context, /study assistant/);
   });
 });

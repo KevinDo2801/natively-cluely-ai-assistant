@@ -9,7 +9,7 @@ import { registerPrismLanguages } from '../utils/registerPrismLanguages';
 import nativelyIcon from './icon.png';
 import { useResolvedTheme } from '../hooks/useResolvedTheme';
 import { splitGistLineStreaming } from '../lib/displayMarkup';
-import { composeChatOverlayContext } from '../lib/chatOverlayContext';
+import { composeChatOverlayContext, isVagueChatQuestion } from '../lib/chatOverlayContext';
 
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
@@ -313,8 +313,7 @@ const MeetingChatOverlay: React.FC<MeetingChatOverlayProps> = ({
     // whichever transcript block is most "explainable" — often an older story.
     // When the question is ambiguous, nudge it toward the MOST RECENT content.
     const buildRecencyHint = useCallback((question: string): string => {
-        const VAGUE_QUESTION_RE = /\b(explain|describe|summarize|tell me (more|about)|what (did|does) (she|he|they|the (speaker|person|interviewer|candidate)|him|her) (say|mean)|what was (that|this|it)|repeat that|go on|continue|say that again|can you (say|repeat|clarify) (that|this|it))\b/i;
-        if (!VAGUE_QUESTION_RE.test(question)) return '';
+        if (!isVagueChatQuestion(question)) return '';
         return `\n\nThe question does not name a specific topic. If it is ambiguous, base the answer on the MOST RECENT part of the transcript above (the last thing discussed).`;
     }, []);
 
