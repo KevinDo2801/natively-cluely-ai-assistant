@@ -60,11 +60,11 @@ describe('connector turns vs the live deadline', () => {
 
 describe('connector artifacts vs the text-only stream', () => {
   test('the service reads artifacts from items and appends them to the answer', () => {
-    assert.match(serviceSource, /import \{ buildMediaBlock, collectMediaFromNotification, recoverAgentMessageText \} from '\.\/codexNotificationMedia\.mjs';/);
+    assert.match(serviceSource, /import \{ buildMediaBlock, collectMediaFromNotification, recoverAgentMessageText, selectAnswerMedia \} from '\.\/codexNotificationMedia\.mjs';/);
     assert.match(serviceSource, /else \{[\s\S]*?collectMediaFromNotification\(message\)[\s\S]*?turnMedia\.push\(entry\)/,
       'media must be collected from item notifications (never from the answer-text delta)');
-    assert.match(serviceSource, /const mediaBlock = buildMediaBlock\(streamedText, turnMedia\);[\s\S]*?if \(mediaBlock\) \{[\s\S]*?chunks\.push\(mediaBlock\);/,
-      'the artifact block must be appended once the turn completes');
+    assert.match(serviceSource, /const answerMedia = selectAnswerMedia\(turnMedia\);[\s\S]*?const mediaBlock = buildMediaBlock\(streamedText, answerMedia\);[\s\S]*?if \(mediaBlock\) \{[\s\S]*?chunks\.push\(mediaBlock\);/,
+      'the artifact block must be appended once the turn completes, filtered to images and design links');
   });
 
   test('a message delivered as an item is recovered instead of showing the no-answer line', () => {

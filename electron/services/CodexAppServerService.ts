@@ -4,7 +4,7 @@ import fs from 'fs';
 import os from 'os';
 import path from 'path';
 import { buildAutoApprovalResponse } from './codexPluginAutoApproval.mjs';
-import { buildMediaBlock, collectMediaFromNotification, recoverAgentMessageText } from './codexNotificationMedia.mjs';
+import { buildMediaBlock, collectMediaFromNotification, recoverAgentMessageText, selectAnswerMedia } from './codexNotificationMedia.mjs';
 
 // Developer instructions handed to the managed App Server thread. Both variants
 // keep the same hard bans (no shell, no local files, no delegation); they differ
@@ -841,11 +841,12 @@ export class CodexAppServerService extends EventEmitter {
               + `— the turn produced no text; the chat will show the no-answer fallback`,
             );
           }
-          const mediaBlock = buildMediaBlock(streamedText, turnMedia);
+          const answerMedia = selectAnswerMedia(turnMedia);
+          const mediaBlock = buildMediaBlock(streamedText, answerMedia);
           if (mediaBlock) {
             chunks.push(mediaBlock);
             streamedText += mediaBlock;
-            if (connectorTurnsAllowed) console.log(`[CodexAppServer] Attached ${turnMedia.length} connector artifact link(s) to the answer`);
+            if (connectorTurnsAllowed) console.log(`[CodexAppServer] Attached ${answerMedia.length} of ${turnMedia.length} connector artifact link(s) to the answer`);
           }
           finish();
         }

@@ -49,6 +49,7 @@
 
 import { renderToString } from 'katex';
 import { Marked } from 'marked';
+import { stripCalendarEventLinks } from './calendarEventLinks.ts';
 
 interface MathToken {
   type: string;
@@ -299,7 +300,7 @@ const streamingMarked = new Marked({
  * dollar openers are escaped so they cannot pair with a later currency/math `$`.
  */
 export function normalizeFinalizedMarkdownMath(markdown: string): string {
-  const normalizedMarkdown = normalizeBareMarkdownMath(markdown);
+  const normalizedMarkdown = normalizeBareMarkdownMath(stripCalendarEventLinks(markdown));
   let fenced = false;
   let fenceChar = '';
   let fenceLength = 0;
@@ -624,5 +625,8 @@ export function normalizeBareMarkdownMath(markdown: string): string {
 }
 
 export function renderStreamingMarkdown(markdown: string): string {
-  return streamingMarked.parse(normalizeBareMarkdownMath(markdown || ''), { async: false }) as string;
+  return streamingMarked.parse(
+    normalizeBareMarkdownMath(stripCalendarEventLinks(markdown || '')),
+    { async: false },
+  ) as string;
 }

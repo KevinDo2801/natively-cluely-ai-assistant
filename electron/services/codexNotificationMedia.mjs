@@ -245,6 +245,41 @@ function visibleLabel(entry) {
 }
 
 /**
+ * Decide which collected media is worth appending to the answer.
+ *
+ * Collection is deliberately broad (any https URL in a tool result), which is
+ * right for a design connector but wrong for a READ connector: a Calendar or
+ * Gmail lookup returns URLs buried in the data it read (event pages, ad and
+ * tracking links, "www.google.com", shop URLs from an email) and the answer
+ * ended with 26 unrelated links (live 2026-10-13, "hôm qua họp nói gì?").
+ *
+ * Images always pass (that is what the original fix is for). A plain link passes
+ * only on a design-GENERATION host (Canva, Figma), where a connector hands the
+ * user the artifact it just made. Document hosts (Google Docs/Drive, Notion,
+ * Airtable) are excluded: a Calendar/Drive lookup returns their links as
+ * attachments of what it READ, and they render as bare "edit"/"view" lines
+ * (live 2026-10-13). Every other link is dropped; the model writes the URLs
+ * that matter itself.
+ *
+ * @param {ExtractedMedia[]} media
+ * @returns {ExtractedMedia[]}
+ */
+const GENERATED_ARTIFACT_HOST_RE = /(^|\.)(canva\.com|figma\.com)$/i;
+
+export function selectAnswerMedia(media) {
+  if (!Array.isArray(media)) return [];
+  return media.filter((entry) => {
+    if (!entry?.url) return false;
+    if (entry.type === 'image') return true;
+    try {
+      return GENERATED_ARTIFACT_HOST_RE.test(new URL(entry.url).hostname);
+    } catch {
+      return false;
+    }
+  }).slice(0, MAX_MEDIA);
+}
+
+/**
  * Build the markdown block to append to an answer, skipping anything the model
  * already printed (so a connector that DID hand over a URL is not repeated).
  *

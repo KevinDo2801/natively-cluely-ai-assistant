@@ -12,7 +12,7 @@
 
 import { test, describe } from 'node:test';
 import assert from 'node:assert/strict';
-import { buildMediaBlock, collectMediaFromNotification, recoverAgentMessageText } from '../codexNotificationMedia.mjs';
+import { buildMediaBlock, collectMediaFromNotification, recoverAgentMessageText, selectAnswerMedia } from '../codexNotificationMedia.mjs';
 
 const note = (method, params) => ({ method, params: { threadId: 'thread-1', ...params } });
 
@@ -124,6 +124,41 @@ describe('connector media extraction', () => {
     assert.deepEqual(collectMediaFromNotification(note('item/completed', {
       item: { type: 'agentMessage', text: 'Xem https://www.canva.com/design/DAF999/view nhé' },
     })), [], 'mining the agent message would duplicate what the model already wrote');
+  });
+});
+
+// Live capture 2026-10-13: a Calendar lookup ("hôm qua họp nói gì?") ended with 26
+// unrelated links (event pages, www.google.com, shop URLs from event data).
+describe('selecting which media reaches the answer', () => {
+  test('drops links a read connector merely passed through', () => {
+    const media = [
+      { type: 'link', url: 'https://calendar.google.com/calendar/event?eid=abc', label: 'event' },
+      { type: 'link', url: 'https://www.google.com/', label: 'www.google.com' },
+      { type: 'link', url: 'https://www.kittyspout.com/products/metalbundles', label: 'metalbundles' },
+    ];
+    assert.deepEqual(selectAnswerMedia(media), []);
+  });
+
+  test('drops Google Docs/Drive links a lookup returned as attachments', () => {
+    assert.deepEqual(selectAnswerMedia([
+      { type: 'link', url: 'https://docs.google.com/document/d/1AbC/edit', label: 'edit' },
+      { type: 'link', url: 'https://drive.google.com/file/d/1AbC/view', label: 'view' },
+    ]), []);
+  });
+
+  test('keeps every image and design-host links', () => {
+    const image = { type: 'image', url: 'https://cdn.example.com/dog.png', label: 'dog.png' };
+    const design = { type: 'link', url: 'https://www.canva.com/design/DAF1/view', label: 'view' };
+    assert.deepEqual(selectAnswerMedia([
+      { type: 'link', url: 'https://www.google.com/', label: 'www.google.com' },
+      image,
+      design,
+    ]), [image, design]);
+  });
+
+  test('tolerates bad input and malformed urls', () => {
+    assert.deepEqual(selectAnswerMedia(undefined), []);
+    assert.deepEqual(selectAnswerMedia([{ type: 'link', url: 'not a url', label: 'x' }, null]), []);
   });
 });
 

@@ -14,6 +14,12 @@ export function collectMediaFromNotification(
 ): ExtractedMedia[];
 
 /**
+ * The subset of collected media worth appending: every image, plus plain links
+ * only on design/document hosts. Drops URLs a read connector merely passed through.
+ */
+export function selectAnswerMedia(media: ExtractedMedia[]): ExtractedMedia[];
+
+/**
  * The markdown block to append to an answer for media the model did not already
  * print. Returns '' when nothing is new.
  */
