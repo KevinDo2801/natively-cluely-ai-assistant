@@ -48,6 +48,12 @@ export interface LegacyPortDeps {
   assumeCurrentWhenVersionUnknown?: boolean;
   /** See AdaptOptions.assumeInScopeWhenUnknown. Required by the legacy store. */
   assumeInScopeWhenUnknown?: boolean;
+  /**
+   * Override the per-pass retrieval ceiling (ms). Production leaves this unset
+   * and gets `max(plan.timeoutMs × RETRIEVAL_CEILING_MULTIPLIER, RETRIEVAL_CEILING_FLOOR_MS)`;
+   * tests pass a small value so a hang can be asserted without waiting seconds.
+   */
+  ceilingMs?: number;
 }
 
 // ── Targeted-lookup detection (all-files stress run, 2026-08-01) ─────────────
@@ -90,6 +96,38 @@ const positionalDirection = (question: string): PositionalDirection | undefined 
   return w === 'first' || w === 'start' || w === 'starting' || w === 'opening' ? 'first' : 'last';
 };
 
+/**
+ * Hard ceiling for ONE retrieval pass, as a multiple of the plan's own
+ * `timeoutMs`. The plan's budget (1200 ms) was passed to the retriever but never
+ * enforced — the injected ports ignore it — so a stalled embedder or reranker
+ * held the whole V3 answer until its own 30 s timeout. The ceiling is generous
+ * (3× budget, never under 3 s) because hybrid retrieval legitimately runs past
+ * 1.2 s on a cold cache and cutting it early would trade latency for wrong
+ * "not found" answers; it only exists to turn a hang into a recorded failure.
+ */
+export const RETRIEVAL_CEILING_MULTIPLIER = 3;
+export const RETRIEVAL_CEILING_FLOOR_MS = 3000;
+
+export class RetrievalCeilingError extends Error {
+  constructor(ms: number) {
+    super(`retrieval_ceiling_exceeded: no result within ${ms}ms`);
+    this.name = 'RetrievalCeilingError';
+  }
+}
+
+async function withCeiling<T>(work: Promise<T>, ms: number): Promise<T> {
+  work.catch(() => { /* a late settle after the ceiling must not be unhandled */ });
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const ceiling = new Promise<never>((_, reject) => {
+    timer = setTimeout(() => reject(new RetrievalCeilingError(ms)), ms);
+  });
+  try {
+    return await Promise.race([work, ceiling]);
+  } finally {
+    if (timer) clearTimeout(timer);
+  }
+}
+
 export function createLegacyRetrievalPort(deps: LegacyPortDeps): RetrievalPort {
   const now = deps.now ?? (() => 0);
 
@@ -120,10 +158,14 @@ export function createLegacyRetrievalPort(deps: LegacyPortDeps): RetrievalPort {
         let raw: LegacyChunk[] = [];
         let failed: string | undefined;
         try {
-          raw = await deps.retrieve(query, {
-            topK: decision.retrievalPlan.maximumCandidates,
-            timeoutMs: decision.retrievalPlan.timeoutMs,
-          });
+          const budgetMs = decision.retrievalPlan.timeoutMs;
+          raw = await withCeiling(
+            Promise.resolve().then(() => deps.retrieve(query, {
+              topK: decision.retrievalPlan.maximumCandidates,
+              timeoutMs: budgetMs,
+            })),
+            deps.ceilingMs ?? Math.max(budgetMs * RETRIEVAL_CEILING_MULTIPLIER, RETRIEVAL_CEILING_FLOOR_MS),
+          );
         } catch (e) {
           // §22.1: a retrieval failure is RECORDED, never silently converted
           // into an ungrounded answer that looks grounded.

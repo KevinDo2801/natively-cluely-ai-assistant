@@ -1658,7 +1658,16 @@ export class ModeHybridRetriever {
         // that burned the latency budget on every turn.
         let queryEmbedding: number[];
         try {
-            queryEmbedding = await this.embeddingPipeline.getEmbeddingForQuery(queryText);
+            // Interactive query: bounded by a deadline so a slow embedder degrades
+            // to the lexical fallback below instead of stalling the answer ~30 s.
+            // `?.` keeps pipelines/mocks that only implement the plain method working.
+            const pipeline = this.embeddingPipeline as {
+                getEmbeddingForQueryWithin?: (text: string) => Promise<number[]>;
+                getEmbeddingForQuery: (text: string) => Promise<number[]>;
+            };
+            queryEmbedding = await (pipeline.getEmbeddingForQueryWithin
+                ? pipeline.getEmbeddingForQueryWithin(queryText)
+                : pipeline.getEmbeddingForQuery(queryText));
         } catch (error) {
             // Surface key-pool health in the failure so a 429-burst (vs. a genuine
             // outage) is distinguishable in logs without re-running with tracing on.

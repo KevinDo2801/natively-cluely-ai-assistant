@@ -184,6 +184,13 @@ function buildCallerOwnedModeInstructionsSystemPrompt(
   } catch { return ''; }
 }
 import { isAssistantIdentityQuestion, profileFactsReady } from './llm/manualProfileIntelligence';
+import {
+  startCallerOwnedChatEnrichment,
+  isLiveMeetingRagQueryable,
+  type EnrichmentResult as CallerOwnedEnrichmentResult,
+} from './llm/callerOwnedChatEnrichment';
+import { isPastMeetingRecallQuestion } from '../src/lib/pastMeetingRecall';
+import type { ProviderDataScope } from './llm/ProviderRouter';
 import { buildManualProfileEvidenceRoute } from './llm/profileAnswerBackend';
 import { DOC_GROUNDED_TOKEN_BUDGET } from './services/ModeContextRetriever';
 import { detectIncompleteNumericAnswer, completenessRegenFabricates, isDocGroundedAnswerType, isAssistantRefusal, SYSTEM_REFUSAL_RE } from './llm/documentGroundedPrompt';
@@ -1090,6 +1097,42 @@ export function initializeIpcHandlers(appState: AppState): void {
           }
         }
 
+        // ── PAST-MEETING RECALL ────────────────────────────────────────────────
+        // "hôm qua họp nói gì" / "what did we decide in last week's call" is about
+        // a FINISHED meeting. Neither the live transcript, the active mode's files
+        // nor V3's meeting port (current meeting id only) can answer it; the
+        // cross-meeting search that backs "search all meetings" can, but the chat
+        // pill never reached it. Strict detection (a past-time marker AND a
+        // meeting noun together, current-meeting references vetoed) keeps ordinary
+        // questions off this path, and an empty / failed search falls through to
+        // the normal answer — `throwWhenEmpty` suppresses the canned "nothing
+        // found" string for a question that may not have been about old meetings.
+        if (
+          !imagePaths?.length
+          && !options?.codexApp
+          && typeof message === 'string'
+          && isPastMeetingRecallQuestion(message)
+        ) {
+          try {
+            const ragManager = appState.getRAGManager();
+            if (ragManager?.isReady?.()) {
+              const recallStream = ragManager.queryGlobal(message, myController.signal, { throwWhenEmpty: true });
+              let answered = false;
+              for await (const chunk of recallStream) {
+                if (_chatStreamsBySender.get(senderId)?.streamId !== myStreamId) break;
+                answered = true;
+                streamBus.emitToken({ generationId: myStreamId, surface: 'desktop', intent: 'chat', text: chunk });
+              }
+              if (answered && _chatStreamsBySender.get(senderId)?.streamId === myStreamId) {
+                streamBus.emitDone({ generationId: myStreamId, surface: 'desktop', intent: 'chat' });
+                return null;
+              }
+            }
+          } catch {
+            // NO_RELEVANT_CONTEXT_FOUND / embedding failure / abort → normal path.
+          }
+        }
+
         // ── UNIFIED PIPELINE (C5): JIT RAG preflight, moved here from the
         // renderer's handleManualSubmit. Same contract: when the live meeting
         // has queryable chunks and no screenshots are attached, RAG answers
@@ -1142,6 +1185,7 @@ export function initializeIpcHandlers(appState: AppState): void {
         // Recap route through manual_chat with their own grounded transcript).
         let callerOwnsPrompt = false;
         let callerPromptContext: string | undefined;
+        let callerEnrichmentPromise: Promise<CallerOwnedEnrichmentResult> | null = null;
         try {
           const { isContextIntelligenceV3Enabled } = require('./context-intelligence/contracts/flag');
           // CALLER-OWNED PROMPT CONTRACT: `skipSystemPrompt + context` means the
@@ -1157,6 +1201,21 @@ export function initializeIpcHandlers(appState: AppState): void {
           // below (profile prepends, coding/answer contracts) can be rolled back
           // right before the stream for caller-owned turns.
           callerPromptContext = context;
+          // Typed chat with a live transcript (chatSurface) is composed by the
+          // renderer and bypasses V3, so it never saw the user's résumé / JD or
+          // anything beyond the transcript window of a long meeting. Start that
+          // enrichment NOW — it overlaps the rest of this handler's awaits and is
+          // awaited only right before the stream. Quick actions and voice leave
+          // chatSurface unset and are untouched. Always resolves; on any failure
+          // it adds nothing.
+          if (callerOwnsPrompt && options?.chatSurface === true && typeof message === 'string' && context) {
+            callerEnrichmentPromise = startCallerOwnedChatEnrichment({
+              question: message,
+              composedContext: context,
+              appState,
+              llmHelper,
+            });
+          }
           if (!callerOwnsPrompt && isContextIntelligenceV3Enabled()) {
             const { buildV3Prompt } = require('./context-intelligence/orchestration/engine-bridge');
             const { resolveModePolicy, isModeId, resolveModeIdOrWarn } = require('./context-intelligence/policies/mode-policy-registry');
@@ -1948,7 +2007,12 @@ export function initializeIpcHandlers(appState: AppState): void {
           const _hasCustomPrompt = Boolean((manualActiveMode && (manualActiveMode as any).hasCustomPrompt) ?? false);
           const _hasLiveTranscript = Boolean(intelligenceManager.getFormattedContext(100)?.trim());
           const _hasProfileFacts = _hasProfileFactsForTurn;
-          const _hasMeetingRag = Boolean(false); // meeting_rag is gated by chat:sendMessage IPC, not in this path
+          // True when the live-meeting index can answer right now (it used to be a
+          // hard-coded `false`, so turn-source decisions never knew meeting RAG
+          // existed). This only widens what the decision ALLOWS; nothing is
+          // injected on this legacy transport unless the JIT-RAG preflight above
+          // already answered the turn.
+          const _hasMeetingRag = isLiveMeetingRagQueryable(appState.getRAGManager?.());
           const _hasLongTermMemory = Boolean(isIntelligenceFlagEnabled('hindsightLiveRecall') && isIntelligenceFlagEnabled('hindsightMemory'));
           // Evidence-execution-repair (2026-07-11): resolve an explicit source
           // switch ONCE, before the contract is built, so "according to the
@@ -3592,7 +3656,25 @@ export function initializeIpcHandlers(appState: AppState): void {
           // prepends, coding/answer contracts, memory blocks — must never alter
           // it; restore the exact caller blob so the model sees ONLY what the
           // caller grounded the turn on.
-          if (callerOwnsPrompt && callerPromptContext) context = callerPromptContext;
+          let callerEnrichmentScopes: ProviderDataScope[] = [];
+          if (callerOwnsPrompt && callerPromptContext) {
+            context = callerPromptContext;
+            if (callerEnrichmentPromise) {
+              try {
+                const enrichment = await callerEnrichmentPromise;
+                if (enrichment.block) {
+                  context = `${callerPromptContext}\n\n${enrichment.block}`;
+                  callerEnrichmentScopes = enrichment.dataScopes;
+                }
+                console.log('[ManualChat] caller-owned enrichment', {
+                  ms: enrichment.ms,
+                  profile: enrichment.profile.included ? { chars: enrichment.profile.chars, docs: enrichment.profile.docs.length } : false,
+                  profileWithheld: enrichment.profile.withheld,
+                  meeting: enrichment.meeting,
+                });
+              } catch { /* enrichment is additive; the caller's own prompt stands */ }
+            }
+          }
           chatTrace.mark('provider_request_started', { ignoreKnowledgeMode: Boolean(ignoreKnowledge) });
           const stream = llmHelper.streamChat(
             message,
@@ -3601,7 +3683,7 @@ export function initializeIpcHandlers(appState: AppState): void {
             systemPromptOverride,
             ignoreKnowledge,
             isCodingChat || isSafetyAnswer || callerOwnsPrompt, // skipModeInjection; caller-owned turns are fully composed
-            [],    // extraDataScopes
+            callerEnrichmentScopes,    // extraDataScopes (profile / recalled-meeting blocks added above)
             myController.signal,
             // Coding gets a small reasoning budget (correctness); everything else
             // streams with thinking off (fastest TTFT).

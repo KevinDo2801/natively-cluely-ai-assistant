@@ -52,6 +52,22 @@ export class RAGRetriever {
     }
 
     /**
+     * Embed an interactive query under a deadline (see
+     * EmbeddingPipeline.getEmbeddingForQueryWithin). A timeout surfaces through
+     * the existing "Failed to embed query" path, which returns empty context and
+     * lets the caller fall through to its normal answer.
+     */
+    private embedQuery(query: string): Promise<number[]> {
+        const pipeline = this.embeddingPipeline as {
+            getEmbeddingForQueryWithin?: (text: string) => Promise<number[]>;
+            getEmbeddingForQuery: (text: string) => Promise<number[]>;
+        };
+        return pipeline.getEmbeddingForQueryWithin
+            ? pipeline.getEmbeddingForQueryWithin(query)
+            : pipeline.getEmbeddingForQuery(query);
+    }
+
+    /**
      * Retrieve relevant context for a query
      */
     async retrieve(
@@ -72,7 +88,7 @@ export class RAGRetriever {
         // 1. Embed the query
         let queryEmbedding: number[];
         try {
-            queryEmbedding = await this.embeddingPipeline.getEmbeddingForQuery(query);
+            queryEmbedding = await this.embedQuery(query);
         } catch (error) {
             console.error('[RAGRetriever] Failed to embed query:', error);
             // Return empty context on embedding failure
@@ -169,7 +185,7 @@ export class RAGRetriever {
         // Embed query
         let queryEmbedding: number[];
         try {
-            queryEmbedding = await this.embeddingPipeline.getEmbeddingForQuery(query);
+            queryEmbedding = await this.embedQuery(query);
         } catch (error) {
             console.error('[RAGRetriever] Failed to embed query:', error);
             return {

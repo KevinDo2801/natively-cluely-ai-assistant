@@ -17,6 +17,14 @@ const RETRY_DELAY_BASE_MS = 2000;
 // forever, silently stalling the entire pipeline until app restart.
 // 30s is generous for large chunks on slow connections (typical: 200-800ms).
 const EMBED_TIMEOUT_MS = 30_000;
+/**
+ * How long an interactive query may wait for its embedding before the caller
+ * degrades (lexical ranking / no recall). Overridable for slow networks.
+ */
+export const QUERY_EMBED_DEADLINE_MS = (() => {
+    const v = Number(process.env.NATIVELY_QUERY_EMBED_DEADLINE_MS);
+    return Number.isFinite(v) && v >= 250 ? v : 2500;
+})();
 
 /**
  * EmbeddingPipeline - Handles post-meeting embedding generation
@@ -703,6 +711,37 @@ export class EmbeddingPipeline {
             const embedding = await runQuery(fallback, 'fallback-live-query');
             this.promoteFallbackProvider(fallback);
             return embedding;
+        }
+    }
+
+    /**
+     * Interactive-query embedding with a DEADLINE.
+     *
+     * getEmbeddingForQuery() is bounded only by EMBED_TIMEOUT_MS (30 s) — right
+     * for indexing, wrong for a question the user is waiting on: a slow or
+     * rate-limited cloud embedder stalled the whole answer (V3's retrieval plan
+     * advertised a 1.2 s budget that nothing enforced). Callers on the typed-chat
+     * path use this instead; on a miss they already degrade (the mode retriever
+     * falls back to lexical ranking, the meeting retriever returns no chunks).
+     *
+     * Deliberately a RACE, not a cancel: the underlying call keeps running so
+     * its provider-failover bookkeeping (promoteFallbackProvider) behaves exactly
+     * as before — a transient slow response must not be turned into a failure
+     * that permanently flips the active embedding space.
+     */
+    async getEmbeddingForQueryWithin(text: string, deadlineMs: number = QUERY_EMBED_DEADLINE_MS): Promise<number[]> {
+        const work = this.getEmbeddingForQuery(text);
+        work.catch(() => { /* a late settle after the deadline must not be unhandled */ });
+        let timer: ReturnType<typeof setTimeout> | undefined;
+        const deadline = new Promise<never>((_, reject) => {
+            timer = setTimeout(() => reject(new Error(
+                `[EmbeddingPipeline] query embedding exceeded the ${deadlineMs}ms interactive deadline`
+            )), deadlineMs);
+        });
+        try {
+            return await Promise.race([work, deadline]);
+        } finally {
+            if (timer) clearTimeout(timer);
         }
     }
 

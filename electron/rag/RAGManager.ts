@@ -302,7 +302,8 @@ export class RAGManager {
      */
     async *queryGlobal(
         query: string,
-        abortSignal?: AbortSignal
+        abortSignal?: AbortSignal,
+        options?: { throwWhenEmpty?: boolean }
     ): AsyncGenerator<string, void, unknown> {
         if (!this.llmHelper) {
             throw new Error('LLM helper not initialized');
@@ -312,6 +313,12 @@ export class RAGManager {
         const context = await this.retriever.retrieveGlobal(query);
 
         if (context.chunks.length === 0) {
+            // The "search all meetings" surface wants a visible "nothing found"
+            // answer. A caller that is only PROBING for past-meeting evidence
+            // (the idle chat pill) wants to fall through to its normal answer
+            // instead of showing that canned string for an ordinary question —
+            // same sentinel queryMeeting uses for the identical situation.
+            if (options?.throwWhenEmpty) throw new Error('NO_RELEVANT_CONTEXT_FOUND');
             yield NO_GLOBAL_CONTEXT_FALLBACK;
             return;
         }
