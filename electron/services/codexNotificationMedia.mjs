@@ -38,6 +38,11 @@ const MEDIA_ROOTS_IMAGE_HINT = new Set(['images', 'image']);
 /** Hosts whose bare (extension-less) URLs are almost always a rendered design/page. */
 const DESIGN_HOST_RE = /(^|\.)(canva\.com|figma\.com|docs\.google\.com|drive\.google\.com|notion\.so|airtable\.com)$/i;
 
+/** Keys that carry an app's branding or a person's picture, never turn output. */
+const BRANDING_KEY_RE = /logo|icon|avatar|favicon|profile_?(?:image|photo|picture)/i;
+/** The same signal in the URL itself, for branding that arrives under a neutral key. */
+const BRANDING_URL_RE = /(?:^|[/_.-])(?:logo|icon|favicon|avatar)s?(?:[/_.-]|$)/i;
+
 const MAX_MEDIA = 6;
 const MAX_WALK_NODES = 400;
 const MAX_WALK_DEPTH = 6;
@@ -131,6 +136,10 @@ function collectFromNode(node, out, budget, hintedImage = false) {
   // 'imageUrl') makes its URLs images, whatever their path looks like.
   const nodeHinted = hintedImage || nodeType.includes('image');
   for (const [key, value] of Object.entries(node)) {
+    // App/connector METADATA, not something the connector produced for this
+    // turn: the app's own logo (`logoUrl` — Notion's logo was appended to a plain
+    // "hello" reply, live 2026-10-13), account avatars, favicons.
+    if (BRANDING_KEY_RE.test(key)) continue;
     const keyHinted = nodeHinted || key.toLowerCase().includes('image');
     if (typeof value === 'string') {
       for (const url of extractUrls(value)) out.push({ url, hintedImage: keyHinted });
@@ -266,11 +275,20 @@ function visibleLabel(entry) {
  */
 const GENERATED_ARTIFACT_HOST_RE = /(^|\.)(canva\.com|figma\.com)$/i;
 
+function isBrandingUrl(url) {
+  try {
+    const { pathname } = new URL(url);
+    return BRANDING_URL_RE.test(pathname);
+  } catch {
+    return false;
+  }
+}
+
 export function selectAnswerMedia(media) {
   if (!Array.isArray(media)) return [];
   return media.filter((entry) => {
     if (!entry?.url) return false;
-    if (entry.type === 'image') return true;
+    if (entry.type === 'image') return !isBrandingUrl(entry.url);
     try {
       return GENERATED_ARTIFACT_HOST_RE.test(new URL(entry.url).hostname);
     } catch {

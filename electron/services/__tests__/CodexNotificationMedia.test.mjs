@@ -146,6 +146,31 @@ describe('selecting which media reaches the answer', () => {
     ]), []);
   });
 
+  // Live 2026-10-13: a plain "hello" in a session with the Notion connector came
+  // back with Notion's full-size logo appended — app branding, not turn output.
+  test('never mines an app logo, icon or avatar from connector metadata', () => {
+    assert.deepEqual(collectMediaFromNotification(note('item/completed', {
+      item: { app: { name: 'Notion', logoUrl: 'https://cdn.example.com/notion.png', iconUrl: 'https://cdn.example.com/i.png' } },
+    })), []);
+    assert.deepEqual(collectMediaFromNotification(note('item/completed', {
+      result: { user: { avatar_url: 'https://cdn.example.com/me.png' } },
+    })), []);
+  });
+
+  test('still mines a real image sitting next to branding metadata', () => {
+    const media = collectMediaFromNotification(note('item/completed', {
+      item: { type: 'image', logoUrl: 'https://cdn.example.com/brand.png', imageUrl: 'https://cdn.example.com/dog-500.png' },
+    }));
+    assert.deepEqual(media.map((m) => m.url), ['https://cdn.example.com/dog-500.png']);
+  });
+
+  test('drops an image whose URL says it is a logo or icon', () => {
+    const logo = { type: 'image', url: 'https://cdn.example.com/brand/notion-logo.png', label: 'notion-logo.png' };
+    const icon = { type: 'image', url: 'https://cdn.example.com/assets/icon/app.png', label: 'app.png' };
+    const real = { type: 'image', url: 'https://cdn.example.com/renders/dog.png', label: 'dog.png' };
+    assert.deepEqual(selectAnswerMedia([logo, icon, real]), [real]);
+  });
+
   test('keeps every image and design-host links', () => {
     const image = { type: 'image', url: 'https://cdn.example.com/dog.png', label: 'dog.png' };
     const design = { type: 'link', url: 'https://www.canva.com/design/DAF1/view', label: 'view' };
