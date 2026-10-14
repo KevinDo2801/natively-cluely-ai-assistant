@@ -266,38 +266,55 @@ export class VectorStore {
         const queryBlob = this.embeddingToBlob(queryEmbedding);
         const dim = queryEmbedding.length;
         const vecTable = `vec_chunks_${dim}`;
-        const fetchLimit = (meetingId || spaceKey) ? limit * 4 : limit;
+        // The vec0 table is shared by every meeting and every embedding space of
+        // this dimension, so the nearest-neighbour pass cannot know which rows
+        // will survive the space / meeting filter below. Stale vectors (rows whose
+        // meeting was re-indexed or never stamped with a space) are common and
+        // sit in the same table; with a fixed over-fetch they crowd out the few
+        // valid chunks and the search returns nothing (seen live 2026-10-13: 2
+        // valid chunks among 1145 vectors, query matched older vectors first).
+        // So widen the pass until enough rows survive or the table is exhausted.
+        const filtered = Boolean(meetingId || spaceKey);
+        const MAX_FETCH = 8192;
+        let fetchLimit = filtered ? limit * 4 : limit;
+        let scored: ScoredChunk[] = [];
 
-        const vecRows = this.db.prepare(`
-            SELECT chunk_id, distance FROM ${vecTable}
-            WHERE embedding MATCH ? ORDER BY distance LIMIT ?
-        `).all(queryBlob, fetchLimit) as any[];
+        for (;;) {
+            const vecRows = this.db.prepare(`
+                SELECT chunk_id, distance FROM ${vecTable}
+                WHERE embedding MATCH ? ORDER BY distance LIMIT ?
+            `).all(queryBlob, fetchLimit) as any[];
 
-        if (vecRows.length === 0) return [];
+            if (vecRows.length === 0) return [];
 
-        const chunkIds = vecRows.map((r: any) => r.chunk_id);
-        const ph = chunkIds.map(() => '?').join(',');
-        let q = `SELECT c.* FROM chunks c JOIN meetings m ON c.meeting_id = m.id WHERE c.id IN (${ph})`;
-        const params: any[] = [...chunkIds];
-        if (meetingId) { q += ' AND c.meeting_id = ?'; params.push(meetingId); }
-        // Filter by composite embedding SPACE, not provider name. v1 and v2 Gemini
-        // are both provider='gemini' @ 768d, so a provider filter would leak v1
-        // vectors into v2 queries. A NULL space (not yet stamped / mid-reindex) is
-        // intentionally excluded → "empty, not wrong".
-        if (spaceKey) { q += ' AND m.embedding_space = ?'; params.push(spaceKey); }
+            const chunkIds = vecRows.map((r: any) => r.chunk_id);
+            const ph = chunkIds.map(() => '?').join(',');
+            let q = `SELECT c.* FROM chunks c JOIN meetings m ON c.meeting_id = m.id WHERE c.id IN (${ph})`;
+            const params: any[] = [...chunkIds];
+            if (meetingId) { q += ' AND c.meeting_id = ?'; params.push(meetingId); }
+            // Filter by composite embedding SPACE, not provider name. v1 and v2 Gemini
+            // are both provider='gemini' @ 768d, so a provider filter would leak v1
+            // vectors into v2 queries. A NULL space (not yet stamped / mid-reindex) is
+            // intentionally excluded → "empty, not wrong".
+            if (spaceKey) { q += ' AND m.embedding_space = ?'; params.push(spaceKey); }
 
-        const chunkRows = this.db.prepare(q).all(...params) as any[];
-        const chunkMap = new Map<number, any>();
-        for (const row of chunkRows) chunkMap.set(row.id, row);
+            const chunkRows = this.db.prepare(q).all(...params) as any[];
+            const chunkMap = new Map<number, any>();
+            for (const row of chunkRows) chunkMap.set(row.id, row);
 
-        const scored: ScoredChunk[] = [];
-        for (const vecRow of vecRows) {
-            const c = chunkMap.get(vecRow.chunk_id);
-            if (!c) continue;
-            const similarity = 1 - vecRow.distance;
-            if (similarity >= minSimilarity) {
-                scored.push({ ...this.rowToChunk(c), similarity });
+            scored = [];
+            for (const vecRow of vecRows) {
+                const c = chunkMap.get(vecRow.chunk_id);
+                if (!c) continue;
+                const similarity = 1 - vecRow.distance;
+                if (similarity >= minSimilarity) {
+                    scored.push({ ...this.rowToChunk(c), similarity });
+                }
             }
+
+            const exhausted = vecRows.length < fetchLimit || fetchLimit >= MAX_FETCH;
+            if (!filtered || scored.length >= limit || exhausted) break;
+            fetchLimit = Math.min(fetchLimit * 4, MAX_FETCH);
         }
         return scored.slice(0, limit);
     }
