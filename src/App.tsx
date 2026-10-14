@@ -34,7 +34,6 @@ import { trackAppOpen } from "./lib/toasterGating"
 import { analytics } from "./lib/analytics/analytics.service"
 import { ErrorBoundary } from "./components/ErrorBoundary"
 import ModesSettings from "./components/settings/ModesSettings"
-import { ProfileIntelligenceSettings } from "./components/ProfileIntelligenceSettings"
 import type { AudioSourceMode } from './types/audio'
 
 
@@ -65,9 +64,8 @@ function shouldMountDevReviewHost(): boolean {
 const CropperWindow = React.lazy(() => import('./components/Cropper'))
 
 type LauncherIsolation = 'onboarding' | 'global-surfaces' | 'permissions-toaster' | 'no-modals' | null
-type ManagerPanel = 'modes' | 'profile' | null
+type ManagerPanel = 'modes' | null
 
-type ManagerPanelDirection = 'forward' | 'backward'
 
 const MANAGER_EASE = [0.22, 0.61, 0.36, 1] as const
 const MANAGER_SHELL_EASE = [0.16, 1, 0.3, 1] as const
@@ -183,7 +181,6 @@ const App: React.FC = () => {
   const [isSettingsOpen, setIsSettingsOpen] = useState(false);
   const [settingsInitialTab, setSettingsInitialTab] = useState<string>('general');
   const [activeManagerPanel, setActiveManagerPanel] = useState<ManagerPanel>(null);
-  const [managerPanelDirection, setManagerPanelDirection] = useState<ManagerPanelDirection>('forward');
   const managerDialogRef = useRef<HTMLDivElement>(null);
   const managerOpenerRef = useRef<HTMLElement | null>(null);
   const reduceManagerMotion = useReducedMotion() ?? false;
@@ -205,16 +202,8 @@ const App: React.FC = () => {
     setIsSettingsOpen(true);
   }, []);
 
-  const openProfileExclusive = useCallback(() => {
-    if (!activeManagerPanel) rememberManagerOpener();
-    if (activeManagerPanel === 'modes') setManagerPanelDirection('forward');
-    setIsSettingsOpen(false);
-    setActiveManagerPanel('profile');
-  }, [activeManagerPanel, rememberManagerOpener]);
-
   const openModesExclusive = useCallback(() => {
     if (!activeManagerPanel) rememberManagerOpener();
-    if (activeManagerPanel === 'profile') setManagerPanelDirection('backward');
     setIsSettingsOpen(false);
     setActiveManagerPanel('modes');
   }, [activeManagerPanel, rememberManagerOpener]);
@@ -903,7 +892,6 @@ const App: React.FC = () => {
                   <Launcher
                     onStartMeeting={handleStartMeeting}
                     onOpenSettings={(tab = 'general') => openSettingsExclusive(tab)}
-                    onOpenProfile={() => openProfileExclusive()}
                     onOpenModes={() => openModesExclusive()}
                     onPageChange={setIsLauncherMainView}
                     ollamaPullStatus={ollamaPullStatus}
@@ -938,7 +926,7 @@ const App: React.FC = () => {
                         data-testid="manager-panel-host"
                         role="dialog"
                         aria-modal="true"
-                        aria-label={activeManagerPanel === 'modes' ? 'Modes Manager' : 'Profile Intelligence'}
+                        aria-label="Modes Manager"
                         tabIndex={-1}
                         variants={managerCardVariants}
                         onClick={(event) => event.stopPropagation()}
@@ -946,11 +934,7 @@ const App: React.FC = () => {
                           willChange: 'transform, opacity',
                           transformOrigin: 'center',
                         }}
-                        className={`manager-panel-shell rounded-2xl overflow-hidden border border-border-muted bg-bg-elevated ${
-                          activeManagerPanel === 'modes'
-                            ? 'w-[1128px] h-[758px] max-w-[96vw] max-h-[94vh]'
-                            : 'w-[820px] h-[600px] max-w-[95vw] max-h-[90vh]'
-                        }`}
+                        className="manager-panel-shell rounded-2xl overflow-hidden border border-border-muted bg-bg-elevated w-[1128px] h-[758px] max-w-[96vw] max-h-[94vh]"
                       >
                         <AnimatePresence mode="wait" initial={false}>
                         <motion.div
@@ -962,15 +946,9 @@ const App: React.FC = () => {
                           exit="exit"
                           className="h-full w-full"
                         >
-                          {activeManagerPanel === 'modes' ? (
-                            <ModesSettings
-                              onClose={closeManagerPanel}
-                            />
-                          ) : (
-                            <ProfileIntelligenceSettings
-                              onClose={closeManagerPanel}
-                            />
-                          )}
+                          <ModesSettings
+                            onClose={closeManagerPanel}
+                          />
                         </motion.div>
                         </AnimatePresence>
                       </motion.div>

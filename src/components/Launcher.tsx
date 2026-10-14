@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { useT } from '../i18n';
-import { ArrowRight, ArrowLeft, MoreHorizontal, ChevronRight, Settings, RefreshCw, Ghost, ChevronDown, Trash2, Download, DownloadCloud, CheckCircle, AlertCircle, UserSearch, Folder, FolderPlus, FolderOpen, Check, Pencil, X, Mic, Volume2, AudioLines, Upload } from 'lucide-react';
+import { ArrowRight, ArrowLeft, MoreHorizontal, ChevronRight, Settings, RefreshCw, Ghost, ChevronDown, Trash2, Download, DownloadCloud, CheckCircle, AlertCircle, Folder, FolderPlus, FolderOpen, Check, Pencil, X, Mic, Volume2, AudioLines, Upload } from 'lucide-react';
 import { generateMeetingPDF } from '../utils/pdfGenerator';
 import icon from "./icon.png";
 import LinkCalendarPrompt from './ui/LinkCalendarPrompt';
@@ -62,7 +62,6 @@ interface Folder {
 interface LauncherProps {
     onStartMeeting: (audioSource?: AudioSourceMode) => void;
     onOpenSettings: (tab?: string) => void;
-    onOpenProfile?: () => void;
     onOpenModes?: () => void;
     onPageChange?: (isMain: boolean) => void;
     ollamaPullStatus?: 'idle' | 'downloading' | 'complete' | 'failed';
@@ -112,7 +111,7 @@ const formatDuration = (ms: number) => {
     return `${minutes}:${Number(seconds) < 10 ? '0' : ''}${seconds}`;
 };
 
-const Launcher: React.FC<LauncherProps> = ({ onStartMeeting, onOpenSettings, onOpenProfile, onOpenModes, onPageChange, ollamaPullStatus = 'idle', ollamaPullPercent = 0, ollamaPullMessage = '' }) => {
+const Launcher: React.FC<LauncherProps> = ({ onStartMeeting, onOpenSettings, onOpenModes, onPageChange, ollamaPullStatus = 'idle', ollamaPullPercent = 0, ollamaPullMessage = '' }) => {
     const t = useT();
     const [meetings, setMeetings] = useState<Meeting[]>([]);
     const [isDetectable, setIsDetectable] = useState(false);
@@ -159,7 +158,6 @@ const Launcher: React.FC<LauncherProps> = ({ onStartMeeting, onOpenSettings, onO
     const [submittedGlobalQuery, setSubmittedGlobalQuery] = useState('');
 
     const [showModesOnboarding, setShowModesOnboarding] = useState(false);
-    const [showProfileOnboarding, setShowProfileOnboarding] = useState(false);
     // StrictMode-safe guard for mount-only side-effects: the dev build
     // intentionally double-invokes effects to surface this class of bug.
     const mountedOnceRef = useRef<boolean>(false);
@@ -1055,105 +1053,6 @@ const Launcher: React.FC<LauncherProps> = ({ onStartMeeting, onOpenSettings, onO
 
                 {/* Right: Actions */}
                 <div className={`flex items-center gap-1 no-drag shrink-0 ${isMac ? 'mr-1' : ''}`}>
-                    <div className="relative group/profile-btn select-none">
-                        <button
-                            data-testid="open-profile-intelligence"
-                            onClick={() => {
-                                setShowProfileOnboarding(false);
-                                localStorage.setItem('natively_seen_profile_onboarding_v1', 'true');
-                                window.electronAPI?.onboardingSetFlag?.('seenProfileOnboarding', true).catch(() => {});
-                                onOpenProfile?.();
-                            }}
-                            title={t("Profile Intelligence")}
-                            className={`p-2 text-text-secondary hover:text-text-primary transition-all duration-300 ${isLight ? 'hover:drop-shadow-[0_0_6px_rgba(0,0,0,0.25)]' : 'hover:drop-shadow-[0_0_8px_rgba(255,255,255,0.5)]'}`}
-                        >
-                            <UserSearch size={18} />
-                        </button>
-                        
-                        <AnimatePresence>
-                            {showProfileOnboarding && (
-                                <motion.div
-                                    key="profile-onboarding-pill"
-                                    initial={{ opacity: 0, y: 6, scale: 0.96, filter: "blur(4px)" }}
-                                    animate={{ opacity: 1, y: 0, scale: 1, filter: "blur(0px)" }}
-                                    exit={{ opacity: 0, y: -2, scale: 0.98, filter: "blur(2px)", transition: { duration: 0.15, ease: "easeOut" } }}
-                                    transition={{ type: "spring", stiffness: 350, damping: 25, mass: 1 }}
-                                    className={`absolute top-[38px] right-2 w-[270px] rounded-[20px] p-4 z-[300] origin-top-right backdrop-blur-[40px] saturate-[180%] transform-gpu ${
-                                        isLight 
-                                        ? 'bg-white/70 shadow-[0_8px_30px_rgb(0,0,0,0.12),0_0_0_1px_rgba(0,0,0,0.04)]' 
-                                        : 'bg-[#18181A]/70 shadow-[0_8px_30px_rgb(0,0,0,0.6),0_0_0_1px_rgba(255,255,255,0.08)]'
-                                    }`}
-                                >
-                                    {/* Triangle Pointer */}
-                                    <div className={`absolute -top-[5px] right-[14px] w-2.5 h-2.5 rotate-45 rounded-tl-[3px] ${
-                                        isLight 
-                                        ? 'bg-white/70 border-t border-l border-black/5 backdrop-blur-[40px]' 
-                                        : 'bg-[#18181A]/70 border-t border-l border-white/5 backdrop-blur-[40px]'
-                                    }`} />
-                                    
-                                    <div className="relative flex gap-3">
-                                        <div className={`w-9 h-9 flex items-center justify-center shrink-0 rounded-full ${
-                                            isLight
-                                            ? 'bg-blue-500 bg-opacity-10 text-blue-500'
-                                            : 'bg-blue-500 bg-opacity-15 text-blue-400'
-                                        }`}>
-                                            <UserSearch size={18} />
-                                        </div>
-                                        <div className="flex-1 pt-[2px]">
-                                            <h3 className="text-[14px] font-semibold tracking-[-0.015em] mb-1 flex items-center gap-2">
-                                                <span className={isLight ? 'text-slate-900' : 'text-slate-100'}>{t('Profile Intel')}</span>
-                                                <span className={`text-[10px] font-medium px-1.5 py-[1px] rounded-[5px] ${
-                                                    isLight
-                                                    ? 'bg-blue-50 text-blue-600 border border-blue-100/50'
-                                                    : 'bg-blue-500/10 text-blue-400'
-                                                }`}>
-                                                    {t('Beta')}
-                                                </span>
-                                            </h3>
-                                            <p className={`text-[12px] leading-[1.35] mb-3.5 tracking-[-0.01em] ${
-                                                isLight ? 'text-slate-500' : 'text-slate-400'
-                                            }`}>
-                                                {t('Manage your persona, career history, and active job description.')}
-                                            </p>
-                                            <div className="flex justify-end gap-1.5 isolate">
-                                                <button 
-                                                    onClick={(e) => { 
-                                                        e.stopPropagation(); 
-                                                        setShowProfileOnboarding(false); 
-                                                        localStorage.setItem('natively_seen_profile_onboarding_v1', 'true'); 
-                                                        window.electronAPI?.onboardingSetFlag?.('seenProfileOnboarding', true).catch(() => {});
-                                                    }}
-                                                    className={`text-[12px] font-medium px-3.5 py-[6px] rounded-full transition-all active:scale-95 ${
-                                                        isLight
-                                                        ? 'text-slate-500 hover:text-slate-800 hover:bg-slate-100/60'
-                                                        : 'text-slate-400 hover:text-slate-100 hover:bg-white/10'
-                                                    }`}
-                                                >
-                                                    {t('Dismiss')}
-                                                </button>
-                                                <button
-                                                    onClick={(e) => {
-                                                        e.stopPropagation();
-                                                        onOpenProfile?.();
-                                                        setShowProfileOnboarding(false);
-                                                        localStorage.setItem('natively_seen_profile_onboarding_v1', 'true');
-                                                        window.electronAPI?.onboardingSetFlag?.('seenProfileOnboarding', true).catch(() => {});
-                                                    }}
-                                                    className={`text-[12px] font-medium px-4 py-[6px] rounded-full transition-all active:scale-95 shadow-sm ${
-                                                        isLight
-                                                        ? 'bg-slate-900 text-white hover:bg-slate-800'
-                                                        : 'bg-slate-100 text-slate-900 hover:bg-white'
-                                                    }`}
-                                                >
-                                                    {t('Try it out')}
-                                                </button>
-                                            </div>
-                                        </div>
-                                    </div>
-                                </motion.div>
-                            )}
-                        </AnimatePresence>
-                    </div>
                     <div className="relative group/modes-btn select-none">
                         <button
                             data-testid="open-modes-manager"

@@ -120,20 +120,20 @@ test.describe('FINDING-006: Natively E2E smoke', () => {
     await page.goto(`http://localhost:${APP_PORT}`);
     await page.waitForLoadState('networkidle');
 
-    const profileTrigger = page.getByTestId('open-profile-intelligence');
-    if (!await profileTrigger.isVisible().catch(() => false)) {
-      test.skip('Profile Intelligence trigger not found in this UI layout');
+    const modesTrigger = page.getByTestId('open-modes-manager');
+    if (!await modesTrigger.isVisible().catch(() => false)) {
+      test.skip('Modes trigger not found in this UI layout');
       return;
     }
 
-    await profileTrigger.click();
+    await modesTrigger.click();
     const host = page.getByTestId('manager-panel-host');
     await expect(host).toHaveCount(1);
-    await expect(page.getByTestId('manager-panel-profile')).toBeVisible();
+    await expect(page.getByTestId('manager-panel-modes')).toBeVisible();
 
     await page.keyboard.press('Escape');
     await expect(host).toHaveCount(0);
-    await expect(profileTrigger).toBeFocused();
+    await expect(modesTrigger).toBeFocused();
   });
 
   test('manager surface opens and closes with reduced motion', async ({ page }) => {

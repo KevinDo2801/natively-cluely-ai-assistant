@@ -98,9 +98,10 @@ export const STAGES: StageConfig[] = [
       requiresMeetingInactive: true,
     },
     requiresStages: ['browser_extension'],
-    skipWhen: (s) =>
-      s.hasProfile ||
-      s.seenProfileOnboarding,
+    // Profile Intelligence has no entry point any more (its Launcher button and
+    // panel were removed). Always skipped so the Modes stage that
+    // `requiresStages` it is never left waiting on a prompt nobody can reach.
+    skipWhen: () => true,
   },
 
   // ──────────────────────────────────────────────────────────────
