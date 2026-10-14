@@ -104,3 +104,30 @@ export function isPastMeetingRecallQuestion(text: string): boolean {
   const native = raw.toLowerCase().normalize('NFC');
   return NATIVE_RES.some((re) => re.test(native));
 }
+
+// "the meeting just now" / "meeting vừa rồi" / "my last call" name the MOST RECENT
+// finished meeting. Such a question is generic ("what was it about?") and shares
+// no distinctive words with the transcript, so no similarity score can admit the
+// right passages; the recency itself is the signal. Kept separate from the broader
+// past-meeting hint so it can select by recency instead of by similarity.
+const LATEST_ADJ =
+  '(?:last|previous|latest|most recent|recent) (?:meeting|call|session|lecture|class|interview|standup)'
+  + '|(?:cuoc hop|buoi hop|lan hop|buoi hoc|cuoc goi|buoi phong van|tiet hoc) (?:truoc|vua roi|vua xong|vua nay|gan nhat|moi nhat|gan day)';
+
+const LATEST_MARKER =
+  'vua roi|vua xong|vua nay|moi xong|moi ket thuc|gan nhat|moi nhat|gan day|just now|just finished|just ended|a moment ago|a minute ago';
+
+const LATEST_RE = new RegExp(
+  `${B}(?:${LATEST_ADJ})${E}`
+  + `|${B}(?:${LATEST_MARKER})${E}[^.?!\n]{0,32}?${B}(?:${MEETING_LATIN})${E}`
+  + `|${B}(?:${MEETING_LATIN})${E}[^.?!\n]{0,32}?${B}(?:${LATEST_MARKER})${E}`,
+  'iu',
+);
+
+export function isLatestMeetingQuestion(text: string): boolean {
+  const raw = String(text ?? '').trim();
+  if (!raw) return false;
+  const folded = foldLatin(raw);
+  if (CURRENT_LATIN_RE.test(folded)) return false;
+  return LATEST_RE.test(folded);
+}

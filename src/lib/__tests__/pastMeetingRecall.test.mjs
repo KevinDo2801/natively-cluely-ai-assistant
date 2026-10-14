@@ -1,6 +1,6 @@
 import { describe, test } from 'node:test';
 import assert from 'node:assert/strict';
-import { isPastMeetingRecallQuestion } from '../pastMeetingRecall.ts';
+import { isPastMeetingRecallQuestion, isLatestMeetingQuestion } from '../pastMeetingRecall.ts';
 
 const RECALL = {
   en: ['what did we decide in yesterday\'s meeting', 'summarize last week\'s call', 'what was said in the previous meeting', 'in our last meeting who owned the migration', 'remind me what the interview yesterday covered'],
@@ -52,5 +52,19 @@ describe('isPastMeetingRecallQuestion', () => {
   test('tolerates null / undefined', () => {
     assert.equal(isPastMeetingRecallQuestion(undefined), false);
     assert.equal(isPastMeetingRecallQuestion(null), false);
+  });
+});
+
+describe('isLatestMeetingQuestion — the most recent finished meeting', () => {
+  test('recognises "the meeting just now" in several phrasings', () => {
+    for (const q of ['nội dung meeting vừa rồi là gì?', 'what was the last meeting about', 'summarize the meeting we just finished', 'cuộc họp gần nhất nói gì', 'nội dung buổi học vừa xong']) {
+      assert.equal(isLatestMeetingQuestion(q), true, q);
+    }
+  });
+
+  test('ignores questions about the live meeting, other topics and bare greetings', () => {
+    for (const q of ['what did she say earlier in this meeting', 'nội dung meeting này là gì', 'hello', 'giải thích đạo hàm', 'hôm qua họp nói gì']) {
+      assert.equal(isLatestMeetingQuestion(q), false, q);
+    }
   });
 });

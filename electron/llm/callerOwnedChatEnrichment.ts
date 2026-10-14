@@ -261,7 +261,7 @@ function buildProfileBlock(input: EnrichmentInput, limits: EnrichmentLimits) {
 
 // ── live meeting recall ─────────────────────────────────────────────────────
 
-async function withDeadline<T>(work: Promise<T>, ms: number): Promise<{ value?: T; timedOut: boolean; failed: boolean }> {
+export async function withDeadline<T>(work: Promise<T>, ms: number): Promise<{ value?: T; timedOut: boolean; failed: boolean }> {
   // The loser of the race must never surface as an unhandled rejection (fatal
   // in the Electron main process).
   work.catch(() => { /* handled via the race below */ });
@@ -283,7 +283,7 @@ async function withDeadline<T>(work: Promise<T>, ms: number): Promise<{ value?: 
 const DISTINCTIVE_MIN_LEN = 4;
 
 /** True when (nearly) every distinctive token of `text` already occurs in `contextTokens`. */
-function isCoveredByContext(text: string, contextTokens: ReadonlySet<string>, overlap: number): boolean {
+export function isCoveredByContext(text: string, contextTokens: ReadonlySet<string>, overlap: number): boolean {
   const toks = [...new Set(tokenizeForRelevance(text).filter((t) => t.length >= DISTINCTIVE_MIN_LEN || /[^\u0000-\u007f]/.test(t)))];
   if (toks.length === 0) return true;
   let hit = 0;
@@ -397,6 +397,30 @@ export function isLiveMeetingRagQueryable(ragManager: any): boolean {
 }
 
 /**
+ * Semantic search over the in-progress meeting's indexed chunks, or undefined
+ * when that index cannot answer right now. Shared by this module's own wiring
+ * and the unified chat-source selector so both ask the same index the same way.
+ */
+export function makeLiveMeetingSearch(
+  rag: any,
+): ((query: string, opts: { topK: number; maxTokens: number }) => Promise<MeetingChunkLike[]>) | undefined {
+  if (!isLiveMeetingRagQueryable(rag)) return undefined;
+  return async (query, opts) => {
+    const { formatChunkForContext } = require('../rag/SemanticChunker');
+    const res = await rag.getRetriever().retrieve(query, {
+      meetingId: LIVE_MEETING_RAG_ID,
+      topK: opts.topK,
+      maxTokens: opts.maxTokens,
+    });
+    return (res?.chunks ?? []).map((c: any) => ({
+      text: formatChunkForContext(c),
+      startMs: c.startMs,
+      similarity: c.similarity,
+    }));
+  };
+}
+
+/**
  * Resolve the active mode, profile docs and live-meeting index from the app and
  * start the enrichment. Lazy `require`s mirror the rest of ipcHandlers (these
  * modules pull in the Electron-bound singletons). Returns a promise that always
@@ -417,22 +441,7 @@ export function startCallerOwnedChatEnrichment(args: {
     const modeId = resolveModeIdOrWarn(modeInfo?.templateType ?? null, 'ipc/manual-chat-enrichment', { quietWhenAbsent: true });
     const policy = resolveModePolicy(modeId);
 
-    const rag = args.appState?.getRAGManager?.();
-    const searchLiveMeeting = isLiveMeetingRagQueryable(rag)
-      ? async (query: string, opts: { topK: number; maxTokens: number }): Promise<MeetingChunkLike[]> => {
-          const { formatChunkForContext } = require('../rag/SemanticChunker');
-          const res = await rag.getRetriever().retrieve(query, {
-            meetingId: LIVE_MEETING_RAG_ID,
-            topK: opts.topK,
-            maxTokens: opts.maxTokens,
-          });
-          return (res?.chunks ?? []).map((c: any) => ({
-            text: formatChunkForContext(c),
-            startMs: c.startMs,
-            similarity: c.similarity,
-          }));
-        }
-      : undefined;
+    const searchLiveMeeting = makeLiveMeetingSearch(args.appState?.getRAGManager?.());
 
     const loadProfileDocs = policy.profileSources?.length
       ? () => {

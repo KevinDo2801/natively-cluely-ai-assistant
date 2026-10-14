@@ -1,13 +1,15 @@
-// Structural wiring assertions for the 2026-10 chat-intelligence work in
+// Structural wiring assertions for the chat-source selection in
 // electron/ipcHandlers.ts (gemini-chat-stream handler):
-//   * past-meeting recall preflight
-//   * caller-owned (typed chat + live transcript) enrichment
+//   * ONE selector (electron/llm/chatSources.ts) feeds BOTH assembly paths
+//   * the idle V3 path and the caller-owned (typed chat + live transcript) path
+//   * earlier meetings are no longer a keyword-gated, separate answer
 //   * truthful `_hasMeetingRag`
 //
 // The handler is thousands of lines and bound to Electron singletons, so — like
 // ContextOsManualChatWiring.test.mjs — these pin the contract at the source
 // level; behaviour of the pieces themselves is covered by their own unit tests
-// (CallerOwnedChatEnrichment2026_10, pastMeetingRecall, RetrievalCeiling).
+// (ChatSources, PastMeetingSource, ModeReferencePassthrough,
+// CallerOwnedChatEnrichment2026_10, pastMeetingRecall, RetrievalCeiling).
 //
 // Run with: node --test electron/intelligence/__tests__/ManualChatMeetingEnrichmentWiring2026_10.test.mjs
 
@@ -19,41 +21,47 @@ import path from 'node:path';
 const repoRoot = process.cwd();
 const ipc = fs.readFileSync(path.resolve(repoRoot, 'electron/ipcHandlers.ts'), 'utf8');
 const ui = fs.readFileSync(path.resolve(repoRoot, 'src/components/NativelyInterface.tsx'), 'utf8');
+const wiring = fs.readFileSync(path.resolve(repoRoot, 'electron/llm/chatSourcesWiring.ts'), 'utf8');
 
-test('imports the enrichment, recall detector and scope type', () => {
-  assert.match(ipc, /startCallerOwnedChatEnrichment/);
+test('imports the shared source selector, the live-index probe and the scope type', () => {
+  assert.match(ipc, /import \{ startChatSourcesForTurn \} from '\.\/llm\/chatSourcesWiring'/);
   assert.match(ipc, /isLiveMeetingRagQueryable/);
-  assert.match(ipc, /from '\.\.\/src\/lib\/pastMeetingRecall'/);
   assert.match(ipc, /import type \{ ProviderDataScope \} from '\.\/llm\/ProviderRouter'/);
 });
 
-test('past-meeting recall runs BEFORE the live-meeting JIT RAG preflight', () => {
-  const recall = ipc.indexOf('PAST-MEETING RECALL');
+test('earlier meetings are not a separate keyword-gated answer any more', () => {
+  assert.doesNotMatch(ipc, /queryGlobal\(message, myController\.signal/, 'the keyword-gated standalone recall answer must be gone');
+  assert.doesNotMatch(ipc, /PAST-MEETING RECALL/);
+});
+
+test('a question that names an earlier meeting is never answered from the live index', () => {
   const jit = ipc.indexOf('UNIFIED PIPELINE (C5): JIT RAG preflight');
-  assert.ok(recall > 0 && jit > 0, 'both blocks must exist');
-  assert.ok(recall < jit, 'recall must be tried first so a question about an old meeting never lands on the live index');
+  assert.ok(jit > 0);
+  const gate = ipc.slice(jit, jit + 900);
+  assert.match(gate, /!isPastMeetingRecallQuestion\(message\)/);
 });
 
-test('past-meeting recall is strictly gated and falls through when nothing is found', () => {
-  const block = ipc.slice(ipc.indexOf('PAST-MEETING RECALL'), ipc.indexOf('UNIFIED PIPELINE (C5): JIT RAG preflight'));
-  assert.match(block, /!imagePaths\?\.length/, 'screenshot turns must not be diverted');
-  assert.match(block, /!options\?\.codexApp/, 'plugin turns must not be diverted');
-  assert.match(block, /isPastMeetingRecallQuestion\(message\)/);
-  assert.match(block, /queryGlobal\(message, myController\.signal, \{ throwWhenEmpty: true \}\)/,
-    'an empty search must fall through, not show the canned "nothing found" string');
-  assert.match(block, /catch \{[\s\S]*normal path/, 'a failed search must fall through to the normal answer');
-  assert.match(block, /_chatStreamsBySender\.get\(senderId\)\?\.streamId !== myStreamId/, 'must honour stream supersession');
+test('the idle V3 path starts the selector before composing and settles it with V3 facts', () => {
+  const start = ipc.indexOf("startChatSourcesForTurn({\n              path: 'idle'");
+  const compose = ipc.indexOf('const composed = await buildV3Prompt(');
+  assert.ok(start > 0 && compose > start, 'sources must start BEFORE buildV3Prompt so they overlap its awaits');
+  const settleAt = ipc.indexOf('chatSources.settle({');
+  assert.ok(settleAt > compose);
+  const tail = ipc.slice(settleAt, settleAt + 900);
+  assert.match(tail, /evidenceCount: composed\.evidenceCount/);
+  assert.match(tail, /overridesNoEvidenceNotice: composed\.fallbackUsed !== 'NONE'/);
+  assert.match(tail, /v3Scopes = \[\.\.\.new Set<ProviderDataScope>\(\[\.\.\.v3Scopes, \.\.\.extra\.dataScopes\]\)\]/);
 });
 
-test('enrichment starts only for typed chat on the caller-owned path', () => {
+test('the live-transcript path starts the SAME selector only for typed chat', () => {
   assert.match(
     ipc,
-    /callerOwnsPrompt && options\?\.chatSurface === true && typeof message === 'string' && context\)\s*\{\s*callerEnrichmentPromise = startCallerOwnedChatEnrichment\(/,
+    /callerOwnsPrompt && options\?\.chatSurface === true && typeof message === 'string' && context\)\s*\{\s*callerEnrichmentPromise = startChatSourcesForTurn\(\{\s*path: 'live-transcript'/,
     'quick actions / voice (no chatSurface) must be untouched',
   );
 });
 
-test('enrichment is awaited where the caller blob is restored, and its scopes reach the transport', () => {
+test('the selector result is awaited where the caller blob is restored, and its scopes reach the transport', () => {
   const restore = ipc.indexOf('context = callerPromptContext;');
   assert.ok(restore > 0, 'restore site missing');
   const tail = ipc.slice(restore, restore + 1800);
@@ -69,11 +77,23 @@ test('enrichment is awaited where the caller blob is restored, and its scopes re
   );
 });
 
-test('enrichment failure can never break the turn', () => {
+test('a selector failure can never break the turn', () => {
   const restore = ipc.indexOf('await callerEnrichmentPromise');
   const around = ipc.slice(restore - 120, restore + 900);
   assert.match(around, /try \{/);
   assert.match(around, /catch \{ \/\* enrichment is additive/);
+  const idle = ipc.slice(ipc.indexOf('chatSources.settle({') - 80, ipc.indexOf('chatSources.settle({') + 900);
+  assert.match(idle, /catch \(srcErr\)/);
+  assert.match(wiring, /catch \(err\)[\s\S]*startChatSources\(INERT_PLAN/, 'a wiring error must degrade to an inert plan');
+});
+
+test('every selected source is logged, so a skipped source is never silent', () => {
+  assert.match(ipc, /console\.log\('\[ChatSources\]', extra\.report\)/);
+  assert.match(ipc, /console\.log\('\[ChatSources\]', enrichment\.report\)/);
+});
+
+test('the selector never pulls a profile (Profile Intelligence was removed)', () => {
+  assert.match(wiring, /profileSources: \[\]/);
 });
 
 test('_hasMeetingRag reflects the live index instead of a hard-coded false', () => {

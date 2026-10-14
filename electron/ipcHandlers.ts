@@ -184,11 +184,9 @@ function buildCallerOwnedModeInstructionsSystemPrompt(
   } catch { return ''; }
 }
 import { isAssistantIdentityQuestion, profileFactsReady } from './llm/manualProfileIntelligence';
-import {
-  startCallerOwnedChatEnrichment,
-  isLiveMeetingRagQueryable,
-  type EnrichmentResult as CallerOwnedEnrichmentResult,
-} from './llm/callerOwnedChatEnrichment';
+import { isLiveMeetingRagQueryable } from './llm/callerOwnedChatEnrichment';
+import { startChatSourcesForTurn } from './llm/chatSourcesWiring';
+import type { ChatSourcesResult } from './llm/chatSources';
 import { isPastMeetingRecallQuestion } from '../src/lib/pastMeetingRecall';
 import type { ProviderDataScope } from './llm/ProviderRouter';
 import { buildManualProfileEvidenceRoute } from './llm/profileAnswerBackend';
@@ -1097,41 +1095,10 @@ export function initializeIpcHandlers(appState: AppState): void {
           }
         }
 
-        // ── PAST-MEETING RECALL ────────────────────────────────────────────────
-        // "hôm qua họp nói gì" / "what did we decide in last week's call" is about
-        // a FINISHED meeting. Neither the live transcript, the active mode's files
-        // nor V3's meeting port (current meeting id only) can answer it; the
-        // cross-meeting search that backs "search all meetings" can, but the chat
-        // pill never reached it. Strict detection (a past-time marker AND a
-        // meeting noun together, current-meeting references vetoed) keeps ordinary
-        // questions off this path, and an empty / failed search falls through to
-        // the normal answer — `throwWhenEmpty` suppresses the canned "nothing
-        // found" string for a question that may not have been about old meetings.
-        if (
-          !imagePaths?.length
-          && !options?.codexApp
-          && typeof message === 'string'
-          && isPastMeetingRecallQuestion(message)
-        ) {
-          try {
-            const ragManager = appState.getRAGManager();
-            if (ragManager?.isReady?.()) {
-              const recallStream = ragManager.queryGlobal(message, myController.signal, { throwWhenEmpty: true });
-              let answered = false;
-              for await (const chunk of recallStream) {
-                if (_chatStreamsBySender.get(senderId)?.streamId !== myStreamId) break;
-                answered = true;
-                streamBus.emitToken({ generationId: myStreamId, surface: 'desktop', intent: 'chat', text: chunk });
-              }
-              if (answered && _chatStreamsBySender.get(senderId)?.streamId === myStreamId) {
-                streamBus.emitDone({ generationId: myStreamId, surface: 'desktop', intent: 'chat' });
-                return null;
-              }
-            }
-          } catch {
-            // NO_RELEVANT_CONTEXT_FOUND / embedding failure / abort → normal path.
-          }
-        }
+        // Earlier meetings are no longer a separate keyword-gated answer here. They
+        // are one of the sources `startChatSourcesForTurn` weighs for EVERY typed
+        // turn (see electron/llm/chatSources.ts), attached to whichever prompt the
+        // turn already builds, so the answer keeps its persona, mode and files.
 
         // ── UNIFIED PIPELINE (C5): JIT RAG preflight, moved here from the
         // renderer's handleManualSubmit. Same contract: when the live meeting
@@ -1139,7 +1106,10 @@ export function initializeIpcHandlers(appState: AppState): void {
         // through the SAME bus stream (the renderer sees identical tokens);
         // otherwise fall through to the LLM path below. RAG-answered turns
         // never touch SessionTracker sinks, exactly like the old preflight.
-        if (!imagePaths?.length && !(options?.skipSystemPrompt === true && Boolean(context)) && typeof message === 'string' && message.trim().length > 0) {
+        // A question that names an EARLIER meeting must not be answered from the live
+        // index; it falls through to the normal path, where the earlier-meeting source
+        // (chatSources) attaches the recalled passages.
+        if (!imagePaths?.length && !(options?.skipSystemPrompt === true && Boolean(context)) && typeof message === 'string' && message.trim().length > 0 && !isPastMeetingRecallQuestion(message)) {
           try {
             const ragManager = appState.getRAGManager();
             if (
@@ -1185,7 +1155,7 @@ export function initializeIpcHandlers(appState: AppState): void {
         // Recap route through manual_chat with their own grounded transcript).
         let callerOwnsPrompt = false;
         let callerPromptContext: string | undefined;
-        let callerEnrichmentPromise: Promise<CallerOwnedEnrichmentResult> | null = null;
+        let callerEnrichmentPromise: Promise<ChatSourcesResult> | null = null;
         try {
           const { isContextIntelligenceV3Enabled } = require('./context-intelligence/contracts/flag');
           // CALLER-OWNED PROMPT CONTRACT: `skipSystemPrompt + context` means the
@@ -1202,19 +1172,23 @@ export function initializeIpcHandlers(appState: AppState): void {
           // right before the stream for caller-owned turns.
           callerPromptContext = context;
           // Typed chat with a live transcript (chatSurface) is composed by the
-          // renderer and bypasses V3, so it never saw the user's résumé / JD or
-          // anything beyond the transcript window of a long meeting. Start that
-          // enrichment NOW — it overlaps the rest of this handler's awaits and is
-          // awaited only right before the stream. Quick actions and voice leave
-          // chatSurface unset and are untouched. Always resolves; on any failure
-          // it adds nothing.
+          // renderer and bypasses V3, so it never saw anything beyond the
+          // transcript window of a long meeting, nor earlier meetings. The shared
+          // source selector (electron/llm/chatSources.ts) decides what to add —
+          // the same decision the idle V3 path makes — and starts NOW so it
+          // overlaps the rest of this handler's awaits; it is awaited only right
+          // before the stream. Quick actions and voice leave chatSurface unset and
+          // are untouched. Always resolves; on any failure it adds nothing.
           if (callerOwnsPrompt && options?.chatSurface === true && typeof message === 'string' && context) {
-            callerEnrichmentPromise = startCallerOwnedChatEnrichment({
+            callerEnrichmentPromise = startChatSourcesForTurn({
+              path: 'live-transcript',
               question: message,
               composedContext: context,
+              hasImages: Boolean(imagePaths?.length),
               appState,
-              llmHelper,
-            });
+              liveMeetingId: (appState.getIntelligenceManager?.() as any)
+                ?.getSessionTracker?.()?.getMeetingMetadata?.()?.id ?? null,
+            }).settle();
           }
           if (!callerOwnsPrompt && isContextIntelligenceV3Enabled()) {
             const { buildV3Prompt } = require('./context-intelligence/orchestration/engine-bridge');
@@ -1357,6 +1331,17 @@ export function initializeIpcHandlers(appState: AppState): void {
             // The skill prefix is stripped for V3 too — otherwise the model reads
             // a literal "/humanize " at the head of the question (PR #429 Bug 003).
             const v3Question = String((skillStrippedMessage ?? message) || '');
+            // Source selection for this turn (electron/llm/chatSources.ts): earlier
+            // meetings and the like start NOW and overlap V3's own awaits; the
+            // reference files need V3's evidence count and are resolved at settle().
+            const chatSources = startChatSourcesForTurn({
+              path: 'idle',
+              question: v3Question,
+              hasImages: (imagePaths?.length ?? 0) > 0,
+              files,
+              appState,
+              liveMeetingId: v3MeetingId,
+            });
             const composed = await buildV3Prompt({
               surface: 'manual-chat',
               pathTag: 'ipc',
@@ -1577,35 +1562,26 @@ export function initializeIpcHandlers(appState: AppState): void {
             // Bug 003: V3 owns this turn end to end, so if the skill block is not
             // appended here it is injected nowhere at all.
             const v3SystemPrompt = skillPromptBlock ? `${composed.system}\n\n## ACTIVE SKILL\n${skillPromptBlock}` : composed.system;
-            // A file the user attached to the mode must reach the model even when
-            // V3 supplied no evidence for it (non-English question → FAST path, or
-            // a lexical miss). Pure helper; only fires on zero evidence. The
-            // privacy toggle is read live and the scope is declared to the
-            // transport like any other packed evidence.
+            // Extra sources chosen by the shared selector: a file attached to the
+            // mode (only when V3 supplied no evidence for it — non-English question →
+            // FAST path, or a lexical miss) and relevant passages from earlier
+            // meetings. The privacy toggles are read live inside the selector and
+            // the scopes of whatever was included are declared to the transport
+            // like any other packed evidence.
             let v3User: string = composed.user;
             let v3Scopes: ProviderDataScope[] = composed.packedDataScopes ?? [];
             try {
-              const { buildModeReferencePassthrough } = require('./llm/modeReferencePassthrough');
-              const { readProviderScopePolicy } = require('./context-intelligence/policies/provider-scope-policy');
-              const passthrough = buildModeReferencePassthrough({
-                files,
-                question: v3Question,
+              const extra = await chatSources.settle({
                 evidenceCount: composed.evidenceCount,
                 overridesNoEvidenceNotice: composed.fallbackUsed !== 'NONE',
-                scopePolicy: readProviderScopePolicy(),
               });
-              console.log('[ManualChat] mode reference passthrough', {
-                applied: Boolean(passthrough.block),
-                files: passthrough.files,
-                chars: passthrough.chars,
-                skipped: passthrough.skipped ?? null,
-              });
-              if (passthrough.block) {
-                v3User = `${composed.user}\n\n${passthrough.block}`;
-                v3Scopes = [...new Set<ProviderDataScope>([...v3Scopes, ...passthrough.dataScopes])];
+              console.log('[ChatSources]', extra.report);
+              if (extra.block) {
+                v3User = `${composed.user}\n\n${extra.block}`;
+                v3Scopes = [...new Set<ProviderDataScope>([...v3Scopes, ...extra.dataScopes])];
               }
-            } catch (passErr) {
-              console.warn('[ManualChat] mode reference passthrough failed:', (passErr as Error)?.message ?? passErr);
+            } catch (srcErr) {
+              console.warn('[ChatSources] failed — answering without extra sources:', (srcErr as Error)?.message ?? srcErr);
             }
             const v3Stream = llmHelper.streamChatWithOutcome(
               v3User,
@@ -3696,12 +3672,7 @@ export function initializeIpcHandlers(appState: AppState): void {
                   context = `${callerPromptContext}\n\n${enrichment.block}`;
                   callerEnrichmentScopes = enrichment.dataScopes;
                 }
-                console.log('[ManualChat] caller-owned enrichment', {
-                  ms: enrichment.ms,
-                  profile: enrichment.profile.included ? { chars: enrichment.profile.chars, docs: enrichment.profile.docs.length } : false,
-                  profileWithheld: enrichment.profile.withheld,
-                  meeting: enrichment.meeting,
-                });
+                console.log('[ChatSources]', enrichment.report);
               } catch { /* enrichment is additive; the caller's own prompt stands */ }
             }
           }
