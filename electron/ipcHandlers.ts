@@ -1577,8 +1577,38 @@ export function initializeIpcHandlers(appState: AppState): void {
             // Bug 003: V3 owns this turn end to end, so if the skill block is not
             // appended here it is injected nowhere at all.
             const v3SystemPrompt = skillPromptBlock ? `${composed.system}\n\n## ACTIVE SKILL\n${skillPromptBlock}` : composed.system;
+            // A file the user attached to the mode must reach the model even when
+            // V3 supplied no evidence for it (non-English question → FAST path, or
+            // a lexical miss). Pure helper; only fires on zero evidence. The
+            // privacy toggle is read live and the scope is declared to the
+            // transport like any other packed evidence.
+            let v3User: string = composed.user;
+            let v3Scopes: ProviderDataScope[] = composed.packedDataScopes ?? [];
+            try {
+              const { buildModeReferencePassthrough } = require('./llm/modeReferencePassthrough');
+              const { readProviderScopePolicy } = require('./context-intelligence/policies/provider-scope-policy');
+              const passthrough = buildModeReferencePassthrough({
+                files,
+                question: v3Question,
+                evidenceCount: composed.evidenceCount,
+                overridesNoEvidenceNotice: composed.fallbackUsed !== 'NONE',
+                scopePolicy: readProviderScopePolicy(),
+              });
+              console.log('[ManualChat] mode reference passthrough', {
+                applied: Boolean(passthrough.block),
+                files: passthrough.files,
+                chars: passthrough.chars,
+                skipped: passthrough.skipped ?? null,
+              });
+              if (passthrough.block) {
+                v3User = `${composed.user}\n\n${passthrough.block}`;
+                v3Scopes = [...new Set<ProviderDataScope>([...v3Scopes, ...passthrough.dataScopes])];
+              }
+            } catch (passErr) {
+              console.warn('[ManualChat] mode reference passthrough failed:', (passErr as Error)?.message ?? passErr);
+            }
             const v3Stream = llmHelper.streamChatWithOutcome(
-              composed.user,
+              v3User,
               imagePaths,
               undefined,
               v3SystemPrompt,
@@ -1592,7 +1622,7 @@ export function initializeIpcHandlers(appState: AppState): void {
               // already filtered the evidence against the same policy, so these
               // scopes are by construction permitted; declaring them keeps the
               // transport's routing/denial decision honest instead of guessed.
-              composed.packedDataScopes ?? [],
+              v3Scopes,
               myController.signal,
               undefined, // thinkingBudget — keep the interactive default
               // v3Owned: LLMHelper must TRANSPORT this prompt, not rewrite it.

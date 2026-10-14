@@ -328,8 +328,15 @@ describe('the V3 transport declares the scopes it is sending', () => {
   // is guarded here rather than not at all.
   test('ipcHandlers passes the bridge-declared scopes into streamChat', () => {
     const src = fs.readFileSync(path.join(repoRoot, 'electron/ipcHandlers.ts'), 'utf8');
-    assert.match(src, /composed\.packedDataScopes \?\? \[\],/,
+    // The scopes start from what the bridge declared, may only be WIDENED by the
+    // mode-reference passthrough (which declares its own scope), and are what
+    // the stream call receives — never a literal [].
+    assert.match(src, /let v3Scopes: ProviderDataScope\[\] = composed\.packedDataScopes \?\? \[\];/,
+      'the V3 call site must start from the bridge-declared scopes');
+    assert.match(src, /v3Scopes,\s*\n\s*myController\.signal,/,
       'the V3 call site must declare its real data scopes, not []');
+    assert.match(src, /passthrough\.dataScopes/,
+      'content added by the passthrough must declare its scope to the transport');
   });
 });
 
