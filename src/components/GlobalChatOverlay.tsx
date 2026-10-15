@@ -6,6 +6,8 @@ import { motion, AnimatePresence } from 'framer-motion';
 import { genMessageId } from '../utils/messageId';
 import nativelyIcon from './icon.png';
 import { useResolvedTheme } from '../hooks/useResolvedTheme';
+import ReactMarkdown from 'react-markdown';
+import remarkGfm from 'remark-gfm';
 
 // ============================================
 // Types
@@ -85,8 +87,25 @@ const AssistantMessage: React.FC<{ content: string; isStreaming?: boolean }> = (
             transition={{ duration: 0.15 }}
             className="flex flex-col items-start mb-6"
         >
-            <div className="text-text-primary text-[15px] leading-relaxed max-w-[85%]">
-                {content}
+            <div className="text-text-primary text-[15px] leading-relaxed max-w-[85%] markdown-content">
+                <ReactMarkdown
+                    remarkPlugins={[remarkGfm]}
+                    components={{
+                        p: ({ node, ...props }: any) => <p className="mb-2 last:mb-0 leading-relaxed" {...props} />,
+                        a: ({ node, ...props }: any) => <a className="text-accent-primary hover:underline" target="_blank" rel="noreferrer" {...props} />,
+                        strong: ({ node, ...props }: any) => <strong className="font-semibold" {...props} />,
+                        h1: ({ node, ...props }: any) => <h1 className="text-lg font-bold mt-3 mb-2" {...props} />,
+                        h2: ({ node, ...props }: any) => <h2 className="text-base font-bold mt-3 mb-2" {...props} />,
+                        h3: ({ node, ...props }: any) => <h3 className="text-[15px] font-semibold mt-2 mb-1" {...props} />,
+                        ul: ({ node, ...props }: any) => <ul className="list-disc pl-5 my-2 space-y-1" {...props} />,
+                        ol: ({ node, ...props }: any) => <ol className="list-decimal pl-5 my-2 space-y-1" {...props} />,
+                        li: ({ node, ...props }: any) => <li className="pl-1" {...props} />,
+                        pre: ({ node, ...props }: any) => <pre className="my-2 overflow-x-auto rounded-lg bg-bg-tertiary p-3 text-[13px]" {...props} />,
+                        code: ({ node, ...props }: any) => <code className="rounded bg-bg-tertiary px-1 py-0.5 font-mono text-[13px]" {...props} />,
+                    }}
+                >
+                    {content}
+                </ReactMarkdown>
             </div>
             {!isStreaming && content && (
                 <button
