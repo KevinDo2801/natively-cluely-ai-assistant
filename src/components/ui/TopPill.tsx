@@ -165,8 +165,9 @@ export default function TopPill({
                                     : 'Show Natively'
                     }
                     className={`top-pill-center-segment
-            flex items-center gap-2
+            flex items-center justify-center gap-2
             group
+            w-[74px] shrink-0
             ${dictateActive ? "px-2.5 py-1" : "px-3 py-1"}
             rounded-full
             backdrop-blur-md

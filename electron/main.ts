@@ -5523,7 +5523,18 @@ export class AppState {
     onAutoStop: (result: { text: string; error?: string }) => void,
     options?: { provider?: 'assemblyai'; language?: string },
   ): Promise<void> {
-    if (this.isMeetingActive || this._isDraining || this._pendingTeardown) {
+    if (this.isMeetingActive || this._endMeetingInFlight) {
+      throw new Error('Dictation is unavailable while a meeting is active. End the meeting first, then try again.');
+    }
+    // `_pendingTeardown` keeps the (already resolved) promise of the last ended
+    // meeting until the next startMeeting() clears it, so its mere presence
+    // must not block dictation. Wait for a teardown that is genuinely still
+    // running (it releases the native mic), then drop the stale reference.
+    if (this._pendingTeardown) {
+      try { await this._pendingTeardown; } catch { /* teardown logs its own failure */ }
+      if (!this.isMeetingActive) this._pendingTeardown = null;
+    }
+    if (this.isMeetingActive || this._isDraining || this._pendingTeardown || this._endMeetingInFlight) {
       throw new Error('Dictation is unavailable while a meeting is active. End the meeting first, then try again.');
     }
     if (this.audioTestCapture || this.audioTestSystemCapture || this._audioTestStarting) {
