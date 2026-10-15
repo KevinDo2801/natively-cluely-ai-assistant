@@ -837,6 +837,9 @@ const MeetingDetails: React.FC<MeetingDetailsProps> = ({ meeting: initialMeeting
     const [query, setQuery] = useState('');
     const [isCopied, setIsCopied] = useState(false);
     const [isChatOpen, setIsChatOpen] = useState(false);
+    // Ask bar focused → it takes the room and Continue folds into a round icon.
+    const [askFocused, setAskFocused] = useState(false);
+    const askExpanded = askFocused || isChatOpen;
     const [isContinuing, setIsContinuing] = useState(false);
     const [submittedQuery, setSubmittedQuery] = useState('');
 
@@ -2189,10 +2192,13 @@ ${meeting.detailedSummary.keyPoints?.map(item => `- ${item}`).join('\n') || 'Non
                             onClick={handleContinueSession}
                             disabled={isContinuing}
                             title={t("Continue recording on this meeting")}
-                            className="shrink-0 inline-flex items-center gap-1.5 h-[42px] px-4 bg-transparent backdrop-blur-[24px] backdrop-saturate-[140%] shadow-[0_8px_30px_rgb(0,0,0,0.12)] border border-white/20 rounded-full text-sm font-medium text-text-primary hover:bg-white/[0.06] disabled:opacity-60 transition-all duration-200"
+                            aria-label={t("Continue this session")}
+                            className={`shrink-0 inline-flex items-center justify-center h-[42px] overflow-hidden whitespace-nowrap bg-transparent backdrop-blur-[24px] backdrop-saturate-[140%] shadow-[0_8px_30px_rgb(0,0,0,0.12)] border border-white/20 rounded-full text-sm font-medium text-text-primary hover:bg-white/[0.06] disabled:opacity-60 transition-all duration-300 ease-out ${askExpanded ? 'w-[42px] px-0' : 'w-[204px] px-4'}`}
                         >
-                            <Mic size={15} />
-                            {isContinuing ? t('Continuing…') : t('Continue this session')}
+                            <Mic size={15} className="shrink-0" />
+                            <span className={`transition-all duration-200 overflow-hidden ${askExpanded ? 'w-0 ml-0 opacity-0' : 'ml-1.5 opacity-100'}`}>
+                                {isContinuing ? t('Continuing…') : t('Continue this session')}
+                            </span>
                         </button>
                         <div className="flex-1 min-w-0 relative group">
                             {/* Dark Glass Effect Input (Matching Reference) */}
@@ -2201,6 +2207,8 @@ ${meeting.detailedSummary.keyPoints?.map(item => `- ${item}`).join('\n') || 'Non
                                 value={query}
                                 onChange={(e) => setQuery(e.target.value)}
                                 onKeyDown={handleInputKeyDown}
+                                onFocus={() => setAskFocused(true)}
+                                onBlur={() => setAskFocused(false)}
                                 placeholder={t("Ask about this meeting...")}
                                 className="w-full pl-5 pr-12 py-3 bg-transparent backdrop-blur-[24px] backdrop-saturate-[140%] shadow-[0_8px_30px_rgb(0,0,0,0.12)] border border-white/20 rounded-full text-sm text-text-primary placeholder-text-tertiary/70 focus:outline-none transition-shadow duration-200"
                             />
