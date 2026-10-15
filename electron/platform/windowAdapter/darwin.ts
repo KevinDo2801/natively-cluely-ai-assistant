@@ -26,7 +26,7 @@ export function createDarwinWindowAdapter(): WindowAdapter {
     cropperWindowOptions() { return { type: 'toolbar' } as Partial<BrowserWindowConstructorOptions>; },
 
     launcherIconPath(mode: LauncherDisguise, isPackaged: boolean): string {
-      const devBase = path.resolve(__dirname, '../../../assets');
+      const devBase = path.resolve(__dirname, '../../../../assets');
       const appIcon = isPackaged
         ? path.join(process.resourcesPath, 'natively.icns')
         : path.join(devBase, 'natively.icns');

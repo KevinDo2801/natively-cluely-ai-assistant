@@ -26,7 +26,7 @@ export function createWin32WindowAdapter(): WindowAdapter {
     },
 
     launcherIconPath(mode: LauncherDisguise, isPackaged: boolean): string {
-      const devBase = path.resolve(__dirname, '../../../assets');
+      const devBase = path.resolve(__dirname, '../../../../assets');
       const appIcon = isPackaged
         ? path.join(process.resourcesPath, 'assets/icons/win/icon.ico')
         : path.join(devBase, 'icons/win/icon.ico');
