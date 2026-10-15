@@ -33,6 +33,8 @@ interface UpcomingCalendarCardProps {
     totalCount?: number;
     /** Called when the user clicks an event (hero or a side row) to open its detail page. */
     onSelectEvent?: (event: CalendarMeeting) => void;
+    /** Called when the user clicks the "+N more" hint (e.g. to open the Calendar settings). */
+    onShowMore?: () => void;
     className?: string;
 }
 
@@ -65,6 +67,7 @@ const UpcomingCalendarCard: React.FC<UpcomingCalendarCardProps> = ({
     meetings = [],
     totalCount,
     onSelectEvent,
+    onShowMore,
     className = '',
 }) => {
     const t = useT();
@@ -196,9 +199,14 @@ const UpcomingCalendarCard: React.FC<UpcomingCalendarCardProps> = ({
                                 ))}
 
                                 {hiddenCount > 0 && (
-                                    <div className={`cc-hint text-[10.5px] font-semibold text-center leading-4 px-2 ${isLight ? 'text-text-tertiary' : 'text-white/35'}`}>
+                                    <button
+                                        type="button"
+                                        onClick={onShowMore}
+                                        disabled={!onShowMore}
+                                        className={`cc-hint text-[10.5px] font-semibold text-center leading-4 px-2 ${onShowMore ? 'cursor-pointer hover:underline' : 'cursor-default'} ${isLight ? 'text-text-tertiary hover:text-text-secondary' : 'text-white/35 hover:text-white/60'}`}
+                                    >
                                         +{hiddenCount} {t('more')}
-                                    </div>
+                                    </button>
                                 )}
                             </aside>
                         )}

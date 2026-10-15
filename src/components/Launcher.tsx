@@ -569,11 +569,24 @@ const Launcher: React.FC<LauncherProps> = ({ onStartMeeting, onOpenSettings, onO
     // that guard would break the rules of hooks on the error path.
     const detectableToggleInit = useToggleInit();
 
+    // Re-evaluate "still running" once a minute so a finished event drops off on its own.
+    const [clockNow, setClockNow] = useState(() => Date.now());
+    useEffect(() => {
+        const id = setInterval(() => setClockNow(Date.now()), 60_000);
+        return () => clearInterval(id);
+    }, []);
+
     // Upcoming meetings (in-progress up to 5 min ago, or any future event in the API's 7-day
     // window), sorted soonest-first. Feed up to 4 to the calendar card (main event + up to 3
     // side rows); `totalCount` still reflects every upcoming event for the "+N more" hint.
+    // An event stays listed (and stays the hero) while it is still running: kept until
+    // its end time, or — with no end time — 60 min after it starts.
     const upcomingMeetings = upcomingEvents
-        .filter(e => new Date(e.startTime).getTime() - Date.now() > -5 * 60000)
+        .filter(e => {
+            const start = new Date(e.startTime).getTime();
+            const end = e.endTime ? new Date(e.endTime).getTime() : NaN;
+            return (Number.isFinite(end) ? end : start + 60 * 60000) > clockNow;
+        })
         .sort((a, b) => new Date(a.startTime).getTime() - new Date(b.startTime).getTime());
     const visibleMeetings = upcomingMeetings.slice(0, 4);
 
@@ -1545,6 +1558,7 @@ const Launcher: React.FC<LauncherProps> = ({ onStartMeeting, onOpenSettings, onO
                                                 onConnect={() => setIsCalendarConnected(true)}
                                                 meetings={visibleMeetings}
                                                 totalCount={upcomingMeetings.length}
+                                                onShowMore={() => onOpenSettings('calendar')}
                                                 onSelectEvent={(ev) => setSelectedCalendarEvent(ev)}
                                             />
                                         </div>
