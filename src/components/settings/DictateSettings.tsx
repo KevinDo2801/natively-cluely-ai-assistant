@@ -197,12 +197,12 @@ function SelectControl({
   label: string;
 }) {
   return (
-    <div className="relative">
+    <div className="relative w-56 max-w-full">
       <select
         value={value}
         onChange={(event) => onChange(event.target.value)}
         aria-label={label}
-        className="h-9 min-w-40 appearance-none rounded-lg border border-border-subtle bg-bg-input pl-3 pr-9 text-xs font-medium text-text-primary outline-none transition-colors hover:border-text-tertiary focus:border-accent-primary"
+        className="h-9 w-full min-w-0 truncate appearance-none rounded-lg border border-border-subtle bg-bg-input pl-3 pr-9 text-xs font-medium text-text-primary outline-none transition-colors hover:border-text-tertiary focus:border-accent-primary"
       >
         {children}
       </select>
