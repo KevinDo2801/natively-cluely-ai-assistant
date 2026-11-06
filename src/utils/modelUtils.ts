@@ -74,6 +74,40 @@ export const getCodexCliModelDisplayName = (id: string): string | null => {
     return preset?.name || prettifyModelId(modelId);
 };
 
+// Claude Code CLI (the user's own `claude` login). The id prefix is `claudecode`
+// with NO hyphen on purpose: `claude-…` ids are the Anthropic API family and
+// would be routed to the API-key client. Mirrors LLMHelper.isClaudeCodeModel.
+export const CLAUDE_CODE_MODEL = {
+    id: 'claudecode',
+    name: 'Claude Code',
+    desc: 'Your Claude plan via Claude Code',
+};
+
+// Aliases track the latest model of each tier; keep in sync with
+// CLAUDE_CODE_MODEL_PRESETS in electron/services/ClaudeCodeCliService.ts.
+export const CLAUDE_CODE_MODEL_PRESETS: { id: string; name: string }[] = [
+    { id: 'sonnet', name: 'Claude Sonnet (latest)' },
+    { id: 'opus', name: 'Claude Opus (latest)' },
+    { id: 'haiku', name: 'Claude Haiku (latest)' },
+    { id: 'claude-fable-5-1', name: 'Claude Fable 5.1' },
+    { id: 'claude-opus-5-5', name: 'Claude Opus 5.5' },
+    { id: 'claude-sonnet-5-5', name: 'Claude Sonnet 5.5' },
+    { id: 'claude-haiku-5-5', name: 'Claude Haiku 5.5' },
+    { id: 'claude-sonnet-4-6', name: 'Claude Sonnet 4.6' },
+    { id: 'claude-opus-4-1', name: 'Claude Opus 4.1' },
+    { id: 'claude-haiku-4-5', name: 'Claude Haiku 4.5' },
+];
+
+export const claudeCodeSelectorId = (modelId: string): string => `claudecode:${modelId}`;
+
+export const getClaudeCodeModelDisplayName = (id: string): string | null => {
+    if (id === CLAUDE_CODE_MODEL.id) return CLAUDE_CODE_MODEL.name;
+    if (!id.startsWith('claudecode:')) return null;
+    const modelId = id.slice('claudecode:'.length);
+    const preset = CLAUDE_CODE_MODEL_PRESETS.find(model => model.id === modelId);
+    return `${CLAUDE_CODE_MODEL.name}: ${preset?.name || prettifyModelId(modelId)}`;
+};
+
 export const prettifyModelId = (id: string): string => {
     if (!id) return '';
     return id.replace(/[-_]/g, ' ').replace(/\b\w/g, c => c.toUpperCase());

@@ -713,7 +713,7 @@ import {
   findExplicitlyMentionedCodexPlugin,
   type SelectedCodexPluginMention,
 } from '../lib/codexPluginMentions';
-import { getCodexCliModelDisplayName, litellmModelLabel } from '../utils/modelUtils';
+import { getClaudeCodeModelDisplayName, getCodexCliModelDisplayName, litellmModelLabel } from '../utils/modelUtils';
 import { getModifierSymbol, isMac, isWindows } from '../utils/platformUtils';
 import { fetchChatOverlayContext, buildReaderLanguageHint } from '../lib/chatOverlayContext';
 import { DynamicActionBar } from './dynamic-actions/DynamicActionBar';
@@ -9997,6 +9997,8 @@ Provide only the answer, nothing else.`;
                           const m = currentModel;
                           const codexCliName = getCodexCliModelDisplayName(m);
                           if (codexCliName) return codexCliName;
+                          const claudeCodeName = getClaudeCodeModelDisplayName(m);
+                          if (claudeCodeName) return claudeCodeName;
                           if (m.startsWith('ollama-')) return m.replace('ollama-', '');
                           // LiteLLM ids carry two prefixes — ours and the proxy's
                           // upstream — so the raw id reads `litellm/openai/gpt-4o`.

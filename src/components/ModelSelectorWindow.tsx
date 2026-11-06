@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useLayoutEffect, useMemo, useRef } from 'react';
 import { Check, Loader2 } from 'lucide-react';
-import { CODEX_CLI_MODEL, codexCliSelectorId, getCodexCliModelDisplayName, isModelAllowed, litellmModelLabel, STANDARD_CLOUD_MODELS, prettifyModelId } from '../utils/modelUtils';
+import { CLAUDE_CODE_MODEL, CLAUDE_CODE_MODEL_PRESETS, claudeCodeSelectorId, getClaudeCodeModelDisplayName, CODEX_CLI_MODEL, codexCliSelectorId, getCodexCliModelDisplayName, isModelAllowed, litellmModelLabel, STANDARD_CLOUD_MODELS, prettifyModelId } from '../utils/modelUtils';
 import { useResolvedTheme } from '../hooks/useResolvedTheme';
 import { getMeetingInterfaceTheme, type MeetingInterfaceTheme } from '../lib/meetingInterfaceTheme';
 import {
@@ -15,7 +15,7 @@ import {
 interface ModelOption {
     id: string;
     name: string;
-    type: 'cloud' | 'local' | 'custom' | 'ollama' | 'codex-cli';
+    type: 'cloud' | 'local' | 'custom' | 'ollama' | 'codex-cli' | 'claude-code';
     provider?: string;
 }
 
@@ -127,6 +127,12 @@ const ModelSelectorWindow = () => {
                 const codexCatalog = await window.electronAPI?.codexListModels?.();
                 const codexCliConfig = codexCatalog?.config || await window.electronAPI?.getCodexCliConfig?.();
 
+                // 3b. Claude Code CLI — only offered once the CLI is signed in.
+                const claudeCodeConfig = await window.electronAPI?.getClaudeCodeCliConfig?.().catch(() => null);
+                const claudeCodeStatus = claudeCodeConfig?.enabled
+                    ? await window.electronAPI?.claudeCodeAuthStatus?.().catch(() => null)
+                    : null;
+
                 // 4. Ollama
                 let ollamaModels: string[] = [];
                 try {
@@ -200,6 +206,15 @@ const ModelSelectorWindow = () => {
                     (codexCatalog?.models || []).forEach(model => {
                         const id = codexCliSelectorId(model.id);
                         models.push({ id, name: getCodexCliModelDisplayName(id) || model.name, type: 'codex-cli', provider: 'codex-cli' });
+                    });
+                }
+
+                // Claude Code CLI
+                if (claudeCodeConfig?.enabled && claudeCodeStatus?.signedIn) {
+                    models.push({ id: CLAUDE_CODE_MODEL.id, name: `${CLAUDE_CODE_MODEL.name} (${prettifyModelId(claudeCodeConfig.model)})`, type: 'claude-code', provider: 'claude-code' });
+                    CLAUDE_CODE_MODEL_PRESETS.forEach(model => {
+                        const id = claudeCodeSelectorId(model.id);
+                        models.push({ id, name: getClaudeCodeModelDisplayName(id) || model.name, type: 'claude-code', provider: 'claude-code' });
                     });
                 }
 

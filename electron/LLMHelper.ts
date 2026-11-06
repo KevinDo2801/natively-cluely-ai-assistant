@@ -68,6 +68,7 @@ import { promisify } from 'util';
 import axios from 'axios';
 import { createProviderRateLimiters, RateLimiter } from './services/RateLimiter';
 import { CodexCliConfig, CodexCliService, DEFAULT_CODEX_CLI_CONFIG } from './services/CodexCliService';
+import { ClaudeCodeCliConfig, ClaudeCodeCliService, DEFAULT_CLAUDE_CODE_CLI_CONFIG } from './services/ClaudeCodeCliService';
 import { GROQ_PRIMARY_MODEL, groqFallbackFor, isGroqModelGone } from './llm/groqModels';
 const execAsync = promisify(exec);
 const NATIVELY_API_URL = (process.env.NATIVELY_API_URL || 'https://api.natively.software').replace(/\/+$/, '');
@@ -449,6 +450,11 @@ export class LLMHelper {
   private activeCurlProvider: CurlProvider | null = null;
   private groqFastTextMode: boolean = false;
   private codexCliConfig: CodexCliConfig = DEFAULT_CODEX_CLI_CONFIG;
+  // Claude Code CLI (user's own `claude` login). `signedIn` is a cache filled by
+  // the async `claude auth status` probe (main.ts startup / Settings), because
+  // availability checks on the hot path are synchronous.
+  private claudeCodeCliConfig: ClaudeCodeCliConfig = DEFAULT_CLAUDE_CODE_CLI_CONFIG;
+  private claudeCodeSignedIn = false;
   private knowledgeOrchestrator: any = null;
   private negotiationCoachingHandler: ((payload: unknown) => void) | null = null;
   private aiResponseLanguage: string = 'auto';
@@ -732,6 +738,7 @@ export class LLMHelper {
   private static readonly PROVIDER_LABEL_FAMILY: Readonly<Record<string, string>> = {
     gemini: 'gemini', groq: 'groq', natively: 'natively', openai: 'openai',
     claude: 'claude', deepseek: 'deepseek', litellm: 'litellm', codex: 'codex-cli',
+    claude_code: 'claude-code',
     custom_curl: 'custom', custom_provider: 'custom',
   };
 
@@ -1341,6 +1348,23 @@ export class LLMHelper {
     return this.codexCliConfig;
   }
 
+  public setClaudeCodeCliConfig(config: Partial<ClaudeCodeCliConfig>) {
+    this.claudeCodeCliConfig = ClaudeCodeCliService.normalizeConfig(config);
+    console.log(`[LLMHelper] Claude Code CLI ${this.claudeCodeCliConfig.enabled ? 'enabled' : 'disabled'} with model: ${this.claudeCodeCliConfig.model}`);
+  }
+
+  public getClaudeCodeCliConfig(): ClaudeCodeCliConfig {
+    return this.claudeCodeCliConfig;
+  }
+
+  public setClaudeCodeSignedIn(signedIn: boolean) {
+    this.claudeCodeSignedIn = signedIn === true;
+  }
+
+  public isClaudeCodeSignedIn(): boolean {
+    return this.claudeCodeSignedIn;
+  }
+
   public getAiResponseLanguage(): string {
     return this.aiResponseLanguage;
   }
@@ -1486,6 +1510,26 @@ export class LLMHelper {
 
   private isCodexCliModel(modelId: string): boolean {
     return modelId === "codex-cli" || modelId.startsWith("codex-cli:");
+  }
+
+  // Prefix is deliberately `claudecode` (no hyphen): `claude-` ids are the
+  // Anthropic API family (isClaudeModel / providerFamily), and a `claude-code…`
+  // id would be mistaken for one and routed to the API-key client.
+  private isClaudeCodeModel(modelId: string): boolean {
+    return modelId === "claudecode" || modelId.startsWith("claudecode:");
+  }
+
+  private isClaudeCodeAvailable(): boolean {
+    if (this.isProviderDisabled('claude-code')) return false;
+    return this.claudeCodeCliConfig.enabled && this.claudeCodeSignedIn;
+  }
+
+  private getSelectedClaudeCodeModel(fastMode: boolean): string {
+    if (fastMode) return this.claudeCodeCliConfig.fastModel;
+    if (this.currentModelId.startsWith("claudecode:")) {
+      return this.currentModelId.slice("claudecode:".length) || this.claudeCodeCliConfig.model;
+    }
+    return this.claudeCodeCliConfig.model;
   }
 
   private isCodexAvailable(): boolean {
@@ -1700,6 +1744,31 @@ export class LLMHelper {
       modelReasoningEffort: this.codexCliConfig.modelReasoningEffort,
       signal,
       app,
+    });
+  }
+
+  private async generateWithClaudeCode(userContent: string, systemPrompt?: string, fastMode = false, imagePaths?: string[], signal?: AbortSignal): Promise<string> {
+    let out = '';
+    for await (const chunk of this.streamWithClaudeCode(userContent, systemPrompt, fastMode, imagePaths, signal)) out += chunk;
+    return out;
+  }
+
+  private async *streamWithClaudeCode(userContent: string, systemPrompt?: string, fastMode = false, imagePaths?: string[], signal?: AbortSignal): AsyncGenerator<string, void, unknown> {
+    if (!this.isClaudeCodeAvailable()) throw new Error('Claude Code CLI transport is disabled or Claude Code is signed out.');
+    // Claude Code talks to Anthropic's cloud through the user's own CLI login:
+    // it is a CLOUD provider and gets every boundary the other cloud providers
+    // have (local-only mode, disabled-provider switch, data scopes, and the
+    // private_vision image refusal — 'claude_code' is not a local vision
+    // provider, see isLocalVisionProvider).
+    if (this.isLocalOnlyMode) throw new Error("Cloud providers disabled in local-only mode");
+    this.assertOutboundScopes('claude_code', userContent, imagePaths);
+    yield* ClaudeCodeCliService.stream(this.claudeCodeCliConfig.path, {
+      prompt: userContent,
+      instructions: systemPrompt,
+      model: this.getSelectedClaudeCodeModel(fastMode),
+      timeoutMs: this.claudeCodeCliConfig.timeoutMs,
+      imagePaths,
+      signal,
     });
   }
 
@@ -3213,6 +3282,10 @@ let isMultimodal = !!(imagePaths?.length);
 
       if (this.isCodexCliModel(this.currentModelId) && this.isCodexAvailable()) {
         return await this.generateWithCodexCli(cloudUserContent, openaiSystemPrompt, false, cloudImagePaths);
+      }
+
+      if (this.isClaudeCodeModel(this.currentModelId) && this.isClaudeCodeAvailable()) {
+        return await this.generateWithClaudeCode(cloudUserContent, claudeSystemPrompt, false, cloudImagePaths);
       }
 
       // `custom` is the family id the Providers panel's "Disable custom
@@ -7039,6 +7112,11 @@ let isMultimodal = !!(imagePaths?.length);
       return;
     }
 
+    if (this.isClaudeCodeModel(this.currentModelId) && this.isClaudeCodeAvailable()) {
+      yield* this.streamWithClaudeCode(userContent, finalSystemPrompt, false, imagePaths, abortSignal);
+      return;
+    }
+
     // 2a. CustomProvider (switchToCustom path) — full SSE-capable streaming
     if (this.customProvider) {
       yield* this.streamWithCustom(message, context, imagePaths, finalSystemPrompt, abortSignal);
@@ -8763,6 +8841,11 @@ let isMultimodal = !!(imagePaths?.length);
    * call was raced against the 7s cloud cap and aborted to the canned fallback
    * ("Let me come back to that in just a moment."). Mirrors isUsingOllama().
    */
+  public isUsingClaudeCodeCli(): boolean {
+    // Same subprocess cold-start latency profile as Codex CLI.
+    return this.isClaudeCodeAvailable() && this.isClaudeCodeModel(this.currentModelId);
+  }
+
   public isUsingCodexCli(): boolean {
     return this.isCodexAvailable() && (
       this.isCodexCliModel(this.currentModelId) || this.groqFastTextMode === true
@@ -8994,9 +9077,10 @@ let isMultimodal = !!(imagePaths?.length);
     }
   }
 
-  public getCurrentProvider(): "ollama" | "gemini" | "custom" | "codex-cli" {
+  public getCurrentProvider(): "ollama" | "gemini" | "custom" | "codex-cli" | "claude-code" {
     if (this.customProvider) return "custom";
     if (this.isCodexCliModel(this.currentModelId)) return "codex-cli";
+    if (this.isClaudeCodeModel(this.currentModelId)) return "claude-code";
     return this.useOllama ? "ollama" : "gemini";
   }
 

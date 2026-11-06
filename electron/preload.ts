@@ -96,7 +96,7 @@ interface ElectronAPI {
 
   // LLM Model Management
   getCurrentLlmConfig: () => Promise<{
-    provider: 'ollama' | 'gemini' | 'custom' | 'codex-cli';
+    provider: 'ollama' | 'gemini' | 'custom' | 'codex-cli' | 'claude-code';
     /**
      * @deprecated Use `modelId` for selection comparisons and `displayName`
      * for UI labels. Kept as an alias of `modelId` for back-compat.
@@ -604,6 +604,12 @@ interface ElectronAPI {
       modelReasoningEffort?: string;
     };
   }>;
+  getClaudeCodeCliConfig: () => Promise<{ enabled: boolean; path: string; model: string; fastModel: string; timeoutMs: number }>;
+  setClaudeCodeCliConfig: (config: { enabled: boolean; path: string; model: string; fastModel: string; timeoutMs: number }) => Promise<{ success: boolean; error?: string; config?: { enabled: boolean; path: string; model: string; fastModel: string; timeoutMs: number } }>;
+  claudeCodeAuthStatus: () => Promise<{ success: boolean; installed: boolean; signedIn: boolean; method?: string; email?: string; error?: string }>;
+  claudeCodeLogin: () => Promise<{ success: boolean; installed?: boolean; signedIn?: boolean; error?: string }>;
+  claudeCodeLogout: () => Promise<{ success: boolean; error?: string }>;
+  testClaudeCode: (config?: { model?: string; path?: string; timeoutMs?: number }) => Promise<{ success: boolean; output?: string; error?: string }>;
   codexCliAuthStatus: (config?: any) => Promise<{ success: boolean; action: string; output?: string; error?: string; resolvedPath?: string; config?: any }>;
   codexCliLogout: (config?: any) => Promise<{ success: boolean; action: string; output?: string; error?: string; resolvedPath?: string; config?: any }>;
   codexCliLogin: (config?: any) => Promise<{ success: boolean; action: string; output?: string; error?: string; resolvedPath?: string; config?: any }>;
@@ -2005,6 +2011,12 @@ contextBridge.exposeInMainWorld('electronAPI', {
     serviceTier?: string;
     modelReasoningEffort?: string;
   }) => ipcRenderer.invoke('test-codex-cli', config),
+  getClaudeCodeCliConfig: () => ipcRenderer.invoke('get-claude-code-cli-config'),
+  setClaudeCodeCliConfig: (config: { enabled: boolean; path: string; model: string; fastModel: string; timeoutMs: number }) => ipcRenderer.invoke('set-claude-code-cli-config', config),
+  claudeCodeAuthStatus: () => ipcRenderer.invoke('claude-code:auth-status'),
+  claudeCodeLogin: () => ipcRenderer.invoke('claude-code:login'),
+  claudeCodeLogout: () => ipcRenderer.invoke('claude-code:logout'),
+  testClaudeCode: (config?: { model?: string; path?: string; timeoutMs?: number }) => ipcRenderer.invoke('claude-code:test', config),
   codexCliAuthStatus: (config?: any) => ipcRenderer.invoke('codex-cli:auth-status', config),
   codexCliLogout: (config?: any) => ipcRenderer.invoke('codex-cli:logout', config),
   codexCliLogin: (config?: any) => ipcRenderer.invoke('codex-cli:login', config),

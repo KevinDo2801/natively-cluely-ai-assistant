@@ -1277,6 +1277,7 @@ interface ScreenshotCaptureSession {
 
 import { CredentialsManager } from "./services/CredentialsManager"
 import { SettingsManager } from "./services/SettingsManager"
+import { ClaudeCodeCliService } from "./services/ClaudeCodeCliService"
 import { PhoneMirrorService, shouldStartPhoneMirrorOnBoot } from "./services/PhoneMirrorService"
 import { describePageCaptureFallback, describeDoubleCaptureFailure, PAGE_CAPTURE_FALLBACK_CHANNEL, PAGE_CAPTURE_STARTED_CHANNEL } from "./services/pageCaptureFallback"
 import { setVerboseLoggingFlag } from "./verboseLog"
@@ -2137,6 +2138,21 @@ export class AppState {
         serviceTier: settingsManager.get('codexCliServiceTier') || 'default',
         modelReasoningEffort: settingsManager.get('codexCliModelReasoningEffort'),
       });
+      llmHelper.setClaudeCodeCliConfig({
+        enabled: !!settingsManager.get('claudeCodeCliEnabled'),
+        path: settingsManager.get('claudeCodeCliPath') || 'claude',
+        model: settingsManager.get('claudeCodeCliModel') || 'sonnet',
+        fastModel: settingsManager.get('claudeCodeCliFastModel') || 'haiku',
+        timeoutMs: settingsManager.get('claudeCodeCliTimeoutMs') || 90_000,
+      });
+      // Warm the signed-in cache (async `claude auth status`) so availability
+      // checks on the hot path are correct right after launch. A missing CLI
+      // simply leaves it false.
+      if (llmHelper.getClaudeCodeCliConfig().enabled) {
+        void ClaudeCodeCliService.getAuthStatus(llmHelper.getClaudeCodeCliConfig().path)
+          .then((status) => llmHelper.setClaudeCodeSignedIn(status.signedIn))
+          .catch(() => { /* optional */ });
+      }
     }
 
     // Initialize RAGManager (requires database to be ready)

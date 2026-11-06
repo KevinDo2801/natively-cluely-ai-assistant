@@ -1,7 +1,7 @@
 import React, { useState, useEffect, useRef, useCallback, useMemo } from 'react';
 import { useT } from '../../i18n';
 import { Plus, Trash2, Edit2, AlertCircle, Save, ChevronDown, Check, RefreshCw, ExternalLink, Loader2, LogOut, Cloud, Server, Eye, Info, MessageSquare, Image, FileText, User, Boxes, ClipboardList, Laptop } from 'lucide-react';
-import { CODEX_CLI_MODEL, codexCliSelectorId, isModelAllowed, isOptInModelProvider, litellmModelLabel, STANDARD_CLOUD_MODELS, prettifyModelId } from '../../utils/modelUtils';
+import { CLAUDE_CODE_MODEL, CLAUDE_CODE_MODEL_PRESETS, claudeCodeSelectorId, CODEX_CLI_MODEL, codexCliSelectorId, isModelAllowed, isOptInModelProvider, litellmModelLabel, STANDARD_CLOUD_MODELS, prettifyModelId } from '../../utils/modelUtils';
 import { validateCurl } from '../../lib/curl-validator';
 import { ProviderCard } from './ProviderCard';
 import { ConfirmDialog } from '../ui/ConfirmDialog';
@@ -2051,6 +2051,14 @@ export const AIProvidersSettings: React.FC<AIProvidersSettingsProps> = ({
     const [codexAuthStatus, setCodexAuthStatus] = useState<'idle' | 'success' | 'error'>('idle');
     const [codexAuthMessage, setCodexAuthMessage] = useState('');
 
+    // --- Claude Code CLI (user's own `claude` login) ---
+    // The CLI owns the login and token; Natively only spawns it. See
+    // electron/services/ClaudeCodeCliService.ts.
+    const [claudeCodeConfig, setClaudeCodeConfig] = useState({ enabled: false, path: 'claude', model: 'sonnet', fastModel: 'haiku', timeoutMs: 90000 });
+    const [claudeCodeAuth, setClaudeCodeAuth] = useState<{ installed: boolean; signedIn: boolean; email?: string; method?: string }>({ installed: true, signedIn: false });
+    const [claudeCodeBusy, setClaudeCodeBusy] = useState<'idle' | 'login' | 'logout' | 'testing'>('idle');
+    const [claudeCodeMessage, setClaudeCodeMessage] = useState<{ tone: 'ok' | 'error'; text: string } | null>(null);
+
     // --- ChatGPT OAuth (new — replaces `codex login` CLI subprocess) ---
     // The OAuth flow runs entirely in the main process; the renderer just
     // kicks it off and listens for IPC events. We keep the auth state
@@ -2238,6 +2246,15 @@ export const AIProvidersSettings: React.FC<AIProvidersSettingsProps> = ({
                 const cliConfig = await window.electronAPI?.getCodexCliConfig?.();
                 if (cliConfig) setCodexCliConfig(cliConfig as typeof codexCliConfig);
 
+                const ccConfig = await window.electronAPI?.getClaudeCodeCliConfig?.().catch(() => null);
+                if (ccConfig) {
+                    setClaudeCodeConfig(ccConfig);
+                    if (ccConfig.enabled) {
+                        const ccStatus = await window.electronAPI?.claudeCodeAuthStatus?.().catch(() => null);
+                        if (ccStatus) setClaudeCodeAuth({ installed: ccStatus.installed, signedIn: ccStatus.signedIn, email: ccStatus.email, method: ccStatus.method });
+                    }
+                }
+
                 // Codex OAuth status — read once on mount so the Settings UI
                 // shows the right state without waiting for a user click.
                 // @ts-ignore
@@ -2384,6 +2401,12 @@ export const AIProvidersSettings: React.FC<AIProvidersSettingsProps> = ({
                 }
             });
         }
+        if (claudeCodeConfig.enabled && claudeCodeAuth.signedIn && isProviderEnabled('claude-code')) {
+            opts.push({ id: CLAUDE_CODE_MODEL.id, name: `${CLAUDE_CODE_MODEL.name} (${prettifyModelId(claudeCodeConfig.model)})` });
+            CLAUDE_CODE_MODEL_PRESETS.forEach(model => {
+                opts.push({ id: claudeCodeSelectorId(model.id), name: `${CLAUDE_CODE_MODEL.name}: ${model.name}` });
+            });
+        }
         if (hasStoredKey.litellm && isProviderEnabled('litellm')) {
             // Same allow-list gate the cloud providers get above. Without it the proxy's
             // full catalogue reaches the picker while modelAvailable() filters it, and
@@ -2414,7 +2437,7 @@ export const AIProvidersSettings: React.FC<AIProvidersSettingsProps> = ({
         const next = opts[0].id;
         setDefaultModel(next);
         window.electronAPI?.setDefaultModel?.(next).catch(console.error);
-    }, [credentialsLoaded, defaultModel, hasStoredKey, preferredModels, isCodexReady, codexCliConfig.model, codexModels, customProviders, ollamaModels, litellmModels, disabledProviders, cloudEnabledModels]);
+    }, [credentialsLoaded, defaultModel, hasStoredKey, preferredModels, isCodexReady, claudeCodeConfig.enabled, claudeCodeConfig.model, claudeCodeAuth.signedIn, codexCliConfig.model, codexModels, customProviders, ollamaModels, litellmModels, disabledProviders, cloudEnabledModels]);
 
     // Load LiteLLM model IDs only when the proxy is configured. The active-model
     // selector should not expose stale `litellm/...` choices after the proxy is
@@ -2826,6 +2849,70 @@ export const AIProvidersSettings: React.FC<AIProvidersSettingsProps> = ({
         const result = await window.electronAPI?.setCodexCliConfig?.(normalized);
         if (result?.config) setCodexCliConfig(result.config as typeof codexCliConfig);
         return result;
+    };
+
+    const saveClaudeCodeConfig = async (next = claudeCodeConfig) => {
+        const normalized = { ...next, timeoutMs: Number(next.timeoutMs) || 90000 };
+        setClaudeCodeConfig(normalized);
+        const result = await window.electronAPI?.setClaudeCodeCliConfig?.(normalized);
+        if (result?.config) setClaudeCodeConfig(result.config);
+        return result;
+    };
+
+    // Turning the provider on probes the CLI so the card shows install/sign-in
+    // state immediately instead of waiting for a click.
+    const handleClaudeCodeEnable = async (enabled: boolean) => {
+        setClaudeCodeMessage(null);
+        await saveClaudeCodeConfig({ ...claudeCodeConfig, enabled });
+        if (!enabled) return;
+        const status = await window.electronAPI?.claudeCodeAuthStatus?.().catch(() => null);
+        if (status) setClaudeCodeAuth({ installed: status.installed, signedIn: status.signedIn, email: status.email, method: status.method });
+    };
+
+    const handleClaudeCodeLogin = async () => {
+        setClaudeCodeBusy('login');
+        setClaudeCodeMessage({ tone: 'ok', text: t('Opening browser — complete sign-in there, then return here.') });
+        try {
+            await saveClaudeCodeConfig({ ...claudeCodeConfig, enabled: true });
+            const result = await window.electronAPI?.claudeCodeLogin?.();
+            const status = await window.electronAPI?.claudeCodeAuthStatus?.().catch(() => null);
+            if (status) setClaudeCodeAuth({ installed: status.installed, signedIn: status.signedIn, email: status.email, method: status.method });
+            setClaudeCodeMessage(result?.success
+                ? { tone: 'ok', text: t('Signed in to Claude Code.') }
+                : { tone: 'error', text: result?.error || t('Claude Code sign-in failed.') });
+        } catch (e: any) {
+            setClaudeCodeMessage({ tone: 'error', text: e?.message || t('Claude Code sign-in failed.') });
+        } finally {
+            setClaudeCodeBusy('idle');
+        }
+    };
+
+    const handleClaudeCodeLogout = async () => {
+        setClaudeCodeBusy('logout');
+        try {
+            const result = await window.electronAPI?.claudeCodeLogout?.();
+            const status = await window.electronAPI?.claudeCodeAuthStatus?.().catch(() => null);
+            if (status) setClaudeCodeAuth({ installed: status.installed, signedIn: status.signedIn, email: status.email, method: status.method });
+            setClaudeCodeMessage(result?.success ? null : { tone: 'error', text: result?.error || t('Sign out failed.') });
+        } finally {
+            setClaudeCodeBusy('idle');
+        }
+    };
+
+    const handleClaudeCodeTest = async () => {
+        setClaudeCodeBusy('testing');
+        setClaudeCodeMessage(null);
+        try {
+            await saveClaudeCodeConfig();
+            const result = await window.electronAPI?.testClaudeCode?.();
+            setClaudeCodeMessage(result?.success
+                ? { tone: 'ok', text: t('Claude Code responded.') }
+                : { tone: 'error', text: result?.error || t('Claude Code test failed.') });
+        } catch (e: any) {
+            setClaudeCodeMessage({ tone: 'error', text: e?.message || t('Claude Code test failed.') });
+        } finally {
+            setClaudeCodeBusy('idle');
+        }
     };
 
     const handleTestCodexCli = async () => {
@@ -3660,6 +3747,138 @@ export const AIProvidersSettings: React.FC<AIProvidersSettingsProps> = ({
                         </>
                     )}
                 </div>
+            </div>
+
+            {/* Claude Code — use the user's own Claude plan through the official CLI */}
+            <div className="space-y-5">
+                <div className="flex items-start justify-between gap-3">
+                    <div className="flex items-start gap-2.5 min-w-0">
+                        <AipProviderMark provider="claude" name="Claude Code" className="mt-0.5" />
+                        <div className="min-w-0">
+                            <h3 className="text-sm font-bold aip-hero mb-1">Claude Code</h3>
+                            <p className="text-xs aip-muted">{t('Use your Claude Pro/Max plan through the official Claude Code app — no API key needed.')}</p>
+                        </div>
+                    </div>
+                    <AipSwitch
+                        checked={claudeCodeConfig.enabled && !disabledProviders.includes('claude-code')}
+                        onChange={() => {
+                            if (disabledProviders.includes('claude-code')) {
+                                handleToggleProvider('claude-code', true);
+                                if (!claudeCodeConfig.enabled) handleClaudeCodeEnable(true);
+                            } else {
+                                handleClaudeCodeEnable(!claudeCodeConfig.enabled);
+                            }
+                        }}
+                        label={`${claudeCodeConfig.enabled ? t('Disable') : t('Enable')} Claude Code`}
+                        title={claudeCodeConfig.enabled ? t('Disable provider') : t('Enable provider')}
+                    />
+                </div>
+
+                {claudeCodeConfig.enabled && (
+                    <div className="aip-card p-5 space-y-4">
+                        <div className="flex items-center justify-between gap-3">
+                            <label className="flex items-center gap-2 text-xs font-medium uppercase tracking-wide aip-hero">
+                                {t('Claude Account')}
+                            </label>
+                            {claudeCodeAuth.signedIn && (
+                                <button
+                                    type="button"
+                                    onClick={handleClaudeCodeLogout}
+                                    disabled={claudeCodeBusy !== 'idle'}
+                                    className="aip-btn"
+                                    data-size="sm"
+                                    data-variant="ghost"
+                                >
+                                    <LogOut size={12} strokeWidth={1.75} />
+                                    <span className="uppercase tracking-wide">{t('Sign out')}</span>
+                                </button>
+                            )}
+                        </div>
+
+                        {!claudeCodeAuth.installed ? (
+                            <p role="alert" className="text-xs aip-danger-fg">
+                                {t('Claude Code is not installed on this computer.')}{' '}
+                                <a href="https://claude.com/claude-code" target="_blank" rel="noreferrer" className="aip-link">{t('Install it')}</a>
+                                {' '}{t('then come back and sign in.')}
+                            </p>
+                        ) : claudeCodeAuth.signedIn ? (
+                            <div className="aip-well px-3 py-2.5 text-xs aip-text flex items-center gap-2">
+                                <span className="aip-badge-dot aip-ok-fg" aria-hidden="true" />
+                                <span className="truncate">{claudeCodeAuth.email || t('Claude account connected')}</span>
+                            </div>
+                        ) : (
+                            <button
+                                type="button"
+                                onClick={handleClaudeCodeLogin}
+                                disabled={claudeCodeBusy !== 'idle'}
+                                className="aip-btn w-full"
+                                data-size="row"
+                                data-variant="accent"
+                            >
+                                {claudeCodeBusy === 'login'
+                                    ? <><Loader2 size={13} strokeWidth={1.75} className="aip-spinner" /> {t('Waiting for browser…')}</>
+                                    : <><ExternalLink size={13} strokeWidth={1.75} /> {t('Sign in with Claude')}</>}
+                            </button>
+                        )}
+
+                        {claudeCodeMessage && (
+                            <p role={claudeCodeMessage.tone === 'error' ? 'alert' : 'status'} className={`text-[10px] ${claudeCodeMessage.tone === 'error' ? 'aip-danger-fg' : 'aip-ok-fg'}`}>
+                                {claudeCodeMessage.text}
+                            </p>
+                        )}
+
+                        <p className="text-xs aip-muted">{t('Natively runs the Claude Code app on this computer with tools turned off. Sign-in and the session stay with Claude Code, and usage counts against your Claude plan limits.')}</p>
+
+                        {claudeCodeAuth.installed && claudeCodeAuth.signedIn && (
+                            <>
+                                <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+                                    <label className="space-y-1 block min-w-0">
+                                        <span className="aip-label">{t('Model')}</span>
+                                        <ModelSelect
+                                            value={claudeCodeConfig.model}
+                                            options={CLAUDE_CODE_MODEL_PRESETS}
+                                            onChange={(model) => saveClaudeCodeConfig({ ...claudeCodeConfig, model })}
+                                            placeholder={t('Model')}
+                                        />
+                                    </label>
+                                    <label className="space-y-1 block min-w-0">
+                                        <span className="aip-label">{t('Fast Mode Model')}</span>
+                                        <ModelSelect
+                                            value={claudeCodeConfig.fastModel}
+                                            options={CLAUDE_CODE_MODEL_PRESETS}
+                                            onChange={(fastModel) => saveClaudeCodeConfig({ ...claudeCodeConfig, fastModel })}
+                                            placeholder={t('Fast Mode Model')}
+                                        />
+                                    </label>
+                                </div>
+                                <div className="flex items-end justify-between gap-4 mt-1">
+                                    <label className="space-y-1 block min-w-0">
+                                        <span className="aip-label">{t('Timeout (ms)')}</span>
+                                        <input
+                                            type="number"
+                                            value={claudeCodeConfig.timeoutMs}
+                                            onChange={e => setClaudeCodeConfig(prev => ({ ...prev, timeoutMs: Number(e.target.value) }))}
+                                            onBlur={() => saveClaudeCodeConfig()}
+                                            data-mono="true"
+                                            className="aip-input"
+                                            min={1000}
+                                        />
+                                    </label>
+                                    <button
+                                        type="button"
+                                        onClick={handleClaudeCodeTest}
+                                        disabled={claudeCodeBusy !== 'idle'}
+                                        className="aip-btn shrink-0 min-w-[124px]"
+                                    >
+                                        {claudeCodeBusy === 'testing'
+                                            ? <><Loader2 size={12} strokeWidth={1.75} className="aip-spinner" /> {t('Testing…')}</>
+                                            : t('Test Connection')}
+                                    </button>
+                                </div>
+                            </>
+                        )}
+                    </div>
+                )}
             </div>
 
             </div>

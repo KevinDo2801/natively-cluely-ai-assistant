@@ -16,6 +16,7 @@ import { DatabaseManager } from './db/DatabaseManager'; // Import Database Manag
 import { AppState } from './main';
 import { CodexAppServerService, type CodexAppInfo } from './services/CodexAppServerService';
 import { CodexCliService, isCodexAuthError } from './services/CodexCliService';
+import { ClaudeCodeCliService } from './services/ClaudeCodeCliService';
 import { describeServiceAccountRejection } from './services/googleServiceAccount';
 import { PhoneMirrorService } from './services/PhoneMirrorService';
 import { sanitizeContextEnvelope } from './services/browser-context/sanitize';
@@ -323,6 +324,7 @@ export function initializeIpcHandlers(appState: AppState): void {
       const providerFamily = (modelId: string): string => {
         if (modelId === 'natively') return 'natively';
         if (modelId.startsWith('codex-cli')) return 'codex-cli';
+        if (modelId.startsWith('claudecode')) return 'claude-code';
         if (modelId.startsWith('litellm/')) return 'litellm';
         if (modelId.startsWith('nvidia_nim/')) return 'nvidia_nim';
         if (modelId.startsWith('ollama-')) return 'ollama';
@@ -375,6 +377,7 @@ export function initializeIpcHandlers(appState: AppState): void {
 
         if (modelId === 'natively') return has(cm.getNativelyApiKey());
         if (modelId.startsWith('codex-cli')) return codexConfig.enabled === true && codexSignedIn;
+        if (modelId.startsWith('claudecode')) return llmHelper.getClaudeCodeCliConfig().enabled === true && llmHelper.isClaudeCodeSignedIn();
         if (modelId.startsWith('litellm/')) return has(cm.getLitellmBaseURL());
         if (modelId.startsWith('nvidia_nim/')) return has(cm.getNvidiaNimApiKey());
         if (modelId.startsWith('ollama-')) return true; // live Ollama probe happens at execution time
@@ -3873,7 +3876,7 @@ export function initializeIpcHandlers(appState: AppState): void {
           // local generation aborted to zero tokens and the user saw the canned
           // fallback line below. Codex CLI shares the cold-load profile
           // (subprocess spawn → codex CLI loads the model → first delta).
-          const usingLocalLlm = llmHelper.isUsingOllama() || llmHelper.isUsingCodexCli();
+          const usingLocalLlm = llmHelper.isUsingOllama() || llmHelper.isUsingCodexCli() || llmHelper.isUsingClaudeCodeCli();
           // F-301: on the natively-api route the server rotates providers at
           // 10s; give it room to rescue the turn instead of aborting at 7s.
           const viaServerCascade = llmHelper.isUsingNativelyServerCascade?.() === true;
@@ -9618,6 +9621,57 @@ export function initializeIpcHandlers(appState: AppState): void {
       return { success: true, ...status };
     } catch (error: any) { return { success: false, error: error.message }; }
   });
+  // ── Claude Code CLI (user's own `claude` login) ─────────────────────────────
+  const claudeCodeHelper = () => appState.processingHelper.getLLMHelper();
+  const refreshClaudeCodeStatus = async () => {
+    const cfg = claudeCodeHelper().getClaudeCodeCliConfig();
+    const status = await ClaudeCodeCliService.getAuthStatus(cfg.path);
+    claudeCodeHelper().setClaudeCodeSignedIn(status.signedIn);
+    return status;
+  };
+  safeHandle('get-claude-code-cli-config', () => {
+    try { return claudeCodeHelper().getClaudeCodeCliConfig(); }
+    catch { return ClaudeCodeCliService.normalizeConfig({}); }
+  });
+  safeHandle('set-claude-code-cli-config', async (_, config: any) => {
+    try {
+      const normalized = ClaudeCodeCliService.normalizeConfig(config || {});
+      const sm = SettingsManager.getInstance();
+      if (!sm.set('claudeCodeCliEnabled', normalized.enabled)) return { success: false, error: 'settings_store_degraded' };
+      sm.set('claudeCodeCliPath', normalized.path);
+      sm.set('claudeCodeCliModel', normalized.model);
+      sm.set('claudeCodeCliFastModel', normalized.fastModel);
+      sm.set('claudeCodeCliTimeoutMs', normalized.timeoutMs);
+      claudeCodeHelper().setClaudeCodeCliConfig(normalized);
+      return { success: true, config: normalized };
+    } catch (error: any) { return { success: false, error: error.message }; }
+  });
+  safeHandle('claude-code:auth-status', async () => {
+    try { return { success: true, ...(await refreshClaudeCodeStatus()) }; }
+    catch (error: any) { return { success: false, installed: false, signedIn: false, error: error.message }; }
+  });
+  safeHandle('claude-code:login', async () => {
+    try {
+      const result = await ClaudeCodeCliService.login(claudeCodeHelper().getClaudeCodeCliConfig().path);
+      const status = await refreshClaudeCodeStatus();
+      return { success: result.success && status.signedIn, installed: status.installed, signedIn: status.signedIn, error: result.success ? status.error : result.error };
+    } catch (error: any) { return { success: false, error: error.message }; }
+  });
+  safeHandle('claude-code:logout', async () => {
+    try {
+      const result = await ClaudeCodeCliService.logout(claudeCodeHelper().getClaudeCodeCliConfig().path);
+      await refreshClaudeCodeStatus();
+      return result;
+    } catch (error: any) { return { success: false, error: error.message }; }
+  });
+  safeHandle('claude-code:test', async (_, config?: any) => {
+    try {
+      const current = claudeCodeHelper().getClaudeCodeCliConfig();
+      const normalized = ClaudeCodeCliService.normalizeConfig({ ...current, ...config });
+      const output = await ClaudeCodeCliService.run(normalized.path, { model: normalized.model, prompt: 'Reply with OK only.', timeoutMs: normalized.timeoutMs });
+      return { success: !!output.trim(), output };
+    } catch (error: any) { return { success: false, error: error.message }; }
+  });
   safeHandle('codex-cli:auth-status', async () => {
     try { const status = await getCodexStatus(); return { success: status.signedIn, output: status.signedIn ? 'Logged in using ChatGPT' : 'Not signed in' }; }
     catch (error: any) { return { success: false, error: error.message }; }
@@ -13402,7 +13456,7 @@ export function initializeIpcHandlers(appState: AppState): void {
         //   • isLocal — a local model cold-loads its weights (8-12s for a 7-9B)
         //     before the first token, so 7s aborted every cold local generation
         //     on the phone path to zero tokens.
-        const phoneUsingLocalLlm = llmHelper.isUsingOllama() || llmHelper.isUsingCodexCli();
+        const phoneUsingLocalLlm = llmHelper.isUsingOllama() || llmHelper.isUsingCodexCli() || llmHelper.isUsingClaudeCodeCli();
         const phoneViaServerCascade = llmHelper.isUsingNativelyServerCascade?.() === true;
         await raceStreamWithDeadline({
           stream: stream as AsyncGenerator<string>,

@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { ChevronDown, Check, Cloud, Terminal, Server, Plus } from 'lucide-react';
-import { getCodexCliModelDisplayName, STANDARD_CLOUD_MODELS, prettifyModelId } from '../../utils/modelUtils';
+import { getClaudeCodeModelDisplayName, getCodexCliModelDisplayName, STANDARD_CLOUD_MODELS, prettifyModelId } from '../../utils/modelUtils';
 import { useT } from '../../i18n';
 import { ProviderMark } from './ProviderMark';
 
@@ -88,6 +88,8 @@ export const ModelSelector: React.FC<ModelSelectorProps> = ({ currentModel, onSe
     const getModelDisplayName = (model: string) => {
         const codexCliName = getCodexCliModelDisplayName(model);
         if (codexCliName) return codexCliName;
+        const claudeCodeName = getClaudeCodeModelDisplayName(model);
+        if (claudeCodeName) return claudeCodeName;
         if (model.startsWith('ollama-')) return model.replace('ollama-', '');
         if (model === 'gemini-3.7-flash') return 'Gemini 3.7 Flash';
         // Legacy: users who selected 3.6-flash before the 3.7 bump still have it

@@ -147,7 +147,7 @@ export interface ElectronAPI {
   onOpenSettingsTab: (callback: (tab: string) => void) => () => void
 
   // LLM Model Management
-  getCurrentLlmConfig: () => Promise<{ provider: "ollama" | "gemini" | "custom" | "codex-cli"; /** @deprecated use `modelId` for selection, `displayName` for UI */ model: string; modelId: string; displayName: string; isOllama: boolean }>
+  getCurrentLlmConfig: () => Promise<{ provider: "ollama" | "gemini" | "custom" | "codex-cli" | "claude-code"; /** @deprecated use `modelId` for selection, `displayName` for UI */ model: string; modelId: string; displayName: string; isOllama: boolean }>
   getAvailableOllamaModels: () => Promise<string[]>
   /** Whether a denied data scope would actually be handled on-device. */
   getLocalFallbackStatus: () => Promise<{ text: boolean; vision: boolean }>
@@ -485,6 +485,12 @@ export interface ElectronAPI {
   getCodexCliConfig: () => Promise<{ enabled: boolean; path: string; model: string; fastModel: string; timeoutMs: number; sandboxMode: string; serviceTier?: string; modelReasoningEffort?: string }>;
   setCodexCliConfig: (config: { enabled: boolean; path: string; model: string; fastModel: string; timeoutMs: number; sandboxMode?: string; serviceTier?: string; modelReasoningEffort?: string }) => Promise<{ success: boolean; error?: string; config?: { enabled: boolean; path: string; model: string; fastModel: string; timeoutMs: number; sandboxMode: string; serviceTier?: string; modelReasoningEffort?: string } }>;
   testCodexCli: (config?: { enabled?: boolean; path?: string; model?: string; fastModel?: string; timeoutMs?: number; sandboxMode?: string; serviceTier?: string; modelReasoningEffort?: string }) => Promise<{ success: boolean; error?: string; resolvedPath?: string; config?: { enabled: boolean; path: string; model: string; fastModel: string; timeoutMs: number; sandboxMode: string; serviceTier?: string; modelReasoningEffort?: string } }>;
+  getClaudeCodeCliConfig: () => Promise<{ enabled: boolean; path: string; model: string; fastModel: string; timeoutMs: number }>;
+  setClaudeCodeCliConfig: (config: { enabled: boolean; path: string; model: string; fastModel: string; timeoutMs: number }) => Promise<{ success: boolean; error?: string; config?: { enabled: boolean; path: string; model: string; fastModel: string; timeoutMs: number } }>;
+  claudeCodeAuthStatus: () => Promise<{ success: boolean; installed: boolean; signedIn: boolean; method?: string; email?: string; error?: string }>;
+  claudeCodeLogin: () => Promise<{ success: boolean; installed?: boolean; signedIn?: boolean; error?: string }>;
+  claudeCodeLogout: () => Promise<{ success: boolean; error?: string }>;
+  testClaudeCode: (config?: { model?: string; path?: string; timeoutMs?: number }) => Promise<{ success: boolean; output?: string; error?: string }>;
   codexCliAuthStatus: (config?: any) => Promise<{ success: boolean; action: string; output?: string; error?: string; resolvedPath?: string; config?: any }>;
   codexCliLogout: (config?: any) => Promise<{ success: boolean; action: string; output?: string; error?: string; resolvedPath?: string; config?: any }>;
   codexCliLogin: (config?: any) => Promise<{ success: boolean; action: string; output?: string; error?: string; resolvedPath?: string; config?: any }>;

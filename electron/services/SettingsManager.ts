@@ -54,6 +54,12 @@ export interface AppSettings {
     // xhigh on gpt-5.3-codex is silently downgraded). 'none' means "don't pass
     // -c model_reasoning_effort at all" — distinct from omitting the setting.
     codexCliModelReasoningEffort?: 'none' | 'low' | 'high' | 'medium' | 'xhigh';
+    // Claude Code CLI provider (user's own `claude` login; see ClaudeCodeCliService).
+    claudeCodeCliEnabled?: boolean;
+    claudeCodeCliPath?: string;
+    claudeCodeCliModel?: string;
+    claudeCodeCliFastModel?: string;
+    claudeCodeCliTimeoutMs?: number;
     // Settings → Plugins → "Approve plugin actions automatically". When ON, a
     // connector interaction that is only a yes/no confirmation is answered by
     // the main process instead of waiting for a click, and the chat model may
