@@ -7,6 +7,7 @@ import {
     type DictateUiPhase,
 } from "../../lib/dictateUi";
 import { VoiceBrandMarkIcon } from "./VoiceBrandMarkIcon";
+import { NativelyLogoMark } from "../NativelyLogoMark";
 
 const WAVEFORM_BARS = [5, 9, 12, 7, 10, 14, 8, 11, 6];
 
@@ -54,6 +55,9 @@ interface TopPillProps {
     /** Whether the overlay body is currently visible. Drives the center
      *  button label: "Ask" (overlay hidden) / "Hide" (overlay visible). */
     overlayVisible: boolean;
+    /** Opens the running meeting's Live meeting page in the main window. Used
+     *  by the logo button while a meeting is active. */
+    onOpenMeeting: () => void;
 }
 
 export default function TopPill({
@@ -62,6 +66,7 @@ export default function TopPill({
     appearance,
     meetingActive,
     overlayVisible,
+    onOpenMeeting,
 }: TopPillProps) {
     const [dictatePhase, setDictatePhase] = useState<DictateUiPhase>('idle');
 
@@ -101,6 +106,11 @@ export default function TopPill({
 
     const dictateActive = dictatePhase !== 'idle';
     const dictateCleaning = dictatePhase === 'cleaning';
+    // While a meeting is running the logo button stops being the dictation
+    // trigger: it shows the Natively mark and opens the live meeting instead.
+    // A dictation already in flight keeps the dictate button so it can be
+    // stopped/cancelled.
+    const meetingLogoMode = meetingActive && !dictateActive;
 
     return (
         <div className="flex justify-center select-none z-50">
@@ -123,10 +133,12 @@ export default function TopPill({
                     {/* LOGO BUTTON — toggles system-wide dictation (start when
                         idle, stop when recording). */}
                     <button
-                        onClick={() => void window.electronAPI?.toggleSystemDictate?.().catch(() => {})}
+                        onClick={meetingLogoMode
+                            ? onOpenMeeting
+                            : () => void window.electronAPI?.toggleSystemDictate?.().catch(() => {})}
                         disabled={dictateCleaning}
-                        title={dictatePhase === 'recording' ? 'Stop dictation' : dictatePhase === 'cleaning' ? 'Cleaning' : 'Start dictation'}
-                        aria-label={dictatePhase === 'recording' ? 'Stop dictation' : dictatePhase === 'cleaning' ? 'Cleaning dictation' : 'Start dictation'}
+                        title={meetingLogoMode ? 'Open meeting' : dictatePhase === 'recording' ? 'Stop dictation' : dictatePhase === 'cleaning' ? 'Cleaning' : 'Start dictation'}
+                        aria-label={meetingLogoMode ? 'Open meeting' : dictatePhase === 'recording' ? 'Stop dictation' : dictatePhase === 'cleaning' ? 'Cleaning dictation' : 'Start dictation'}
                         className={`top-pill-dictate-button
               w-7 h-7
               rounded-full
@@ -138,10 +150,16 @@ export default function TopPill({
             `}
                         style={appearance.iconStyle}
                     >
-                        <VoiceBrandMarkIcon
-                            size={18}
-                            className={dictateCleaning ? "dictate-cleaning-logo overlay-text-primary" : "overlay-text-primary"}
-                        />
+                        {meetingLogoMode ? (
+                            // currentColor mark: follows the pill's text colour, so it
+                            // is dark on light surfaces and light on dark ones.
+                            <NativelyLogoMark size={18} className="dictate-center-enter overlay-text-primary" />
+                        ) : (
+                            <VoiceBrandMarkIcon
+                                size={18}
+                                className={dictateCleaning ? "dictate-cleaning-logo overlay-text-primary" : "overlay-text-primary"}
+                            />
+                        )}
                     </button>
                 </div>
 

@@ -678,6 +678,20 @@ export function initializeIpcHandlers(appState: AppState): void {
       (toggleWin && !toggleWin.isDestroyed() && toggleWin.webContents.id === event.sender.id);
     if (!fromAux || !action?.type) return;
 
+    // Pill logo while a meeting runs: open the main window on the running
+    // meeting's Live meeting page (transcript tab). The Launcher renderer owns
+    // that navigation (same path as its "Active Session" pill), so we only
+    // surface the window and tell it to go there. Respects undetectable mode by
+    // showing without stealing focus. No-op when no meeting is active so a
+    // stale renderer can't open an empty page.
+    if (action.type === 'open-meeting') {
+      if (appState.getIsMeetingActive()) {
+        helper.switchToLauncher(appState.getUndetectable() ? true : undefined);
+        appState.broadcast('open-live-meeting');
+      }
+      return;
+    }
+
     // ALWAYS-VISIBLE PILL — pill button semantics. The pill is the always-there
     // surface: its center button is Ask/Hide (toggle ONLY the overlay's
     // visibility — the launcher window is NEVER touched by it; it appears only

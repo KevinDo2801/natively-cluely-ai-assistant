@@ -699,6 +699,7 @@ interface ElectronAPI {
   hideOverlay: () => Promise<void>;
   getMeetingActive: () => Promise<boolean>;
   onMeetingStateChanged: (callback: (data: { isActive: boolean }) => void) => () => void;
+  onOpenLiveMeeting: (callback: () => void) => () => void;
   onWindowMaximizedChanged: (callback: (isMaximized: boolean) => void) => () => void;
   onEnsureExpanded: (callback: () => void) => () => void;
   onToggleExpand: (callback: () => void) => () => void;
@@ -1360,6 +1361,13 @@ contextBridge.exposeInMainWorld('electronAPI', {
     ipcRenderer.on('meeting-state-changed', subscription);
     return () => {
       ipcRenderer.removeListener('meeting-state-changed', subscription);
+    };
+  },
+  onOpenLiveMeeting: (callback: () => void) => {
+    const subscription = () => callback();
+    ipcRenderer.on('open-live-meeting', subscription);
+    return () => {
+      ipcRenderer.removeListener('open-live-meeting', subscription);
     };
   },
   onWindowMaximizedChanged: (callback: (isMaximized: boolean) => void) => {

@@ -262,6 +262,7 @@ export function OverlayPillWindow() {
       >
         <TopPill
           onToggle={() => sendAction('toggle-expand')}
+          onOpenMeeting={() => sendAction('open-meeting')}
           onQuit={() => sendAction(meetingActive ? 'end-meeting' : 'start-meeting')}
           appearance={appearance}
           meetingActive={meetingActive}

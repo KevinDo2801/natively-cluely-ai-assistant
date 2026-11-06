@@ -1,65 +1,34 @@
 import React from 'react';
+import logoShape from './icon.png';
 
 /**
- * Natively logomark — "N" letterform inscribed in a circle.
- * Rendered as inline SVG so it inherits `color` (currentColor) and
- * can be styled freely with className.
+ * Natively logomark — the real brand logo (an "N" fused into a ring).
+ *
+ * `icon.png` is white-on-transparent, so on its own it vanishes on light
+ * surfaces. Its ALPHA channel is the exact logo shape, so we use it as a CSS
+ * mask over a `currentColor` fill: the mark keeps the true shape and takes
+ * whatever text colour the caller sets (dark on light UI, light on dark UI,
+ * `text-blue-500` for the brand blue, ...). No colour is baked into the image.
  */
 export const NativelyLogoMark: React.FC<{
     size?: number;
     className?: string;
 }> = ({ size = 18, className = '' }) => (
-    <svg
-        width={size}
-        height={size}
-        viewBox="0 0 100 100"
-        fill="none"
-        xmlns="http://www.w3.org/2000/svg"
-        className={className}
+    <span
         aria-hidden="true"
-    >
-        {/* Outer circle */}
-        <circle
-            cx="50"
-            cy="50"
-            r="47"
-            stroke="currentColor"
-            strokeWidth="5"
-        />
-
-        {/*
-          The "N" lettermark — three strokes:
-            Left vertical bar
-            Diagonal stroke (top-left → bottom-right)
-            Right vertical bar
-          All strokes use round caps and joins to keep it crisp at small sizes.
-        */}
-
-        {/* Left vertical bar */}
-        <line
-            x1="26" y1="22"
-            x2="26" y2="78"
-            stroke="currentColor"
-            strokeWidth="9"
-            strokeLinecap="round"
-        />
-
-        {/* Diagonal */}
-        <line
-            x1="26" y1="22"
-            x2="74" y2="78"
-            stroke="currentColor"
-            strokeWidth="9"
-            strokeLinecap="round"
-        />
-
-        {/* Right vertical bar */}
-        <line
-            x1="74" y1="22"
-            x2="74" y2="78"
-            stroke="currentColor"
-            strokeWidth="9"
-            strokeLinecap="round"
-        />
-    </svg>
+        className={`inline-block shrink-0 ${className}`}
+        style={{
+            width: size,
+            height: size,
+            backgroundColor: 'currentColor',
+            WebkitMaskImage: `url(${logoShape})`,
+            maskImage: `url(${logoShape})`,
+            WebkitMaskSize: 'contain',
+            maskSize: 'contain',
+            WebkitMaskRepeat: 'no-repeat',
+            maskRepeat: 'no-repeat',
+            WebkitMaskPosition: 'center',
+            maskPosition: 'center',
+        }}
+    />
 );

@@ -820,6 +820,22 @@ const Launcher: React.FC<LauncherProps> = ({ onStartMeeting, onOpenSettings, onO
         }
     };
 
+    // TopPill logo during a meeting → open the running meeting's Live meeting
+    // page (Transcript tab), same as clicking the Active Session pill. The ref
+    // keeps the mount-once IPC listener on the CURRENT liveMeeting /
+    // selectedMeeting. If the live row hasn't landed in state yet, arm the
+    // pending open and refresh so resolvePendingTranscriptOpen picks it up.
+    const openLiveMeetingRef = useRef<() => void>(() => { });
+    openLiveMeetingRef.current = () => {
+        if (liveMeeting) {
+            if (selectedMeeting?.id !== liveMeeting.id) void handleOpenMeeting(liveMeeting, 'transcript');
+            return;
+        }
+        pendingTranscriptOpenRef.current = true;
+        refreshData();
+    };
+    useEffect(() => window.electronAPI?.onOpenLiveMeeting?.(() => openLiveMeetingRef.current()), []);
+
     // ── Meeting folders (v32) ────────────────────────────────────────────
     // Set the open folder in React state AND mirror it to the main process so
     // meetings started from ANY surface (launcher CTA, pill mic, hotkey,
