@@ -5408,6 +5408,14 @@ let isMultimodal = !!(imagePaths?.length);
         cloud.push({ id: 'codex-cli', name: `Codex CLI (${this.codexCliConfig.model})`, isLocal: false, priority: prio++, ttftTimeoutMs: PRO_TTFT_MS,
           open: (sig) => this.streamWithCodexCli(userContent, systemPrompt, false, imagePaths, sig) });
       }
+      // Claude Code CLI (user's own Claude plan). Screenshots go in as base64
+      // image blocks. Same gate as Codex: isClaudeCodeAvailable() covers the
+      // disabled-provider switch and "is signed in", so we never seat a provider
+      // that is guaranteed to fail. Subprocess cold start → Pro-sized TTFT budget.
+      if (this.isClaudeCodeAvailable()) {
+        cloud.push({ id: 'claude-code', name: `Claude Code (${this.claudeCodeCliConfig.model})`, isLocal: false, priority: prio++, ttftTimeoutMs: PRO_TTFT_MS,
+          open: (sig) => this.streamWithClaudeCode(userContent, systemPrompt, false, imagePaths, sig) });
+      }
     }
 
     // Local providers (always available, including in local-only mode).
@@ -5449,6 +5457,7 @@ let isMultimodal = !!(imagePaths?.length);
       if (this.useOllama) { const o = local.find(p => p.id === 'ollama'); if (o) front.push(o); }
       if (this.customProvider) { const c = local.find(p => p.id === 'custom'); if (c) front.push(c); }
       if (this.isCodexCliModel(this.currentModelId)) { const cdx = cloud.find(p => p.id === 'codex-cli'); if (cdx) front.push(cdx); }
+      if (this.isClaudeCodeModel(this.currentModelId)) { const cc = cloud.find(p => p.id === 'claude-code'); if (cc) front.push(cc); }
       const backLocal = local.filter(p => !front.includes(p));
       const backCloud = cloud.filter(p => !front.includes(p));
       ordered = [...front, ...orderVisionByHealth(backCloud, this.visionHealth, nowMs), ...backLocal];

@@ -7321,6 +7321,36 @@ export class AppState {
   }
 
   /**
+   * After a screenshot has been captured for the overlay chat, make the chat
+   * input live — same as opening the chat with Ctrl+B — so the caret blinks
+   * and the user can type their question about the capture without clicking.
+   *
+   * Only when the overlay is actually visible: a capture taken with the chat
+   * hidden must not start the native keyboard tap (which swallows keystrokes
+   * from the foreground app) for a window the user cannot see.
+   */
+  public engageTypingAfterScreenshot(): void {
+    const overlay = this.windowHelper.getOverlayWindow();
+    if (!overlay || overlay.isDestroyed() || !overlay.isVisible()) return;
+    // eslint-disable-next-line @typescript-eslint/no-var-requires
+    const { StealthKeyboardManager } = require('./services/StealthKeyboardManager');
+    if (StealthKeyboardManager.getInstance().isAvailable()) {
+      this.engageOverlayStealthTyping();
+      return;
+    }
+    // Stealth typing is off or unavailable (Settings toggle, CJK IME): the chat
+    // input needs REAL window focus + DOM focus. Ctrl+B gets the window focus
+    // from showOverlay() (an active show), but the screenshot restore reveals the
+    // overlay inactive — so on every platform (Windows included; here the window
+    // is focusable because there is no stealth hook) focus it explicitly, then
+    // ask the renderer to focus the input. Without this the DOM focus lands in a
+    // window that is not focused and no caret appears.
+    this.sendToWindow(overlay, 'ensure-expanded');
+    overlay.focus();
+    this.sendToWindow(overlay, 'global-shortcut', { action: 'focusInput' });
+  }
+
+  /**
    * Engage the stealth-typing input path so the user can type into the overlay
    * chat immediately (no click required). Mirrors the chat:focusInput
    * engagement: start the native OS tap/hook when available and auto-expand the
