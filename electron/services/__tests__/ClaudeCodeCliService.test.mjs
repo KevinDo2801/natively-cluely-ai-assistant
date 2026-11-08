@@ -6,6 +6,8 @@ import {
   ClaudeCodeCliService,
   buildClaudeCodeArgs,
   buildClaudeCodeInput,
+  placeClaudeCodeInstructions,
+  MAX_ARGV_INSTRUCTIONS_CHARS,
   parseClaudeCodeLine,
   classifyClaudeCodeError,
   isClaudeCodeAuthError,
@@ -218,4 +220,18 @@ test('getAuthStatus parses `claude auth status` JSON', async () => {
   const child = fakeChild({ lines: [JSON.stringify({ loggedIn: true, authMethod: 'claude.ai', email: 'a@b.c' })] });
   const status = await ClaudeCodeCliService.getAuthStatus('claude', depsFor(child));
   assert.deepEqual(status, { installed: true, signedIn: true, method: 'claude.ai', email: 'a@b.c' });
+});
+
+test('short instructions go in argv; long ones move into the stdin prompt (Windows 32k cmdline cap)', () => {
+  const short = placeClaudeCodeInstructions('Be brief.', 'Q');
+  assert.equal(short.argvInstructions, 'Be brief.');
+  assert.equal(short.prompt, 'Q');
+
+  const long = 'x'.repeat(MAX_ARGV_INSTRUCTIONS_CHARS + 1);
+  const moved = placeClaudeCodeInstructions(long, 'Q');
+  assert.equal(moved.argvInstructions, undefined, 'must not reach argv');
+  assert.ok(moved.prompt.startsWith(long) && moved.prompt.endsWith('Q'));
+
+  assert.deepEqual(placeClaudeCodeInstructions('   ', 'Q'), { prompt: 'Q' });
+  assert.deepEqual(placeClaudeCodeInstructions(undefined, 'Q'), { prompt: 'Q' });
 });

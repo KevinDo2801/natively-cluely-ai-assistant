@@ -122,6 +122,23 @@ export function buildClaudeCodeArgs(model: string, instructions?: string): strin
   return args;
 }
 
+// A Windows command line is capped at ~32k chars (CreateProcess), and quoting
+// inflates it. Long system prompts (meeting-summary templates) therefore ride
+// in the stdin message instead of `--system-prompt`. macOS has a far larger
+// limit, but one rule for both keeps behaviour identical across platforms.
+export const MAX_ARGV_INSTRUCTIONS_CHARS = 6000;
+
+/** Decide whether instructions go in argv (`--system-prompt`) or in the prompt. */
+export function placeClaudeCodeInstructions(
+  instructions: string | undefined,
+  prompt: string,
+): { argvInstructions?: string; prompt: string } {
+  const text = instructions?.trim();
+  if (!text) return { prompt };
+  if (text.length <= MAX_ARGV_INSTRUCTIONS_CHARS) return { argvInstructions: instructions, prompt };
+  return { prompt: `${text}\n\n---\n\n${prompt}` };
+}
+
 export interface ClaudeCodeImage { mediaType: string; base64: string }
 
 /** The single stream-json user message written to stdin. */
@@ -272,7 +289,8 @@ export class ClaudeCodeCliService {
       if (encoded) images.push(encoded);
     }
 
-    const args = [...launch.prefixArgs, ...buildClaudeCodeArgs(options.model, options.instructions)];
+    const placed = placeClaudeCodeInstructions(options.instructions, options.prompt);
+    const args = [...launch.prefixArgs, ...buildClaudeCodeArgs(options.model, placed.argvInstructions)];
     const child = deps.spawn(launch.command, args, {
       cwd: os.tmpdir(),
       env: childEnv(launch),
@@ -337,7 +355,7 @@ export class ClaudeCodeCliService {
 
     try {
       child.stdin.on('error', () => { /* child exited before reading; surfaced via close */ });
-      child.stdin.write(buildClaudeCodeInput(options.prompt, images));
+      child.stdin.write(buildClaudeCodeInput(placed.prompt, images));
       child.stdin.end();
 
       while (true) {

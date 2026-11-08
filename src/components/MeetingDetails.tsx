@@ -11,7 +11,7 @@ import MeetingChatOverlay from './MeetingChatOverlay';
 import EditableTextBlock from './EditableTextBlock';
 import NativelyLogo from './icon.png';
 import ReactMarkdown from 'react-markdown';
-import remarkGfm from 'remark-gfm';
+import { MATH_REMARK_PLUGINS, MATH_REHYPE_PLUGINS } from '../lib/markdownMath';
 import SyntaxHighlighter from 'react-syntax-highlighter/dist/esm/prism-light';
 import { vividDarkCodeTheme } from '../lib/codeTheme';
 import { splitGistLine } from '../lib/displayMarkup';
@@ -499,7 +499,7 @@ const CodingAnswerBlock: React.FC<{ sections: CodingSection[]; firstView?: boole
                 </motion.div>
             ) : code ? (
                 <motion.div variants={childVariant} className="flex flex-col gap-3 min-w-0 w-full">
-                    <ReactMarkdown remarkPlugins={[remarkGfm]} components={mdComponents}>
+                    <ReactMarkdown remarkPlugins={MATH_REMARK_PLUGINS} rehypePlugins={MATH_REHYPE_PLUGINS} components={mdComponents}>
                         {cleanMarkdown(code.body.trim())}
                     </ReactMarkdown>
                 </motion.div>
@@ -517,7 +517,7 @@ const CodingAnswerBlock: React.FC<{ sections: CodingSection[]; firstView?: boole
             {others.map(s => (
                 <motion.div key={s.title} variants={childVariant} className="flex flex-col gap-1.5">
                     <p className="text-[10px] font-semibold uppercase tracking-widest text-white/20 select-none cursor-default">{s.title}</p>
-                    <ReactMarkdown remarkPlugins={[remarkGfm]} components={mdComponents}>
+                    <ReactMarkdown remarkPlugins={MATH_REMARK_PLUGINS} rehypePlugins={MATH_REHYPE_PLUGINS} components={mdComponents}>
                         {cleanMarkdown(s.body.trim())}
                     </ReactMarkdown>
                 </motion.div>
@@ -527,7 +527,7 @@ const CodingAnswerBlock: React.FC<{ sections: CodingSection[]; firstView?: boole
             {expandedSections.map(section => (
                 <motion.div key={section.key} variants={childVariant} className="flex flex-col gap-1.5">
                     <p className="text-[10px] font-semibold uppercase tracking-widest text-white/20 select-none cursor-default">{section.label}</p>
-                    <ReactMarkdown remarkPlugins={[remarkGfm]} components={mdComponents}>
+                    <ReactMarkdown remarkPlugins={MATH_REMARK_PLUGINS} rehypePlugins={MATH_REHYPE_PLUGINS} components={mdComponents}>
                         {cleanMarkdown(section.body)}
                     </ReactMarkdown>
                 </motion.div>
@@ -628,7 +628,7 @@ const UsageInteraction: React.FC<{
                                     const { body: gistBody, gist: gistLine } = splitGistLine(interaction.answer || '');
                                     return (
                                         <>
-                                            <ReactMarkdown remarkPlugins={[remarkGfm]} components={mdComponents}>
+                                            <ReactMarkdown remarkPlugins={MATH_REMARK_PLUGINS} rehypePlugins={MATH_REHYPE_PLUGINS} components={mdComponents}>
                                                 {cleanMarkdown(gistBody)}
                                             </ReactMarkdown>
                                             {gistLine && <div className="overlay-gist-chip">{gistLine}</div>}
@@ -1442,7 +1442,7 @@ ${meeting.detailedSummary.keyPoints?.map(item => `- ${item}`).join('\n') || 'Non
                                 {meeting.detailedSummary?.overview && (
                                 <div className="mb-6 pb-6 border-b border-border-subtle prose prose-sm max-w-none">
                                     <ReactMarkdown
-                                        remarkPlugins={[remarkGfm]}
+                                        remarkPlugins={MATH_REMARK_PLUGINS} rehypePlugins={MATH_REHYPE_PLUGINS}
                                         components={{
                                             h1: ({ node, ...props }) => <h1 className="text-xl font-bold text-text-primary mt-4 mb-2" {...props} />,
                                             h2: ({ node, ...props }) => <h2 className="text-lg font-semibold text-text-primary mt-4 mb-2" {...props} />,

@@ -1747,13 +1747,27 @@ export class LLMHelper {
     });
   }
 
-  private async generateWithClaudeCode(userContent: string, systemPrompt?: string, fastMode = false, imagePaths?: string[], signal?: AbortSignal): Promise<string> {
+  /** True when Claude Code is enabled, signed in, not switched off, and cloud use is allowed. */
+  public isClaudeCodeReady(): boolean {
+    return this.isClaudeCodeAvailable() && !this.isLocalOnlyMode;
+  }
+
+  /**
+   * One-shot text job on the FAST Claude Code model (e.g. dictation cleanup).
+   * `timeoutMs` bounds inactivity so a short interactive job is not held to the
+   * user's long summary timeout.
+   */
+  public async runClaudeCodeText(prompt: string, instructions: string, timeoutMs: number): Promise<string> {
+    return this.generateWithClaudeCode(prompt, instructions, true, undefined, undefined, timeoutMs);
+  }
+
+  private async generateWithClaudeCode(userContent: string, systemPrompt?: string, fastMode = false, imagePaths?: string[], signal?: AbortSignal, timeoutMs?: number): Promise<string> {
     let out = '';
-    for await (const chunk of this.streamWithClaudeCode(userContent, systemPrompt, fastMode, imagePaths, signal)) out += chunk;
+    for await (const chunk of this.streamWithClaudeCode(userContent, systemPrompt, fastMode, imagePaths, signal, timeoutMs)) out += chunk;
     return out;
   }
 
-  private async *streamWithClaudeCode(userContent: string, systemPrompt?: string, fastMode = false, imagePaths?: string[], signal?: AbortSignal): AsyncGenerator<string, void, unknown> {
+  private async *streamWithClaudeCode(userContent: string, systemPrompt?: string, fastMode = false, imagePaths?: string[], signal?: AbortSignal, timeoutMs?: number): AsyncGenerator<string, void, unknown> {
     if (!this.isClaudeCodeAvailable()) throw new Error('Claude Code CLI transport is disabled or Claude Code is signed out.');
     // Claude Code talks to Anthropic's cloud through the user's own CLI login:
     // it is a CLOUD provider and gets every boundary the other cloud providers
@@ -1766,7 +1780,7 @@ export class LLMHelper {
       prompt: userContent,
       instructions: systemPrompt,
       model: this.getSelectedClaudeCodeModel(fastMode),
-      timeoutMs: this.claudeCodeCliConfig.timeoutMs,
+      timeoutMs: timeoutMs ?? this.claudeCodeCliConfig.timeoutMs,
       imagePaths,
       signal,
     });
@@ -2507,8 +2521,9 @@ ANSWER DIRECTLY:`;
     const systemPrompt = this.injectLanguageInstruction(basePrompt);
 
     try {
-      if (this.isCodexAvailable()) {
-        // Codex CLI takes priority when available — same precedence as in chat().
+      if (this.isCodexAvailable() || (this.isClaudeCodeModel(this.currentModelId) && this.isClaudeCodeAvailable())) {
+        // Codex CLI / a selected Claude Code model take priority when available —
+        // same precedence as in chat() (chatWithGemini dispatches by the selected model).
         try {
           const text = await this.chatWithGemini(promptMessage, undefined, suggestionContext, true);
           if (text && text.trim().length > 0) return this.processResponse(text);
@@ -3547,6 +3562,9 @@ let isMultimodal = !!(imagePaths?.length);
     const permanentFailureKeyFor = (name: string): string => {
       if (name.startsWith('Gemini')) return 'gemini';
       if (name.startsWith('OpenAI')) return 'openai';
+      // Must precede the 'Claude' prefix test: "Claude Code (…)" is the user's
+      // CLI login, a different failure domain from the Anthropic API key.
+      if (name.startsWith('Claude Code')) return 'claude-code';
       if (name.startsWith('Claude')) return 'claude';
       if (name.startsWith('Groq')) return 'groq';
       if (name.startsWith('Codex')) return 'codex';
@@ -3622,6 +3640,17 @@ let isMultimodal = !!(imagePaths?.length);
       providers.push({
         name: `Codex CLI (${this.codexCliConfig.model})`,
         execute: () => this.generateWithCodexCli(message),
+      });
+    }
+
+    // Priority 5b: Claude Code CLI (user's own Claude plan). Same placement and
+    // reasoning as Codex above — a signed-in user's backend is a legitimate
+    // provider (and the ONLY one for a user with no API keys), but a slow
+    // subprocess must not lead a latency-sensitive document ingest.
+    if (this.isClaudeCodeAvailable()) {
+      providers.push({
+        name: `Claude Code (${this.claudeCodeCliConfig.model})`,
+        execute: () => this.generateWithClaudeCode(message),
       });
     }
 
@@ -4849,6 +4878,26 @@ let isMultimodal = !!(imagePaths?.length);
       }
     }
 
+    // Claude Code CLI runs FIRST when the user picked a Claude Code model — same
+    // "honor the user's pick" rule as Codex above, so solution / debug / image
+    // analysis flows work for a user whose only provider is Claude Code. (Not
+    // tried merely because it is enabled: a subprocess should not shadow the
+    // user's chosen API provider.)
+    if (this.isClaudeCodeModel(this.currentModelId) && this.isClaudeCodeAvailable()) {
+      try {
+        console.log(`[LLMHelper] 🚀 [Claude Code] Attempting (${this.claudeCodeCliConfig.model}, ${isMultimodal ? imagePaths.length + ' image(s)' : 'text-only'})...`);
+        const text = await this.generateWithClaudeCode(userPrompt, systemPrompt, false, isMultimodal ? imagePaths : undefined);
+        if (text && text.trim().length > 0) {
+          console.log(`[LLMHelper] ✅ [Claude Code] succeeded.`);
+          return text;
+        }
+        console.warn(`[LLMHelper] ⚠️ [Claude Code] returned empty response, falling back to cloud tiers.`);
+      } catch (e: any) {
+        if (e?.name === 'VisionPolicyError') return e.userMessage ?? PRIVATE_VISION_NO_LOCAL_MESSAGE;
+        console.warn(`[LLMHelper] ⚠️ [Claude Code] failed: ${e.message}. Falling back to cloud tiers.`);
+      }
+    }
+
     // ──────────────────────────────────────────────────────────────────
     // Execute with per-provider retry logic and dynamic reordering.
     // Priority order: OpenAI → Claude → Gemini Flash → Gemini Pro → Groq.
@@ -5135,8 +5184,14 @@ let isMultimodal = !!(imagePaths?.length);
       if (this.groqClient) {
         providers.push({ name: `Groq (${GROQ_VISION_MODEL})`, execute: () => this.streamWithGroqMultimodal(userContent, imagePaths!, openaiSystemPrompt, abortSignal) });
       }
+      // Claude Code CLI: LAST here (a slow subprocess must not lead the chain for
+      // users who have API keys); the selected-provider sort below promotes it
+      // to FIRST when the user picked a Claude Code model.
+      if (this.isClaudeCodeAvailable()) {
+        providers.push({ name: `Claude Code (${this.claudeCodeCliConfig.model})`, execute: () => this.streamWithClaudeCode(userContent, claudeSystemPrompt, false, imagePaths, abortSignal) });
+      }
     } else {
-      // TEXT-ONLY PROVIDER ORDER: [Natively] -> Codex CLI -> OpenAI -> Claude -> Gemini Flash-Lite -> Gemini Flash -> Gemini Pro -> Groq
+      // TEXT-ONLY PROVIDER ORDER: [Natively] -> Codex CLI -> OpenAI -> Claude -> Gemini Flash-Lite -> Gemini Flash -> Gemini Pro -> Groq -> Claude Code
       // Groq is demoted to LAST because the free Groq tier has a low TPM
       // rate-limit that 413s on context-heavy prompts (e.g. a full meeting
       // summary + transcript shovelled into the fallback Gemini call).
@@ -5185,6 +5240,10 @@ let isMultimodal = !!(imagePaths?.length);
         // CACHE: pass system separately so Groq prefix-cache hits across turns.
         providers.push({ name: `Groq (${textGroq})`, execute: () => this.streamWithGroq(userContent, textGroq, groqSystemForCache, abortSignal) });
       }
+      // Claude Code CLI: last-resort fallback; promoted to first when selected.
+      if (this.isClaudeCodeAvailable()) {
+        providers.push({ name: `Claude Code (${this.claudeCodeCliConfig.model})`, execute: () => this.streamWithClaudeCode(userContent, claudeSystemPrompt, false, undefined, abortSignal) });
+      }
     }
 
     if (providers.length === 0) {
@@ -5202,6 +5261,7 @@ let isMultimodal = !!(imagePaths?.length);
     // before falling back to others.
     // ============================================================
     const currentFamilyLabel = this.currentModelId === 'natively' ? 'Natively'
+      : this.isClaudeCodeModel(this.currentModelId) ? 'Claude Code'
       : this.isClaudeModel(this.currentModelId) ? 'Claude'
         : this.isOpenAiModel(this.currentModelId) ? 'OpenAI'
           : this.isGroqModel(this.currentModelId) ? 'Groq'
@@ -5210,9 +5270,14 @@ let isMultimodal = !!(imagePaths?.length);
                 : '';
 
     if (currentFamilyLabel) {
+      // "Claude Code (…)" also starts with "Claude" — keep the two families
+      // distinct so picking the Claude API model never promotes the CLI one.
+      const inFamily = (name: string): boolean => currentFamilyLabel === 'Claude Code'
+        ? name.startsWith('Claude Code')
+        : name.startsWith(currentFamilyLabel) && !name.startsWith('Claude Code');
       providers.sort((a, b) => {
-        if (a.name.startsWith(currentFamilyLabel) && !b.name.startsWith(currentFamilyLabel)) return -1;
-        if (!a.name.startsWith(currentFamilyLabel) && b.name.startsWith(currentFamilyLabel)) return 1;
+        if (inFamily(a.name) && !inFamily(b.name)) return -1;
+        if (!inFamily(a.name) && inFamily(b.name)) return 1;
         return 0;
       });
     }
@@ -9519,6 +9584,36 @@ let isMultimodal = !!(imagePaths?.length);
       }
     }
 
+    // Claude Code CLI (user's own Claude plan, text-only). Defined once and used
+    // at two points in the chain: FIRST (right after a custom provider) when the
+    // user explicitly selected Claude Code as their model — their pick must not
+    // be shadowed by a Natively key — and otherwise as a fallback after Codex.
+    // Subprocess cold start + long output → generous timeout.
+    let claudeCodeSummaryTried = false;
+    const tryClaudeCodeSummary = async (): Promise<string | null> => {
+      if (claudeCodeSummaryTried || !this.isClaudeCodeAvailable()) return null;
+      claudeCodeSummaryTried = true;
+      console.log(`[LLMHelper] Attempting Claude Code CLI for summary...`);
+      try {
+        const text = await this.withTimeout(
+          this.generateWithClaudeCode(`Context:\n${context}`, systemPrompt),
+          Math.max(this.claudeCodeCliConfig.timeoutMs, 120000),
+          'Claude Code CLI Summary'
+        );
+        if (text.trim().length > 0) {
+          console.log(`[LLMHelper] ✅ Claude Code CLI summary generated successfully.`);
+          return this.processResponse(text);
+        }
+      } catch (e: any) {
+        console.warn(`[LLMHelper] ⚠️ Claude Code CLI summary failed: ${e.message}. Falling back...`);
+      }
+      return null;
+    };
+    if (this.isClaudeCodeModel(this.currentModelId)) {
+      const picked = await tryClaudeCodeSummary();
+      if (picked !== null) return picked;
+    }
+
     // ATTEMPT 1: Natively API (if configured — first in chain)
     // Inner fetch timeout: 8s (AbortSignal.timeout in generateWithNatively).
     // Outer safety net: 10s — covers JSON parsing + any overhead after the fetch resolves.
@@ -9555,6 +9650,12 @@ let isMultimodal = !!(imagePaths?.length);
       } catch (e: any) {
         console.warn(`[LLMHelper] ⚠️ Codex CLI summary failed: ${e.message}. Falling back...`);
       }
+    }
+
+    // ATTEMPT 2b: Claude Code CLI as a fallback (no-op if already tried above).
+    {
+      const fallbackClaudeCode = await tryClaudeCodeSummary();
+      if (fallbackClaudeCode !== null) return fallbackClaudeCode;
     }
 
     if (this.groqClient && tokenCount < 100000) {

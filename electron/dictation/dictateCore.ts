@@ -91,6 +91,19 @@ export function normalizeCleanupOutput(output: string, fallback: string): string
   return value || fallback.trim();
 }
 
+export type CleanupProvider = 'codex' | 'claude-code';
+
+/**
+ * Which AI cleans the transcript. Codex stays the default so existing users see
+ * no change. Claude Code is used only when Codex is NOT signed in — otherwise a
+ * user whose only AI is a Claude plan would always get the raw transcript with a
+ * "cleanup failed" warning. A user with both keeps Codex (cheapest-model path).
+ */
+export function chooseCleanupProvider(state: { codexSignedIn: boolean; claudeCodeReady: boolean }): CleanupProvider {
+  if (!state.codexSignedIn && state.claudeCodeReady) return 'claude-code';
+  return 'codex';
+}
+
 export function selectCheapestCodexModel(models: Array<{ id: string }>): string {
   if (models.length === 0) return 'gpt-5-nano';
   const score = (id: string): number => {

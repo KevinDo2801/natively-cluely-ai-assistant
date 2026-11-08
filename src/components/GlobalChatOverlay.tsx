@@ -7,7 +7,7 @@ import { genMessageId } from '../utils/messageId';
 import nativelyIcon from './icon.png';
 import { useResolvedTheme } from '../hooks/useResolvedTheme';
 import ReactMarkdown from 'react-markdown';
-import remarkGfm from 'remark-gfm';
+import { MATH_REMARK_PLUGINS, MATH_REHYPE_PLUGINS } from '../lib/markdownMath';
 
 // ============================================
 // Types
@@ -89,7 +89,7 @@ const AssistantMessage: React.FC<{ content: string; isStreaming?: boolean }> = (
         >
             <div className="text-text-primary text-[15px] leading-relaxed max-w-[85%] markdown-content">
                 <ReactMarkdown
-                    remarkPlugins={[remarkGfm]}
+                    remarkPlugins={MATH_REMARK_PLUGINS} rehypePlugins={MATH_REHYPE_PLUGINS}
                     components={{
                         p: ({ node, ...props }: any) => <p className="mb-2 last:mb-0 leading-relaxed" {...props} />,
                         a: ({ node, ...props }: any) => <a className="text-accent-primary hover:underline" target="_blank" rel="noreferrer" {...props} />,

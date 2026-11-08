@@ -39,3 +39,10 @@ test('cleanup chooses the cheapest model that is actually available', () => {
   assert.equal(core.selectCheapestCodexModel([{ id: 'gpt-5-mini' }, { id: 'gpt-5-nano' }]), 'gpt-5-nano');
   assert.equal(core.selectCheapestCodexModel([]), 'gpt-5-nano');
 });
+
+test('cleanup provider: Codex stays default; Claude Code only when Codex is signed out and Claude Code is ready', () => {
+  assert.equal(core.chooseCleanupProvider({ codexSignedIn: true, claudeCodeReady: true }), 'codex', 'both available keeps Codex');
+  assert.equal(core.chooseCleanupProvider({ codexSignedIn: true, claudeCodeReady: false }), 'codex');
+  assert.equal(core.chooseCleanupProvider({ codexSignedIn: false, claudeCodeReady: true }), 'claude-code');
+  assert.equal(core.chooseCleanupProvider({ codexSignedIn: false, claudeCodeReady: false }), 'codex', 'neither: legacy path (raw transcript + warning)');
+});

@@ -6,7 +6,7 @@ import { CodexCliService } from '../services/CodexCliService';
 import { CodexAppServerService } from '../services/CodexAppServerService';
 import { DictateMediaController } from './DictateMediaController';
 import {
-  buildDictateCleanupPrompt, DEFAULT_DICTATE_PREFERENCES, DICTATE_CLEANUP_INSTRUCTIONS,
+  buildDictateCleanupPrompt, chooseCleanupProvider, DEFAULT_DICTATE_PREFERENCES, DICTATE_CLEANUP_INSTRUCTIONS,
   modifiersMatch, normalizeCleanupOutput, sanitizeDictatePreferences, selectCheapestCodexModel,
   type DictatePhase, type DictatePreferences,
 } from './dictateCore';
@@ -157,14 +157,27 @@ export class SystemDictationController {
     if (prefs.textCleanup) {
       try {
         const startedAt = Date.now();
-        const cleanupModel = selectCheapestCodexModel(await CodexAppServerService.getInstance().listModels());
-        const cleaned = await CodexCliService.run('', {
-          model: cleanupModel, prompt: buildDictateCleanupPrompt(text),
-          instructions: DICTATE_CLEANUP_INSTRUCTIONS, timeoutMs: 30_000,
-          sandboxMode: 'read-only', modelReasoningEffort: 'low', serviceTier: 'fast',
-        });
+        // Codex stays the default; Claude Code takes over only when Codex is not
+        // signed in (see chooseCleanupProvider).
+        const llm = this.appState.processingHelper?.getLLMHelper?.();
+        let codexSignedIn = false;
+        try { codexSignedIn = CodexAppServerService.getInstance().getStatus().signedIn === true; } catch { /* treated as signed out */ }
+        const provider = chooseCleanupProvider({ codexSignedIn, claudeCodeReady: llm?.isClaudeCodeReady?.() === true });
+        let cleaned: string;
+        let label: string;
+        if (provider === 'claude-code' && llm) {
+          cleaned = await llm.runClaudeCodeText(buildDictateCleanupPrompt(text), DICTATE_CLEANUP_INSTRUCTIONS, 30_000);
+          label = 'claude-code';
+        } else {
+          label = selectCheapestCodexModel(await CodexAppServerService.getInstance().listModels());
+          cleaned = await CodexCliService.run('', {
+            model: label, prompt: buildDictateCleanupPrompt(text),
+            instructions: DICTATE_CLEANUP_INSTRUCTIONS, timeoutMs: 30_000,
+            sandboxMode: 'read-only', modelReasoningEffort: 'low', serviceTier: 'fast',
+          });
+        }
         text = normalizeCleanupOutput(cleaned, text);
-        console.log(`[SystemDictation] cleanup ${cleanupModel} ${Date.now() - startedAt}ms`);
+        console.log(`[SystemDictation] cleanup ${label} ${Date.now() - startedAt}ms`);
       } catch (error) {
         warning = `AI cleanup failed; pasted raw transcript. ${error instanceof Error ? error.message : String(error)}`;
       }
